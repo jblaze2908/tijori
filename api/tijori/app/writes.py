@@ -11,6 +11,14 @@ from tijori.app.deps import MemberDep, require_json
 from tijori.app.schemas import (
     CategorizeIn,
     CategorizeOut,
+    ComponentIn,
+    ComponentOut,
+    RulePatch,
+    RuleState,
+    TxnNotes,
+    TxnPatch,
+    UnfileIn,
+    UnfileOut,
     FileInboxIn,
     FileInboxOut,
     RemarkIn,
@@ -19,6 +27,8 @@ from tijori.app.schemas import (
     SettingsOut,
 )
 from tijori.services import members, networth, txns
+from tijori.services.common import today_ist
+from tijori.services.networth import COMPONENT_KEYS
 from tijori.services.errors import NotFound
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_json)])
@@ -28,6 +38,41 @@ router = APIRouter(prefix="/api", dependencies=[Depends(require_json)])
 def categorize(db: MemberDep, txn_id: Annotated[int, Path(ge=1)], body: CategorizeIn) -> dict:
     return txns.set_category(db.session, db.ctx, db.actor, txn_id, category_id=body.category_id,
                              category=body.category, scope=body.scope)
+
+
+@router.patch("/transactions/{txn_id}", response_model=TxnNotes)
+def patch_txn(db: MemberDep, txn_id: Annotated[int, Path(ge=1)], body: TxnPatch) -> dict:
+    fields = body.model_fields_set
+    if not fields:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, [{"loc": ["body"], "msg": "nothing to update"}])
+    return txns.update_txn(db.session, db.ctx, db.actor, txn_id, notes=body.notes, tags=body.tags, fields=fields)
+
+
+@router.post("/inbox/undo", response_model=UnfileOut)
+def undo_filing(db: MemberDep, body: UnfileIn) -> dict:
+    return txns.unfile(db.session, db.ctx, db.actor, body.txn_ids, body.rule_id)
+
+
+@router.patch("/rules/{rule_id}", response_model=RuleState)
+def patch_rule(db: MemberDep, rule_id: Annotated[str, Path(pattern=r"^rule:\d{1,18}$")], body: RulePatch) -> dict:
+    return txns.set_rule_enabled(db.session, db.ctx, db.actor, int(rule_id[5:]), body.enabled)
+
+
+_AMOUNT = re.compile(r"^\d{1,12}(\.\d{1,2})?$")
+
+
+@router.put("/networth/components/{key}", response_model=ComponentOut)
+def put_component(db: MemberDep, key: str, body: ComponentIn) -> dict:
+    if key not in COMPONENT_KEYS:
+        raise NotFound("unknown component")
+    raw = str(body.amount)
+    if not _AMOUNT.match(raw):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT,
+                            [{"loc": ["body", "amount"], "msg": "must be an amount ≥ 0 with up to 2 decimals"}])
+    as_of = body.as_of or today_ist()
+    if as_of > today_ist():
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, [{"loc": ["body", "as_of"], "msg": "must not be in the future"}])
+    return networth.set_component(db.session, db.ctx, db.actor, key, Decimal(raw), as_of)
 
 
 # :path because a payee key may contain "/" (keys built from narration text).

@@ -54,11 +54,18 @@ class TxnOut(BaseModel):
     tags: list[str]
 
 
+class TotalLine(BaseModel):
+    amount: Money
+    count: int
+
+
 class TxnPage(BaseModel):
     items: list[TxnOut]
     page: int
     page_size: int
     total: int
+    # The whole filtered set, not just this page: spend/income/invest/excluded, and card (part of spend).
+    totals: dict[str, TotalLine]
 
 
 class PayeeHistory(BaseModel):
@@ -87,11 +94,19 @@ class LinkOut(BaseModel):
     txn_id: int
 
 
+class PayeeRecent(BaseModel):
+    id: int
+    occurred_at: date
+    amount: Money
+    category: str | None
+
+
 class PayeeStats(BaseModel):
     payee_key: str
     count: int
     total: Money
     history: list[PayeeHistory]
+    recent: list[PayeeRecent]
 
 
 class TxnDetail(BaseModel):
@@ -329,6 +344,7 @@ class AccountOut(BaseModel):
     last_txn_at: date | None
     last_statement: StatementRef | None
     has_statement_password: bool
+    balance: "Balance | None"
     last_seen_at: datetime | None
     coverage_pct: float | None
 
@@ -470,6 +486,7 @@ class MailSourceOut(BaseModel):
     status: str
     last_tested_at: datetime | None
     last_error_code: str | None
+    last_message_count: int | None
     created_at: datetime
 
 
@@ -531,3 +548,219 @@ class AccountPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str | None = Field(default=None, max_length=120)
     mask: str | None = Field(default=None, pattern=r"^\d{4}$")
+
+
+class Balance(BaseModel):
+    amount: Money
+    as_of: date
+
+
+AccountOut.model_rebuild()
+
+
+# --- recurring, alerts, filing, rules ----------------------------------------------------------
+
+class RecurringOut(BaseModel):
+    id: str
+    merchant: str
+    cadence: str
+    amount_expected: Money
+    next_due: date
+    last_at: date
+    count: int
+    category: str | None
+    account: str | None
+
+
+class RecurringList(BaseModel):
+    items: list[RecurringOut]
+
+
+class AlertOut(BaseModel):
+    id: str
+    kind: str
+    severity: Literal["bad", "warn", "good"]
+    title: str
+    detail: str
+    txn_ids: list[int]
+
+
+class Alerts(BaseModel):
+    month: str
+    items: list[AlertOut]
+
+
+class FilingStats(BaseModel):
+    month: str
+    total: int
+    automatic: int
+    by: dict[str, int]
+    rules: int
+
+
+class RuleOut(BaseModel):
+    id: str
+    scope: str
+    match: dict
+    category: str
+    enabled: bool
+    created_by: str
+    created_at: datetime
+    hits: int
+    last_hit_at: datetime | None
+    editable: bool
+
+
+class Rules(BaseModel):
+    items: list[RuleOut]
+
+
+class RulePatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+
+
+class RuleState(BaseModel):
+    id: str
+    enabled: bool
+
+
+class TxnPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    notes: str | None = Field(default=None, max_length=2000)
+    tags: list[Annotated[str, Field(min_length=1, max_length=40)]] | None = Field(default=None, max_length=20)
+
+
+class TxnNotes(BaseModel):
+    id: int
+    notes: str | None
+    tags: list[str]
+
+
+class UnfileIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    txn_ids: list[int] = Field(min_length=1, max_length=500)
+    rule_id: str | None = Field(default=None, max_length=40)
+
+
+class UnfileOut(BaseModel):
+    restored: int
+    rule_removed: bool
+
+
+# --- live net worth ------------------------------------------------------------------------------
+
+class LiveComponent(BaseModel):
+    key: str
+    label: str
+    asset_class: str
+    amount: Money
+    share_pct: float
+    source: Literal["sheet", "statement", "manual"]
+    as_of: date
+    stale: bool
+    editable: bool
+    change_since: Money | None
+
+
+class NetWorthChange(BaseModel):
+    period: Literal["month", "year", "fy"]
+    since: date
+    amount: Money | None
+    pct: float | None
+
+
+class HistoryPoint(BaseModel):
+    date: date
+    net_worth: Money
+    kind: Literal["snapshot", "live"]
+
+
+class MonthChange(BaseModel):
+    start: date
+    end: date
+    start_value: Money
+    end_value: Money
+    change: Money
+    cash_change: Money | None  # null on the live interval until every cash balance is newer than its start
+    contributions: Money
+    market: Money | None
+    live: bool
+
+
+class ProjectionPoint(BaseModel):
+    date: date
+    net_worth: Money
+
+
+class Projection(BaseModel):
+    monthly_change: Money
+    basis_months: int
+    points: list[ProjectionPoint]
+
+
+class LiveNetWorth(BaseModel):
+    as_of: date
+    net_worth: Money | None
+    liquid: Money | None
+    components: list[LiveComponent]
+    by_asset_class: dict[str, Money]
+    changes: list[NetWorthChange]
+    history: list[HistoryPoint]
+    months: list[MonthChange]
+    projection: Projection | None
+
+
+class ComponentIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    amount: str | int = Field()
+    as_of: date | None = None
+
+
+class ComponentOut(BaseModel):
+    key: str
+    amount: Money
+    as_of: date
+
+
+class HoldingOut(BaseModel):
+    name: str
+    isin: str | None
+    units: str
+    units_as_of: date
+    source: str
+    price: str | None
+    price_date: date | None
+    value: Money | None
+
+
+class Holdings(BaseModel):
+    items: list[HoldingOut]
+
+
+# --- source health -------------------------------------------------------------------------------
+
+class Unparsed(BaseModel):
+    sender: str | None
+    subject: str | None
+    status: str
+    count: int
+    first_seen: datetime
+    last_seen: datetime
+
+
+class UploadOut(BaseModel):
+    id: int
+    filename: str | None
+    received_at: datetime
+    status: str
+    account: str | None
+    period_start: date | None
+    period_end: date | None
+    diff: Money | None
+    reconciled: bool
+
+
+class ParseQueue(BaseModel):
+    unparsed: list[Unparsed]
+    uploads: list[UploadOut]

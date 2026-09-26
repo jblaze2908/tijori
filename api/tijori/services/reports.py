@@ -6,12 +6,13 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Date, Integer, and_, bindparam, case, cast, exists, func, literal_column, or_, select, true
+from sqlalchemy import Date, Integer, Text, and_, bindparam, case, cast, false, func, literal_column, or_, select, true
 from sqlalchemy.orm import Session
 
 from tijori.classify.taxonomy import EXPENSE_BUCKETS
-from tijori.models import Budget, Category, Recurring, Txn
+from tijori.models import Budget, Category, Txn
 from tijori.money import ZERO, fmt
+from tijori.services import recurring
 from tijori.services.common import cycle_bounds, previous_month, today_ist
 
 SUMMARY_BUCKETS = ("everyday", "card", "oneoff", "invest", "income")
@@ -139,7 +140,7 @@ def budgets(s: Session, member_id: int, month: str, month_start_day: int = 1) ->
 # --- trends --------------------------------------------------------------------------------
 
 GRANULARITIES = ("week", "month", "quarter", "fy")
-GROUP_BYS = ("total", "category", "merchant", "kind")
+GROUP_BYS = ("total", "category", "merchant", "kind", "account")
 
 
 def _period_sql(granularity: str, shift: Any) -> Any:
@@ -186,10 +187,9 @@ def period_grid(end: date, granularity: str, periods: int, month_start_day: int)
     return [(st, _next_start(st, granularity, month_start_day) - timedelta(days=1)) for st in starts]
 
 
-def _committed() -> Any:
-    # Committed: the merchant has an active recurring series (none until recurring detection, M2).
-    return exists().where(Recurring.member_id == Txn.member_id, Recurring.status == "active",
-                          func.lower(Recurring.merchant_norm) == func.lower(Txn.merchant_norm))
+def _committed(keys: set[str]) -> Any:
+    """Committed: the payee has a live recurring series (services/recurring.detect)."""
+    return recurring.payee_key_expr().in_(keys) if keys else false()
 
 
 def is_expense() -> Any:
@@ -222,7 +222,8 @@ def trends(s: Session, member_id: int, *, granularity: str, periods: int, group_
         cell[1] += n
 
     if group_by == "total":
-        base = (select(period, _measure().label("measure"), _committed().label("committed"),
+        committed = _committed(recurring.committed_keys(recurring.detect(s, member_id)))
+        base = (select(period, _measure().label("measure"), committed.label("committed"),
                        (Txn.kind == "refund").label("refund"), Txn.amount)
                 .where(in_range).subquery())
         rows = s.execute(
@@ -248,14 +249,20 @@ def trends(s: Session, member_id: int, *, granularity: str, periods: int, group_
             amount, where, key = case((natural, Txn.amount), else_=-Txn.amount), true(), Txn.kind
         else:
             amount, where = Txn.amount, is_expense()
-            key = (func.coalesce(Category.name, literal_column("'Uncategorized'")) if group_by == "category"
-                   else func.coalesce(Txn.merchant_norm, literal_column("'Unknown'")))
+            if group_by == "category":
+                key = func.coalesce(Category.name, literal_column("'Uncategorized'"))
+            elif group_by == "account":
+                key = func.coalesce(cast(Txn.account_id, Text), literal_column("'none'"))
+            else:
+                key = func.coalesce(Txn.merchant_norm, literal_column("'Unknown'"))
         base = (select(period, key.label("key"), amount.label("amount"))
                 .outerjoin(Category, Category.id == Txn.category_id).where(in_range, where).subquery())
         rows = s.execute(select(base.c.period_start, base.c.key, func.sum(base.c.amount).label("amount"),
                                 func.count().label("n")).group_by(base.c.period_start, base.c.key)).all()
+        labels = recurring.account_labels(s, member_id) if group_by == "account" else None
         for r in rows:
-            add(r.key, r.period_start, r.amount, r.n)
+            k = r.key if labels is None else ("No account" if r.key == "none" else labels.get(int(r.key), r.key))
+            add(k, r.period_start, r.amount, r.n)
         ranked = sorted(cells, key=lambda k: (-sum(v[0] for v in cells[k].values()), k))
         keys = ranked[:limit]
         if len(ranked) > limit:

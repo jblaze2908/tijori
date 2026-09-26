@@ -5,14 +5,16 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import ColumnElement, Text, and_, cast, func, literal_column, or_, select, update
+from sqlalchemy import ColumnElement, String, Text, and_, case, cast, delete, func, literal_column, or_, select, update
 from sqlalchemy.orm import Session
 
+from tijori.classify.merchants import MERCHANT_QR_HANDLES
 from tijori.db import MemberContext
 from tijori.models import Category, Observation, RawMessage, Rule, RuleHit, Txn, TxnLink, TxnObservation
-from tijori.money import fmt
+from tijori.money import ZERO, fmt
 from tijori.services.common import audit, category_by_ref, cycle_bounds, txn_out, txn_query
 from tijori.services.errors import Invalid, NotFound
+from tijori.services.reports import is_expense
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,14 +22,18 @@ class TxnFilter:
     month: str | None = None
     date_from: date | None = None
     date_to: date | None = None
-    account: int | None = None
-    category: int | str | None = None  # id, or "none" for uncategorized
+    accounts: tuple[int, ...] = ()
+    categories: tuple[str, ...] = ()  # ids, and/or "none" for uncategorized; any of them matches
     kind: str | None = None
     direction: str | None = None
     q: str | None = None
     min_amount: Decimal | None = None
     max_amount: Decimal | None = None
     month_start_day: int = 1  # `month` is a cycle starting on this day
+    sort: str = "date_desc"
+
+
+SORTS = ("date_desc", "date_asc", "amount_desc", "amount_asc")
 
 
 def _like(q: str) -> str:
@@ -44,12 +50,14 @@ def _conditions(member_id: int, f: TxnFilter) -> ColumnElement[bool]:
         conds.append(Txn.occurred_at >= f.date_from)
     if f.date_to:
         conds.append(Txn.occurred_at <= f.date_to)
-    if f.account is not None:
-        conds.append(Txn.account_id == f.account)
-    if f.category == "none":
-        conds.append(Txn.category_id.is_(None))
-    elif f.category is not None:
-        conds.append(Txn.category_id == int(f.category))
+    if f.accounts:
+        conds.append(Txn.account_id.in_(f.accounts))
+    if f.categories:
+        ids = [int(c) for c in f.categories if c != "none"]
+        either = [Txn.category_id.in_(ids)] if ids else []
+        if "none" in f.categories:
+            either.append(Txn.category_id.is_(None))
+        conds.append(or_(*either))
     if f.kind:
         conds.append(Txn.kind == f.kind)
     if f.direction:
@@ -64,13 +72,41 @@ def _conditions(member_id: int, f: TxnFilter) -> ColumnElement[bool]:
     return and_(*conds)
 
 
+_ORDER = {
+    "date_desc": (Txn.occurred_at.desc(), Txn.id.desc()),
+    "date_asc": (Txn.occurred_at.asc(), Txn.id.asc()),
+    "amount_desc": (Txn.amount.desc(), Txn.occurred_at.desc(), Txn.id.desc()),
+    "amount_asc": (Txn.amount.asc(), Txn.occurred_at.desc(), Txn.id.desc()),
+}
+
+
+def _measure() -> ColumnElement[str]:
+    """Which total a txn feeds, on /api/summary's rules: spend, income, invest, or excluded."""
+    return case(
+        (is_expense(), literal_column("'spend'")),
+        (and_(Txn.direction == "credit", Txn.bucket == "income"), literal_column("'income'")),
+        (and_(Txn.direction == "debit", Txn.bucket == "invest"), literal_column("'invest'")),
+        else_=literal_column("'excluded'"),
+    )
+
+
 def list_txns(s: Session, member_id: int, f: TxnFilter, page: int, page_size: int) -> dict[str, Any]:
-    """Two indexed queries per call: the total and the page."""
+    """Two indexed queries per call: the grouped totals of the whole filtered set, and the page."""
     where = _conditions(member_id, f)
-    total = s.scalar(select(func.count()).select_from(Txn).where(where)) or 0
-    rows = s.execute(txn_query().where(where).order_by(Txn.occurred_at.desc(), Txn.id.desc())
+    measure = _measure().label("measure")
+    card = (Txn.bucket == "card").label("card")
+    groups = s.execute(select(measure, card, func.count().label("n"), func.sum(Txn.amount).label("amount"))
+                       .where(where).group_by(measure, card)).all()
+    totals = {k: {"amount": ZERO, "count": 0} for k in ("spend", "income", "invest", "excluded", "card")}
+    for g in groups:
+        for k in (g.measure, "card") if g.card and g.measure == "spend" else (g.measure,):
+            totals[k]["amount"] += g.amount
+            totals[k]["count"] += g.n
+    total = sum(g.n for g in groups)
+    rows = s.execute(txn_query().where(where).order_by(*_ORDER[f.sort])
                      .limit(page_size).offset((page - 1) * page_size)).all()
-    return {"items": [txn_out(r) for r in rows], "page": page, "page_size": page_size, "total": total}
+    return {"items": [txn_out(r) for r in rows], "page": page, "page_size": page_size, "total": total,
+            "totals": {k: {"amount": fmt(v["amount"]), "count": v["count"]} for k, v in totals.items()}}
 
 
 def payee_history(s: Session, member_id: int, pairs: set[tuple[str, str]]) -> dict[tuple[str, str], list[dict]]:
@@ -89,6 +125,9 @@ def payee_history(s: Session, member_id: int, pairs: set[tuple[str, str]]) -> di
     for r in rows:
         out.setdefault((r.payee_key, r.direction), []).append({"category_id": r.id, "category": r.name, "count": r.n})
     return out
+
+
+PAYEE_RECENT = 12
 
 
 def get_txn(s: Session, member_id: int, txn_id: int) -> dict[str, Any]:
@@ -113,8 +152,16 @@ def get_txn(s: Session, member_id: int, txn_id: int) -> dict[str, Any]:
             .where(Txn.member_id == member_id, Txn.payee_key == t.payee_key, Txn.direction == t.direction)
         ).one()
         hist = payee_history(s, member_id, {(t.payee_key, t.direction)})
+        recent = s.execute(
+            select(Txn.id, Txn.occurred_at, Txn.amount, Category.name)
+            .outerjoin(Category, Category.id == Txn.category_id)
+            .where(Txn.member_id == member_id, Txn.payee_key == t.payee_key, Txn.direction == t.direction)
+            .order_by(Txn.occurred_at.desc(), Txn.id.desc()).limit(PAYEE_RECENT)
+        ).all()
         payee = {"payee_key": t.payee_key, "count": n, "total": fmt(total),
-                 "history": hist.get((t.payee_key, t.direction), [])}
+                 "history": hist.get((t.payee_key, t.direction), []),
+                 "recent": [{"id": r.id, "occurred_at": r.occurred_at, "amount": fmt(r.amount), "category": r.name}
+                            for r in recent]}
     return {
         "transaction": txn_out(row),
         "observations": [
@@ -262,3 +309,106 @@ def file_inbox(s: Session, ctx: MemberContext, actor: str, payee_key: str, *, ca
     audit(s, ctx, actor, "inbox.file", f"payee:{payee_key}",
           {"category_id": cat.id, "filed": len(filed), "rule_id": rule_ref})
     return {"filed": len(filed), "rule_id": rule_ref}
+
+
+MAX_NOTE = 2000
+MAX_TAGS = 20
+
+
+def update_txn(s: Session, ctx: MemberContext, actor: str, txn_id: int, *, notes: str | None, tags: list[str] | None,
+               fields: set[str]) -> dict[str, Any]:
+    """Notes and tags only; the category has its own endpoint because it teaches payee memory."""
+    t = s.scalars(select(Txn).where(Txn.member_id == ctx.member_id, Txn.id == txn_id)).first()
+    if t is None:
+        raise NotFound("transaction not found")
+    if "notes" in fields:
+        t.notes = (notes or "").strip() or None
+    if "tags" in fields:
+        clean = []
+        for tag in tags or []:
+            tag = tag.strip()
+            if tag and tag.lower() not in {c.lower() for c in clean}:
+                clean.append(tag)
+        t.tags = clean[:MAX_TAGS]
+    s.flush()
+    audit(s, ctx, actor, "txn.update", f"txn:{txn_id}", {"fields": sorted(fields)})
+    return {"id": t.id, "notes": t.notes, "tags": list(t.tags or [])}
+
+
+def unfile(s: Session, ctx: MemberContext, actor: str, txn_ids: list[int], rule_id: str | None) -> dict[str, Any]:
+    """Undo an Inbox filing: the txns go back to the Inbox, and the rule it created (if any) is deleted.
+    Only txns filed by hand or by that rule are touched."""
+    rule_pk = int(rule_id[5:]) if rule_id and rule_id.startswith("rule:") and rule_id[5:].isdigit() else None
+    # Filing clears review_reason, so it is re-derived the way the classifier would have set it.
+    reason = case((Txn.vpa.op("~*")(MERCHANT_QR_HANDLES.pattern), literal_column("'merchant_over_cap'")),
+                  (Txn.payee_key.like("vpa:%"), literal_column("'person'")),
+                  else_=literal_column("'new_payee'"))
+    back_to_inbox = dict(category_id=None, bucket=None, classified_by=None, rule_id="inbox:undo",
+                         review_reason=reason, updated_at=func.now())
+    owned_by = [Txn.classified_by == "user"]
+    if rule_pk is not None:
+        owned_by.append(and_(Txn.classified_by == "rule", Txn.rule_id == rule_id))
+    back = s.execute(
+        update(Txn).where(Txn.member_id == ctx.member_id, Txn.id.in_(txn_ids), or_(*owned_by))
+        .values(**back_to_inbox).returning(Txn.id)
+    ).scalars().all()
+    rule_removed = False
+    if rule_pk is not None:
+        restored = s.execute(
+            update(Txn).where(Txn.member_id == ctx.member_id, Txn.classified_by == "rule", Txn.rule_id == rule_id)
+            .values(**back_to_inbox).returning(Txn.id)
+        ).scalars().all()
+        back = sorted({*back, *restored})
+        rule_removed = s.execute(delete(Rule).where(Rule.id == rule_pk, Rule.member_id == ctx.member_id)
+                                 .returning(Rule.id)).first() is not None
+    audit(s, ctx, actor, "inbox.undo", f"txns:{len(back)}", {"rule_id": rule_id, "rule_removed": rule_removed})
+    return {"restored": len(back), "rule_removed": rule_removed}
+
+
+def filing_stats(s: Session, member_id: int, month: str, month_start_day: int = 1) -> dict[str, Any]:
+    """How the month's txns were filed, by decider. One grouped query, plus the member's rule count."""
+    start, end = cycle_bounds(month, month_start_day)
+    by = case(
+        (Txn.category_id.is_(None), literal_column("'waiting'")),
+        (and_(Txn.classified_by == "rule", Txn.rule_id.like("rule:%")), literal_column("'rules'")),
+        (Txn.classified_by == "rule", literal_column("'structural'")),
+        (Txn.classified_by.in_(("heuristic", "system")), literal_column("'structural'")),
+        else_=cast(Txn.classified_by, String(24)),
+    ).label("by")
+    rows = s.execute(select(by, func.count().label("n")).where(
+        Txn.member_id == member_id, Txn.occurred_at >= start, Txn.occurred_at < end).group_by(by)).all()
+    counts = {k: 0 for k in ("rules", "payee_memory", "dictionary", "structural", "user", "waiting")}
+    for r in rows:
+        counts[r.by] = counts.get(r.by, 0) + r.n
+    total = sum(counts.values())
+    rules = s.scalar(select(func.count()).select_from(Rule).where(Rule.member_id == member_id, Rule.enabled)) or 0
+    return {"month": month, "total": total, "automatic": total - counts["waiting"] - counts["user"],
+            "by": counts, "rules": rules}
+
+
+def list_rules(s: Session, ctx: MemberContext) -> dict[str, Any]:
+    """The member's own rules and the household's, with how many txns each has filed."""
+    hits = (select(RuleHit.rule_id, func.count().label("n"), func.max(RuleHit.at).label("last"))
+            .where(RuleHit.member_id == ctx.member_id).group_by(RuleHit.rule_id).subquery())
+    rows = s.execute(
+        select(Rule, Category.name, func.coalesce(hits.c.n, 0).label("n"), hits.c.last)
+        .join(Category, Category.id == Rule.category_id)
+        .outerjoin(hits, hits.c.rule_id == Rule.id)
+        .where(Rule.household_id == ctx.household_id,
+               or_(Rule.member_id.is_(None), Rule.member_id == ctx.member_id))
+        .order_by(Rule.created_at.desc(), Rule.id.desc())
+    ).all()
+    return {"items": [
+        {"id": f"rule:{r.id}", "scope": r.scope, "match": r.match_json, "category": name, "enabled": r.enabled,
+         "created_by": r.created_by, "created_at": r.created_at, "hits": n, "last_hit_at": last,
+         "editable": r.member_id == ctx.member_id}
+        for r, name, n, last in rows]}
+
+
+def set_rule_enabled(s: Session, ctx: MemberContext, actor: str, rule_pk: int, enabled: bool) -> dict[str, Any]:
+    rule = s.scalars(select(Rule).where(Rule.id == rule_pk, Rule.member_id == ctx.member_id)).first()
+    if rule is None:
+        raise NotFound("rule not found")
+    rule.enabled = enabled
+    audit(s, ctx, actor, "rule.enable" if enabled else "rule.disable", f"rule:{rule_pk}", {})
+    return {"id": f"rule:{rule_pk}", "enabled": enabled}

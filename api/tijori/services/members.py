@@ -12,6 +12,7 @@ from tijori.models import Account, Household, Member, Statement, Txn
 from tijori.money import fmt
 from tijori.services.common import account_label, audit
 from tijori.services.errors import Invalid, NotFound
+from tijori.services.recurring import balances
 from tijori.services.secrets import names, remove, statement_password_name
 
 DEFAULT_MONTH_START_DAY = 1
@@ -68,6 +69,7 @@ def accounts(s: Session, member_id: int) -> dict[str, Any]:
         .where(Account.member_id == member_id).order_by(Account.institution, Account.id)
     ).all()
     with_password = names(s, member_id, "statement_password:account:")
+    bal = balances(s, member_id)
     return {"items": [
         {"id": a.id, "institution": a.institution, "name": a.name, "kind": a.kind, "mask": a.mask,
          "label": account_label(a.institution, a.name, a.mask), "currency": a.currency, "txn_count": n,
@@ -76,6 +78,7 @@ def accounts(s: Session, member_id: int) -> dict[str, Any]:
                                                     "reconciled": rat is not None,
                                                     "diff": fmt(diff) if diff is not None else None},
          "has_statement_password": statement_password_name(a.id) in with_password,
+         "balance": {"amount": fmt(bal[a.id][0]), "as_of": bal[a.id][1]} if a.id in bal else None,
          "last_seen_at": None, "coverage_pct": None}
         for a, n, first, last, ps, pe, rat, diff in rows]}
 

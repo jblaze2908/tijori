@@ -1,4 +1,4 @@
-# Tijori API (M0)
+# Tijori API
 
 This is the contract the web UI is built against. Examples come from synthetic statements (fake names, numbers and amounts); none of it is real data.
 
@@ -72,7 +72,7 @@ Every endpoint that returns transactions uses this shape.
   "amount": "450.00", "currency": "INR", "direction": "debit", "kind": "spend",
   "merchant": "Blinkit", "counterparty": "Blinkit", "vpa": "blinkit.rz", "payee_key": "brand:blinkit",
   "narration": "WDL TFR UPI/DR/333333333333/Blinkit/HDFC/blinkit.rz/Payvi",
-  "account": {"id": 50, "institution": "SBI", "name": "SBI savings", "label": "SBI ••1234", "kind": "bank", "mask": "1234"},
+  "account": {"id": 50, "institution": "SBI", "name": "SBI savings", "label": "SBI savings ••1234", "kind": "bank", "mask": "1234"},
   "category": {"id": 1151, "name": "Groceries"}, "bucket": "everyday",
   "classified_by": "dictionary", "rule_id": "dict:blinkit", "review_reason": null,
   "status": "reconciled", "sources": ["statement"], "notes": null, "tags": []
@@ -83,9 +83,9 @@ Every endpoint that returns transactions uses this shape.
 |---|---|
 | `merchant` | Normalised display name |
 | `counterparty` | The payee as the bank printed it |
-| `vpa` | The UPI handle. **A person's handle is masked** (`"90•••"`, `"me•••@okaxis"`), and so is its appearance inside `narration`. Merchant and brand handles are left as they are |
+| `vpa` | The UPI handle, in full (Jai's call, 2026-09-27: a member only ever reads their own data). Anything that sends data out of Tijori, such as MCP, must mask a person's handle itself |
 | `payee_key` | The stable payee identity used by the Inbox and payee memory. It can contain `:` and `\|`, so URL-encode it in paths |
-| `account` | `null` when the txn has no account. `mask` is the last 4 digits only; `label` is ready to display |
+| `account` | `null` when the txn has no account. `mask` is the last 4 digits only; `label` is ready to display: the account name (or institution) and `••` plus the mask |
 | `category` | `null` while the txn is in the Inbox |
 | `posted_at` | The bank's value date |
 
@@ -136,10 +136,12 @@ Month cycles that contain at least one txn, oldest first. `start` and `end` are 
             "label": "HDFC ••9876", "currency": "INR", "txn_count": 8,
             "first_txn_at": "2026-04-01", "last_txn_at": "2026-04-30",
             "last_statement": {"period_start": "2026-04-01", "period_end": "2026-04-30", "reconciled": true, "diff": "0.00"},
-            "has_statement_password": false, "last_seen_at": null, "coverage_pct": null}]}
+            "has_statement_password": false, "balance": {"amount": "184500.00", "as_of": "2026-08-31"},
+            "last_seen_at": null, "coverage_pct": null}]}
 ```
 
-`last_seen_at` (last live alert) and `coverage_pct` (share of statement lines seen live) stay `null` until the collectors land in M1.
+- `balance` is the balance printed after the account's newest statement line, or `null` when no statement had one.
+- `last_seen_at` (last live alert) and `coverage_pct` (share of statement lines seen live) stay `null` until the collectors land in M1.
 
 Accounts are created automatically from uploaded statements. They can also be declared up front, for example during onboarding:
 
@@ -203,15 +205,25 @@ Self transfers, reversal pairs, pass-throughs and investment redemptions are `ex
 |---|---|---|
 | `month` | `YYYY-MM` | A cycle per `month_start_day` |
 | `from`, `to` | `YYYY-MM-DD` | Inclusive bounds; can be combined with `month`. `from > to` is a 422 |
-| `account` | int | Account id |
-| `category` | int id, or `none` | `none` returns only Inbox txns |
+| `account` | int, repeatable | Account ids (up to 20); a txn on any of them matches |
+| `category` | int id or `none`, repeatable | Up to 40; `none` matches Inbox txns. Any of them matches |
 | `kind` | enum | |
 | `direction` | `debit` \| `credit` | |
 | `q` | string, 1–100 chars | Case-insensitive substring match on narration or merchant. `%` and `_` match literally |
 | `min`, `max` | decimal ≥ 0, up to 2 places | Inclusive. `min > max` is a 422 |
+| `sort` | `date_desc` (default), `date_asc`, `amount_desc`, `amount_asc` | Ties fall back to newest first |
 | `page`, `page_size` | int | See paging |
 
-Returns `{"items": [Txn], "page": 1, "page_size": 50, "total": 16}`.
+Returns the page plus `totals` for the **whole filtered set**, split on `/api/summary`'s rules:
+
+```json
+{"items": [Txn], "page": 1, "page_size": 50, "total": 29,
+ "totals": {"spend": {"amount": "376605.00", "count": 11}, "income": {"amount": "1890000.00", "count": 9},
+            "invest": {"amount": "225000.00", "count": 9}, "excluded": {"amount": "0.00", "count": 0},
+            "card": {"amount": "345315.00", "count": 9}}}
+```
+
+`spend` + `income` + `invest` + `excluded` counts add up to `total`. `card` is the card-bill part of `spend`, not an extra group.
 
 ## `GET /api/transactions/{id}`
 
@@ -226,13 +238,18 @@ One txn with everything behind it. Returns 404 when the txn doesn't exist or isn
                     "received_at": "2026-09-26T17:26:45.071340+00:00", "filename": "sbi_statement_synthetic.txt"}],
   "links": [],
   "payee": {"payee_key": "brand:blinkit", "count": 2, "total": "856.00",
-            "history": [{"category_id": 1151, "category": "Groceries", "count": 2}]}
+            "history": [{"category_id": 1151, "category": "Groceries", "count": 2}],
+            "recent": [{"id": 1125, "occurred_at": "2026-04-05", "amount": "450.00", "category": "Groceries"}]}
 }
 ```
 
 - `observations` lists every sighting behind the txn. Legacy-imported txns have none until their statement is uploaded.
 - `links` is empty in M0; the resolver fills it in M1.
-- `payee` gives this payee's totals in the same direction. It is `null` without a `payee_key`.
+- `payee` gives this payee's totals in the same direction, and its 12 most recent txns. It is `null` without a `payee_key`.
+
+## `PATCH /api/transactions/{id}`
+
+Body: `{"notes"?: string ≤ 2,000 chars or null, "tags"?: [string 1–40 chars] ≤ 20}`. At least one field. Tags are trimmed and de-duplicated case-insensitively. Returns `{"id", "notes", "tags"}`. Audit-logged; 404 when the txn isn't yours.
 
 ## `POST /api/transactions/{id}/category`
 
@@ -328,7 +345,7 @@ Spend over time. Aggregation happens in SQL, bucketed by `date_trunc`.
 | `granularity` | `month` | `week` (weeks start Monday), `month`, `quarter`, `fy` (Indian financial year, Apr–Mar) |
 | `periods` | 12 | 1–60. That many periods, ending with the one that contains `end` |
 | `end` | today (IST) | `YYYY-MM-DD` |
-| `group_by` | `total` | `total`, `category`, `merchant`, `kind` |
+| `group_by` | `total` | `total`, `category`, `merchant`, `kind`, `account` (series keyed by the account `label`; `No account` for none) |
 | `limit` | 10 | 1–50. For `category` and `merchant`: the top N series by total, the rest merged into `"Other"` |
 
 The member's `month_start_day` shifts month, quarter and FY boundaries. For example, day 25 gives months running 25th to 24th. Weeks ignore it.
@@ -336,11 +353,11 @@ The member's `month_start_day` shifts month, quarter and FY boundaries. For exam
 - **Spend** uses the one definition (see Conventions): debits in `everyday`, `oneoff` and `card` plus uncategorized debits, with refunds not netted. A month's `total` equals `/api/summary` `expense` for the same month cycle, and `income`/`invested` equal its `income`/`invest`.
 - **`group_by=total`** returns six series, all on the summary's rules:
   - `total`: spend.
-  - `committed` + `discretionary`: spend split by whether the merchant has an active recurring series. `committed` stays 0 until recurring detection lands in M2.
+  - `committed` + `discretionary`: spend split by whether the payee has a live recurring series (see [`/api/recurring`](#get-apirecurring)).
   - `income`: credits in the `income` bucket.
   - `refunds`: the refund part of income.
   - `invested`: debits in the `invest` bucket.
-- **`group_by=category|merchant`** splits `total` (spend) into series.
+- **`group_by=category|merchant|account`** splits `total` (spend) into series.
 - **`group_by=kind`** is a different view. It includes every kind, each measured in its natural direction: credits for `income` and `refund`, debits for the rest. The opposite direction subtracts.
 
 ```json
@@ -404,6 +421,133 @@ Multipart, with the header `X-Requested-With: tijori`. Field `sheet` holds the G
 - Idempotent: it upserts by date.
 - Returns `{"snapshots_upserted": 11}`.
 - Returns 422 when the file isn't a sheet export.
+
+## `GET /api/recurring`
+
+Recurring series, detected from the member's own history on every call. There's no AI and nothing is stored.
+
+- A series is at least 3 debits to one payee (`payee_key`, else the merchant) in the last 400 days.
+- Every gap between charges fits one cadence: `weekly` 5–9 days, `monthly` 25–36, `quarterly` 84–98, `yearly` 350–380.
+- Every amount is within ±10% of the series' median.
+- The next charge is at most half a period overdue.
+- Card-bill payments and `excluded` txns never form a series.
+
+```json
+{"items": [{"id": "brand:groww", "merchant": "Groww", "cadence": "monthly", "amount_expected": "25000.00",
+            "next_due": "2026-10-05", "last_at": "2026-09-05", "count": 12, "category": "Investments",
+            "account": "HDFC savings ••5151"}]}
+```
+
+`amount_expected` is the latest charge. Items are sorted by `next_due`.
+
+## `GET /api/alerts?month=YYYY-MM`
+
+Rule flags for the month cycle. Every one is computed from data; none is written by a model.
+
+| `kind` | `severity` | Rule |
+|---|---|---|
+| `duplicate` | `bad` | Two or more debits with the same account, payee, amount and day |
+| `bounce_risk` | `warn` | A recurring series due in the next 7 days, whose account's last known `balance` is below the charge |
+| `price_increase` | `warn` | A series whose latest charge, this month, is more than 5% above the one before |
+
+```json
+{"month": "2026-09", "items": [{"id": "dup:579", "kind": "duplicate", "severity": "bad",
+  "title": "OpenRouter charged 2×", "detail": "₹1,037.44 × 2 on 18 Sep", "txn_ids": [579, 580]}]}
+```
+
+## `GET /api/inbox/stats?month=YYYY-MM`
+
+How the month's txns were filed:
+
+```json
+{"month": "2026-09", "total": 51, "automatic": 48, "rules": 0,
+ "by": {"rules": 0, "payee_memory": 0, "dictionary": 48, "structural": 0, "user": 0, "waiting": 3}}
+```
+
+- `rules` in `by` counts member and household rules (`rule:<id>`).
+- `structural` covers salary, self-transfer and card-bill rules, reversals and the merchant-QR heuristic.
+- `waiting` is the Inbox.
+- `automatic` is everything filed except by hand.
+- The top-level `rules` is the member's enabled rule count.
+
+## `POST /api/inbox/undo`
+
+Body: `{"txn_ids": [int] (1–500), "rule_id"?: "rule:<id>"}`. Puts back txns the member filed by hand. With `rule_id`, it also puts back every txn that rule filed, and deletes the rule (the member's own rules only). Returns `{"restored": 1, "rule_removed": true}`. Audit-logged.
+
+## `GET /api/rules` and `PATCH /api/rules/{rule_id}`
+
+`GET` lists the member's and the household's rules, newest first:
+
+```json
+{"items": [{"id": "rule:1", "scope": "member", "match": {"vpa": "rahul.m@okaxis", "direction": "debit"},
+            "category": "Family", "enabled": true, "created_by": "user", "created_at": "2026-09-26T19:26:24Z",
+            "hits": 0, "last_hit_at": null, "editable": true}]}
+```
+
+`PATCH /api/rules/rule:1` `{"enabled": false}` pauses one of the member's own rules. It returns `{"id", "enabled"}`, or 404 for a household rule or someone else's.
+
+## `GET /api/networth/live`
+
+The current net worth. It is not tied to a snapshot: each component takes its **newest** known value.
+
+1. The newest sheet snapshot (`source: "sheet"`).
+2. For `sbi` and `hdfc`: the balance after the newest statement line of that bank's savings accounts, summed (`source: "statement"`).
+3. A value the member set (`source: "manual"`, below).
+
+```json
+{"as_of": "2026-09-27", "net_worth": "4875000.00", "liquid": "752300.00",
+ "components": [{"key": "gold", "label": "Gold", "asset_class": "gold", "amount": "235000.00", "share_pct": 4.8,
+                 "source": "manual", "as_of": "2026-09-27", "stale": false, "editable": true, "change_since": "15000.00"}],
+ "by_asset_class": {"cash": "542300.00", "...": "..."},
+ "changes": [{"period": "month", "since": "2026-09-01", "amount": "15000.00", "pct": 0.3},
+             {"period": "year", "since": "2026-01-01", "amount": "645000.00", "pct": 15.2},
+             {"period": "fy", "since": "2026-04-01", "amount": "485000.00", "pct": 11.1}],
+ "history": [{"date": "2026-09-01", "net_worth": "4860000.00", "kind": "snapshot"},
+             {"date": "2026-09-27", "net_worth": "4875000.00", "kind": "live"}],
+ "months": [{"start": "2026-09-01", "end": "2026-09-27", "start_value": "4860000.00", "end_value": "4875000.00",
+             "change": "15000.00", "cash_change": null, "contributions": "25000.00", "market": null, "live": true}],
+ "projection": {"monthly_change": "79090.91", "basis_months": 11,
+                "points": [{"date": "2026-12-27", "net_worth": "5097272.73"}, {"date": "2027-03-27", "net_worth": "5334545.45"}]}}
+```
+
+| Field | Notes |
+|---|---|
+| `stale` | The value is more than 30 days old |
+| `change_since` | Against the snapshot on or before the 1st of this month |
+| `changes` | Against the snapshot on or before the 1st of the month, 1 Jan, and 1 Apr (FY). `null` without one |
+| `history` | Snapshots oldest first, plus a `live` point only when some component is newer than the last snapshot |
+| `months` | The last 6 intervals between points, newest first: `change = cash_change + contributions + market`. Cash is `sbi + hdfc + fd`. Contributions are `invest`-bucket debits in the interval. Market is the rest, including anything set by hand. On the live interval, `cash_change` and `market` are `null` until every cash balance is newer than the interval's start |
+| `projection` | The average monthly change over up to the last 12 intervals, continued 3 and 6 months. `null` with fewer than 3 points |
+
+No data at all gives `net_worth: null` and empty lists.
+
+## `PUT /api/networth/components/{key}`
+
+Body: `{"amount": "235000.00" | 235000, "as_of"?: "YYYY-MM-DD"}`. `key` is one of the nine sheet keys. `as_of` defaults to today, and a future date is a 422. It upserts by (key, `as_of`) and returns `{"key", "amount", "as_of"}`. Audit-logged.
+
+## `GET /api/holdings`
+
+Funds and stocks. Each holding shows its latest units times the newest price. The list is empty until the CDSL CAS parser lands (M1/M5).
+
+```json
+{"items": [{"name": "…", "isin": "INF…", "units": "6812.450000", "units_as_of": "2026-09-03", "source": "cas",
+            "price": "86.4200", "price_date": "2026-09-26", "value": "588722.98"}]}
+```
+
+## `GET /api/sources/queue`
+
+The Settings view of source health.
+
+- `unparsed`: raw messages no parser could read, grouped by sender and subject. An upload's subject is its filename.
+- `uploads`: the last 5 statement uploads.
+
+```json
+{"unparsed": [{"sender": "upload", "subject": "icici_card_aug.pdf", "status": "parser_needed", "count": 1,
+               "first_seen": "2026-09-26T17:26:45Z", "last_seen": "2026-09-26T17:26:45Z"}],
+ "uploads": [{"id": 86, "filename": "sbi_aug.pdf", "received_at": "2026-09-02T09:10:00Z", "status": "parsed",
+              "account": "SBI savings ••7373", "period_start": "2026-08-01", "period_end": "2026-08-31",
+              "diff": "0.00", "reconciled": true}]}
+```
 
 ---
 
@@ -529,10 +673,10 @@ It applies to statements uploaded after the change.
 ```json
 {"id": 1, "provider": "gmail", "host": "imap.gmail.com", "port": 993, "email": "asha@example.test",
  "label": "tijori", "status": "ok", "last_tested_at": "2026-09-26T18:10:22Z", "last_error_code": null,
- "created_at": "2026-09-26T18:10:21Z"}
+ "last_message_count": 38, "created_at": "2026-09-26T18:10:21Z"}
 ```
 
-`status` is one of `untested`, `ok`, `error`.
+`status` is one of `untested`, `ok`, `error`. `last_message_count` is how many messages the label held at the last successful test.
 
 ### Statement passwords
 
@@ -587,4 +731,4 @@ Browser flow: OIDC authorization code with PKCE (S256), `state` and `nonce`, sco
   - Only its SHA-256 is stored.
   - Each sign-in issues a new id and ends this browser's previous session.
 
-Not in M0: recurring, alerts, split/notes/tags writes, MCP. The UI should treat a 404 on those routes as "section unavailable".
+Not built yet: split, manual links between txns, and MCP.

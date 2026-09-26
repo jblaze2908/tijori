@@ -1,14 +1,12 @@
 """Shared helpers for the service layer: dates in IST, the txn read shape, masking, audit."""
 
 import hashlib
-import re
 from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
-from tijori.classify.merchants import MERCHANT_QR_HANDLES
 from tijori.db import MemberContext
 from tijori.models import Account, AuditLog, Category, Txn
 from tijori.money import fmt
@@ -55,19 +53,7 @@ def previous_month(month: str) -> str:
 def account_label(institution: str | None, name: str | None, mask: str | None) -> str | None:
     if institution is None:
         return None
-    return f"{institution} ••{mask}" if mask else (name or institution)
-
-
-def is_person_handle(vpa: str | None, payee_key: str | None) -> bool:
-    if not vpa or (payee_key or "").startswith("brand:"):
-        return False
-    return not MERCHANT_QR_HANDLES.match(vpa)
-
-
-def mask_handle(vpa: str) -> str:
-    local, _, domain = vpa.partition("@")
-    masked = local[:2] + "•••"
-    return f"{masked}@{domain}" if domain else masked
+    return f"{name or institution} ••{mask}" if mask else (name or institution)
 
 
 def txn_query() -> Select[Any]:
@@ -88,14 +74,10 @@ def account_ref(account_id: int | None, institution: str | None, name: str | Non
 
 
 def txn_out(row: Any) -> dict[str, Any]:
-    """API shape of one txn. A person's UPI handle is masked, in `vpa` and inside the narration."""
+    """API shape of one txn. UPI handles are shown in full: the member reads only their own data
+    (Jai's call, 2026-09-27). Anything leaving Tijori, such as MCP, must mask them itself."""
     t: Txn = row.Txn
     vpa, narration = t.vpa, t.narration
-    if vpa and is_person_handle(vpa, t.payee_key):
-        local = vpa.partition("@")[0]
-        if narration and len(local) >= 3:
-            narration = re.sub(re.escape(local), mask_handle(local), narration, flags=re.I)
-        vpa = mask_handle(vpa)
     return {
         "id": t.id, "occurred_at": t.occurred_at, "posted_at": t.posted_at, "amount": fmt(t.amount),
         "currency": t.currency, "direction": t.direction, "kind": t.kind, "merchant": t.merchant_norm,

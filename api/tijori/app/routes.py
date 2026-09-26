@@ -2,6 +2,7 @@
 filter member_id explicitly, because RLS lets a grantee read shared rows and those must never
 leak into the caller's own totals."""
 
+import re
 from datetime import date
 from decimal import Decimal
 from typing import Annotated, Literal
@@ -12,6 +13,13 @@ from sqlalchemy import or_, select
 from tijori.app.deps import MemberDep
 from tijori.app.schemas import (
     Accounts,
+    Alerts,
+    FilingStats,
+    Holdings,
+    LiveNetWorth,
+    ParseQueue,
+    RecurringList,
+    Rules,
     Budgets,
     CategoryOut,
     InboxGroupPage,
@@ -27,8 +35,8 @@ from tijori.app.schemas import (
 )
 from tijori.classify.taxonomy import KINDS
 from tijori.models import Category
-from tijori.services import members, networth, reports, txns
-from tijori.services.common import month_start_day
+from tijori.services import members, networth, recurring, reports, sources, txns
+from tijori.services.common import month_start_day, today_ist
 
 router = APIRouter(prefix="/api")
 
@@ -68,24 +76,29 @@ def transactions(
     month: Annotated[str | None, Query(pattern=MONTH_PATTERN)] = None,
     date_from: Annotated[date | None, Query(alias="from")] = None,
     date_to: Annotated[date | None, Query(alias="to")] = None,
-    account: Annotated[int | None, Query(ge=1)] = None,
-    category: Annotated[str | None, Query(pattern=r"^(none|\d{1,18})$")] = None,
+    account: Annotated[list[int] | None, Query(max_length=20)] = None,
+    category: Annotated[list[str] | None, Query(max_length=40)] = None,
     kind: Annotated[Literal[KINDS] | None, Query()] = None,  # type: ignore[valid-type]
     direction: Annotated[Literal["debit", "credit"] | None, Query()] = None,
     q: Annotated[str | None, Query(min_length=1, max_length=100)] = None,
     min_amount: Annotated[Decimal | None, Query(alias="min", ge=0, max_digits=14, decimal_places=2)] = None,
     max_amount: Annotated[Decimal | None, Query(alias="max", ge=0, max_digits=14, decimal_places=2)] = None,
+    sort: Literal[txns.SORTS] = "date_desc",  # type: ignore[valid-type]
     page: Page = 1,
     page_size: PageSize = 50,
 ) -> dict:
+    if any(a < 1 for a in account or []):
+        raise _unprocessable("account", "must be account ids")
+    if any(not re.fullmatch(r"none|\d{1,18}", c) for c in category or []):
+        raise _unprocessable("category", "must be category ids or none")
     if min_amount is not None and max_amount is not None and min_amount > max_amount:
         raise _unprocessable("min", "must not exceed max")
     if date_from and date_to and date_from > date_to:
         raise _unprocessable("from", "must not be after to")
     msd = month_start_day(db.session, db.ctx.member_id) if month else 1
-    f = txns.TxnFilter(month=month, date_from=date_from, date_to=date_to, account=account, category=category,
-                       kind=kind, direction=direction, q=q, min_amount=min_amount, max_amount=max_amount,
-                       month_start_day=msd)
+    f = txns.TxnFilter(month=month, date_from=date_from, date_to=date_to, accounts=tuple(account or ()),
+                       categories=tuple(category or ()), kind=kind, direction=direction, q=q,
+                       min_amount=min_amount, max_amount=max_amount, month_start_day=msd, sort=sort)
     return txns.list_txns(db.session, db.ctx.member_id, f, page, page_size)
 
 
@@ -141,3 +154,38 @@ def trends(
 @router.get("/budgets", response_model=Budgets)
 def get_budgets(db: MemberDep, month: Annotated[str, Query(pattern=MONTH_PATTERN)]) -> dict:
     return reports.budgets(db.session, db.ctx.member_id, month, month_start_day(db.session, db.ctx.member_id))
+
+
+@router.get("/recurring", response_model=RecurringList)
+def get_recurring(db: MemberDep) -> dict:
+    return recurring.list_recurring(db.session, db.ctx.member_id)
+
+
+@router.get("/alerts", response_model=Alerts)
+def get_alerts(db: MemberDep, month: Annotated[str, Query(pattern=MONTH_PATTERN)]) -> dict:
+    return recurring.alerts(db.session, db.ctx.member_id, month, month_start_day(db.session, db.ctx.member_id))
+
+
+@router.get("/inbox/stats", response_model=FilingStats)
+def inbox_stats(db: MemberDep, month: Annotated[str, Query(pattern=MONTH_PATTERN)]) -> dict:
+    return txns.filing_stats(db.session, db.ctx.member_id, month, month_start_day(db.session, db.ctx.member_id))
+
+
+@router.get("/rules", response_model=Rules)
+def get_rules(db: MemberDep) -> dict:
+    return txns.list_rules(db.session, db.ctx)
+
+
+@router.get("/networth/live", response_model=LiveNetWorth)
+def networth_live(db: MemberDep) -> dict:
+    return networth.live(db.session, db.ctx.member_id, today_ist())
+
+
+@router.get("/holdings", response_model=Holdings)
+def get_holdings(db: MemberDep) -> dict:
+    return networth.holdings(db.session, db.ctx.member_id)
+
+
+@router.get("/sources/queue", response_model=ParseQueue)
+def parse_queue(db: MemberDep) -> dict:
+    return sources.parse_queue(db.session, db.ctx.member_id)

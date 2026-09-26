@@ -464,4 +464,18 @@ class MailSource(Base):
     status: Mapped[str] = mapped_column(_enum("mail_status", "untested", "ok", "error"), server_default="untested")
     last_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error_code: Mapped[str | None] = mapped_column(String(40))
+    last_message_count: Mapped[int | None] = mapped_column(Integer)  # messages in the label at the last test
     created_at: Mapped[datetime] = _created()
+
+
+class ComponentValue(Base):
+    """A net-worth component value the member set by hand (EPF passbook, gold, anything without a feed)."""
+
+    __tablename__ = "component_value"
+    id: Mapped[int] = _pk()
+    member_id: Mapped[int] = _member_fk()
+    key: Mapped[str] = mapped_column(String(24))  # one of networth.COMPONENT_KEYS
+    amount: Mapped[Decimal] = mapped_column(Money)
+    as_of: Mapped[date] = mapped_column(Date)
+    created_at: Mapped[datetime] = _created()
+    __table_args__ = (UniqueConstraint("member_id", "key", "as_of"),)

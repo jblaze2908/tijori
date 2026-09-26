@@ -25,7 +25,8 @@ _PASSWORD = re.compile(r"^[^\x00\r\n]{1,256}$")
 def _out(m: MailSource) -> dict[str, Any]:
     return {"id": m.id, "provider": m.provider, "host": m.host, "port": m.port, "email": m.username,
             "label": m.label, "status": m.status, "last_tested_at": m.last_tested_at,
-            "last_error_code": m.last_error_code, "created_at": m.created_at}
+            "last_error_code": m.last_error_code, "last_message_count": m.last_message_count,
+            "created_at": m.created_at}
 
 
 def _endpoint(provider: str, host: str | None, port: int | None) -> tuple[str, int]:
@@ -113,6 +114,8 @@ def record_test(s: Session, ctx: MemberContext, actor: str, source_id: int, resu
     m = _get(s, ctx, source_id)
     m.status = "ok" if result.ok else "error"
     m.last_tested_at = datetime.now(UTC)
+    if result.ok:
+        m.last_message_count = result.message_count
     m.last_error_code = result.error_code
     audit(s, ctx, actor, "mail_source.test", f"mail_source:{m.id}", {"ok": result.ok, "error": result.error_code})
     return {"ok": result.ok, "message_count": result.message_count, "error_code": result.error_code}
