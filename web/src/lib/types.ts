@@ -130,11 +130,15 @@ export interface ApiInboxGroup {
 
 export interface MonthMeta {
   month: MonthKey;
+  /** The cycle's first and last day (docs/api.md: months follow month_start_day). */
+  start?: ISODate;
+  end?: ISODate;
   through: ISODate;
   complete: boolean;
 }
 export interface ApiMonths {
   as_of: ISODate;
+  month_start_day?: number;
   items: MonthMeta[];
 }
 export interface ApiObservation {

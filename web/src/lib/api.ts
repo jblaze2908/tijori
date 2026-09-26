@@ -1,4 +1,4 @@
-import { dayLong, inr, monthEnd, toPaise } from "./format";
+import { dayIST, dayLong, inr, monthEnd, toPaise } from "./format";
 import type {
   Account,
   ApiInboxGroup,
@@ -357,7 +357,7 @@ export const api = {
       payee: d.payee ? { count: d.payee.count, total: toPaise(d.payee.total) } : null,
       observations: d.observations.map((o) => ({
         label: [SOURCE_LABEL[o.source] ?? o.source, o.parser].filter(Boolean).join(" · "),
-        detail: [o.received_at ? `received ${dayLong(o.received_at.slice(0, 10))}` : null, o.balance_after ? `balance after ${inr(toPaise(o.balance_after))}` : null]
+        detail: [o.received_at ? `received ${dayLong(dayIST(o.received_at))}` : null, o.balance_after ? `balance after ${inr(toPaise(o.balance_after))}` : null]
           .filter(Boolean)
           .join(" · "),
       })),
@@ -368,15 +368,20 @@ export const api = {
     ),
   /** Spend by category per period, server-side (docs/api.md); `limit` high enough that the UI does its own "Other". */
   trends: (granularity: Granularity, periods: number, end: string) =>
-    optional(`/api/trends?${qs({ granularity, periods, end, group_by: "category", limit: 50 })}`, (r: ApiTrends): TrendPoint[] =>
-      r.series.flatMap((s) => s.points.map((p) => ({ start: p.period_start, key: s.key, amount: toPaise(p.amount), count: p.count }))),
-    ),
+    optional(`/api/trends?${qs({ granularity, periods, end, group_by: "category", limit: 50 })}`, flattenTrends),
+  /** group_by=total: total, committed, discretionary, income, refunds and invested per period, on the summary's rules. */
+  trendTotals: (granularity: Granularity, periods: number, end: string) =>
+    optional(`/api/trends?${qs({ granularity, periods, end, group_by: "total" })}`, flattenTrends),
   recurring: () =>
     optional("/api/recurring", (r: { items: ApiRecurring[] }): Recurring[] =>
       r.items.map(({ amount_expected, ...x }) => ({ ...x, amountExpected: toPaise(amount_expected) })),
     ),
   alerts: (month: MonthKey) => optional(`/api/alerts?${qs({ month })}`, (r: { items: ServerAlert[] }) => r.items),
 };
+
+function flattenTrends(r: ApiTrends): TrendPoint[] {
+  return r.series.flatMap((s) => s.points.map((p) => ({ start: p.period_start, key: s.key, amount: toPaise(p.amount), count: p.count })));
+}
 
 export const SOURCE_LABEL: Record<TxnSource, string> = {
   statement: "Bank statement",

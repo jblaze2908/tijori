@@ -6,11 +6,12 @@ import { navigate } from "../lib/router";
 import { finishOnboarding, MAIL_ERROR, saveStep, setup, STEP_LABEL, STEPS, type Onboarding as OnboardingState, type Step } from "../lib/setup";
 import { useStore } from "../lib/useStore";
 import { LabelSetup, MailConnect } from "./setup/mail";
-import { ProfileStep } from "./setup/profile";
+import { AccountsSettings, ProfileForm } from "./setup/profile";
 import { FirstUpload, StatementPasswords } from "./setup/secrets";
 
 const INTRO: Record<Step, string> = {
-  profile: "When your month starts, and how banks print your name, so Tijori can recognise money moving between your own accounts.",
+  profile: "Your name, and the day your month starts.",
+  accounts: "The banks and cards whose mail Tijori reads, and how banks print your name, so money moving between your own accounts isn't counted as spending.",
   mail: "Tijori reads bank emails over IMAP with an app password: read-only, from one label.",
   label: "A filter puts bank emails in one label, and IMAP is limited to that label.",
   statement_passwords: "Statements arrive as locked PDFs. Save each bank's statement password so they can be read.",
@@ -23,10 +24,11 @@ export function resumeStep(o: OnboardingState, hasMailSource: boolean): Step {
   return o.step === "done" ? "first_upload" : o.step;
 }
 
-/** A step is ticked from the server's checklist, which is derived from real data. */
+/** A step is ticked from the server's checklist (derived from real data), or by the member having moved past it. */
 function done(o: OnboardingState | null, s: Step, mailOk: boolean): boolean {
   if (!o) return false;
-  if (s === "profile") return o.checklist.profile;
+  if (s === "profile") return o.step !== "profile" || o.checklist.profile;
+  if (s === "accounts") return o.checklist.profile;
   if (s === "mail") return o.checklist.mail_source;
   if (s === "label") return mailOk;
   if (s === "statement_passwords") return o.checklist.statement_passwords;
@@ -99,7 +101,8 @@ export function Onboarding({ step }: { step: string }) {
         <h1 className="solo-h">{STEP_LABEL[current]}</h1>
         <p className="sub">{INTRO[current]}</p>
         <div className="step-body">
-          {current === "profile" && <ProfileStep onSaved={next} />}
+          {current === "profile" && <ProfileForm submitLabel="Save and continue" onSaved={next} />}
+          {current === "accounts" && <AccountsSettings onContinue={next} />}
           {current === "mail" && <MailStep onContinue={next} />}
           {current === "label" && <LabelSetup onContinue={next} />}
           {current === "statement_passwords" && <StatementPasswords onContinue={next} />}

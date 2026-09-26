@@ -1,20 +1,24 @@
 // Onboarding, mail sources, secrets and invites (docs/api.md, "Onboarding" and "Google sign-in").
 // Secrets (app passwords, statement passwords) are only ever sent, never read back.
 import { ApiError, invalidate, optional, prime, request } from "./api";
-import type { ISODate } from "./types";
+import type { Account, AccountKind, ISODate } from "./types";
 
-/** Server steps (docs/api.md). The UI splits "mail" into connecting and the label setup; both save as "mail". */
+/**
+ * Server steps (docs/api.md). The UI shows six: "accounts" saves as "profile" (its checklist item is the
+ * self-transfer profile), and "label" saves as "mail".
+ */
 export type ServerStep = "profile" | "mail" | "statement_passwords" | "first_upload" | "done";
-export const STEPS = ["profile", "mail", "label", "statement_passwords", "first_upload"] as const;
+export const STEPS = ["profile", "accounts", "mail", "label", "statement_passwords", "first_upload"] as const;
 export type Step = (typeof STEPS)[number];
 export const STEP_LABEL: Record<Step, string> = {
   profile: "Profile",
+  accounts: "Your accounts",
   mail: "Connect mail",
   label: "Set up the label",
   statement_passwords: "Statement passwords",
   first_upload: "First statement",
 };
-export const serverStep = (s: Step): ServerStep => (s === "label" ? "mail" : s);
+export const serverStep = (s: Step): ServerStep => (s === "label" ? "mail" : s === "accounts" ? "profile" : s);
 
 export interface Onboarding {
   step: ServerStep;
@@ -60,6 +64,13 @@ export interface MailTest {
   ok: boolean;
   message_count: number | null;
   error_code: MailError | null;
+}
+
+export interface Household {
+  id: number;
+  name: string;
+  members: { id: number; name: string; email: string; role: string; joined_at: string | null }[];
+  invites: { id: number; email: string; status: "pending" | "accepted" | "expired"; created_at: string; expires_at: string }[];
 }
 
 export interface InviteInfo {
@@ -109,6 +120,7 @@ export const setup = {
   classifyProfile: () => optional("/api/profile/classify", (p: ClassifyProfile) => p),
   mailSources: () => optional("/api/mail-sources", (r: { items: MailSource[] }) => r.items),
   invite: (token: string) => optional(`/api/invites/${enc(token)}`, (i: InviteInfo) => i),
+  household: () => optional("/api/household", (h: Household) => h),
 };
 
 // ---------- writes (each invalidates what it changes) ----------
@@ -122,6 +134,31 @@ async function patchOnboarding(body: { step?: ServerStep; completed?: boolean })
 export const saveStep = (s: Step) => patchOnboarding({ step: serverStep(s) });
 export const finishOnboarding = () => patchOnboarding({ completed: true });
 
+export async function saveName(name: string) {
+  await request("/api/me", "PATCH", { name });
+  invalidate(["/api/me", "/api/household"]);
+}
+
+export async function addAccount(a: { institution: string; kind: AccountKind; name: string | null; mask: string | null }) {
+  const r = await request<Account>("/api/accounts", "POST", a);
+  invalidate(["/api/accounts"]);
+  return r;
+}
+export async function renameAccount(id: number, name: string | null) {
+  await request(`/api/accounts/${id}`, "PATCH", { name });
+  invalidate(["/api/accounts"]);
+}
+/** 422 when the account has history: statements and transactions are never orphaned. */
+export async function removeAccount(id: number) {
+  try {
+    await request(`/api/accounts/${id}`, "DELETE");
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 422) throw new ApiError(422, "This account already has statements or transactions, so it stays. You can rename it.");
+    throw e;
+  }
+  invalidate(["/api/accounts"]);
+}
+
 export async function saveMonthStart(month_start_day: number) {
   await request("/api/settings", "PATCH", { month_start_day });
   // Month maths everywhere depends on the start day, so every derived view refetches.
@@ -133,9 +170,14 @@ export async function saveClassifyProfile(p: ClassifyProfile) {
   invalidate(["/api/profile/classify", "/api/onboarding"]);
 }
 
-export async function addMailSource(d: { provider: Provider; host: string; port: number; email: string; app_password: string; label: string }) {
-  const body = d.provider === "custom" ? d : { provider: d.provider, email: d.email, app_password: d.app_password, label: d.label };
-  const r = await request<MailSource>("/api/mail-sources", "POST", body);
+type MailBody = { provider: Provider; host: string; port: number; email: string; app_password: string; label: string };
+const mailBody = (d: MailBody) => (d.provider === "custom" ? d : { provider: d.provider, email: d.email, app_password: d.app_password, label: d.label });
+
+/** Tests credentials without storing anything (shares the 5-per-10-minutes limit with the saved-source test). */
+export const preTestMail = (d: MailBody) => request<MailTest>("/api/mail-sources/test", "POST", mailBody(d));
+
+export async function addMailSource(d: MailBody) {
+  const r = await request<MailSource>("/api/mail-sources", "POST", mailBody(d));
   invalidate(["/api/mail-sources", "/api/onboarding"]);
   return r;
 }
@@ -163,10 +205,17 @@ export async function clearStatementPassword(accountId: number) {
   invalidate(["/api/accounts", "/api/onboarding"]);
 }
 
+export async function revokeInvite(id: number) {
+  await request(`/api/invites/${id}`, "DELETE");
+  invalidate(["/api/household"]);
+}
+
 /** Admin only (403 otherwise); 422 when the email is already a member. The token/url is shown once. */
 export async function createInvite(email: string) {
   try {
-    return await request<{ email: string; token: string; url: string; expires_at: string }>("/api/invites", "POST", { email });
+    const r = await request<{ email: string; token: string; url: string; expires_at: string }>("/api/invites", "POST", { email });
+    invalidate(["/api/household"]);
+    return r;
   } catch (e) {
     if (e instanceof ApiError && e.status === 422) throw new ApiError(422, "That email is already a member, or isn't a valid address.");
     if (e instanceof ApiError && e.status === 403) throw new ApiError(403, "Only the household admin can invite people.");

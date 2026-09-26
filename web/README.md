@@ -38,7 +38,7 @@ The api serves `dist/` from the same origin as `TIJORI_WEB_DIST` (docs/api.md, "
 
 Transactions are fetched per calendar month by explicit dates (`from=`/`to=`, `page_size=200`, pages in parallel) and cached. Every range view, whether a salary cycle, a week or a period from Trends, is assembled from those slices.
 
-Every total shown is the server's: `/api/summary` and `/api/trends` apply `month_start_day` themselves. The client only derives comparison views over the same transactions: pace, "at this point" deltas, movers, the heatmap and alerts.
+Every total shown is the server's: `/api/summary` and `/api/trends` (`group_by=total` for spend, income, invested and refunds per period) apply `month_start_day` themselves, and cycle bounds come from `/api/months` `start`/`end`. The client only derives comparison views over the same transactions: pace, "at this point" deltas, movers, the heatmap and alerts. Committed vs discretionary is also derived for now, because the server's `committed` series is 0 until M2.
 
 ## Layout
 
@@ -50,7 +50,7 @@ Every total shown is the server's: `/api/summary` and `/api/trends` apply `month
 | `src/lib/insights.ts`, `periods.ts`, `format.ts` | pure maths: pace, period stats, movers, alerts, allocation; weeks, cycles, quarters, FY; money and dates |
 | `src/charts.ts` | SVG line, columns, diverging bars, heatmap, donut, sparkline. `html``` escapes all text |
 | `src/pages/` | Overview, Activity, Trends (week/month/quarter/FY, derived from cached month slices or `GET /api/trends`), Inbox, Net worth, Welcome, Invite |
-| `src/pages/Onboarding.tsx`, `setup/` | `/onboarding/:step` follows the server's steps: profile, mail (connect, then the label), statement passwords and first upload. The checklist ticks from `GET /api/onboarding`. The same forms back `/settings/:section`: general, mail sources, accounts, statement passwords, upload and household |
+| `src/pages/Onboarding.tsx`, `setup/` | `/onboarding/:step` has six steps: profile (name, month start), your accounts (declare, rename, remove; classify profile), connect mail (test before saving via `POST /api/mail-sources/test`), the label, statement passwords and first upload. The server's `accounts` and `label` steps resume as `profile` and `mail`; the checklist ticks from `GET /api/onboarding`. The same forms back `/settings/:section`: general, mail sources, accounts, statement passwords, upload and household (members from `GET /api/household`, invites with revoke) |
 | `src/lib/setup.ts`, `components/forms.tsx` | onboarding, mail-source, secret, invite and upload calls. Secret inputs are write-only: never prefilled or echoed, and cleared after every submit. Error codes (`auth_error`, IMAP `error_code`) map to the UI's own messages, and server text is never shown |
 
 API text reaches the DOM only through React's own escaping, or through `html``` inside charts.

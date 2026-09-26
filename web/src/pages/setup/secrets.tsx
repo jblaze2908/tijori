@@ -3,8 +3,8 @@ import { CopyField, Field, SecretInput, useAction } from "../../components/forms
 import { useToast } from "../../components/Toast";
 import { InlineState, Loading } from "../../components/ui";
 import { api, dataOf, read } from "../../lib/api";
-import { dayShort, inr, plural, toPaise } from "../../lib/format";
-import { clearStatementPassword, createInvite, setStatementPassword, uploadStatement, type UploadResult } from "../../lib/setup";
+import { dayIST, dayShort, inr, plural, toPaise } from "../../lib/format";
+import { clearStatementPassword, createInvite, revokeInvite, setStatementPassword, setup, uploadStatement, type UploadResult } from "../../lib/setup";
 import { useStore } from "../../lib/useStore";
 import type { Account } from "../../lib/types";
 
@@ -165,24 +165,49 @@ function UploadSummary({ r }: { r: UploadResult }) {
   );
 }
 
-/** Settings → Household. Admins create single-use invite links (7 days); the link is shown once, to copy and send. */
+/** Settings → Household: members, pending invites, and (for the admin) single-use invite links shown once. */
 export function HouseholdPanel() {
   useStore();
   const toast = useToast();
   const me = dataOf(read(api.me()));
+  const hs = read(setup.household());
   const [email, setEmail] = useState("");
   const [link, setLink] = useState<{ email: string; url: string; expires_at: string } | null>(null);
   const act = useAction();
-  if (!me) return <Loading card={false} />;
+  if (!me || hs.status === "loading") return <Loading card={false} />;
+  const h = hs.status === "ready" ? hs.data : null;
   const admin = me.role === "admin";
   return (
     <div className="form">
-      <h4 className="fh">{me.household?.name ?? "Your household"}</h4>
+      <h4 className="fh">{h?.name ?? me.household?.name ?? "Your household"}</h4>
       <p className="sub">
         Each member sees only their own money unless they choose to share. {admin ? "As admin you can invite people, but you can't see their data." : ""}
       </p>
+      {h ? (
+        <table className="tbl">
+          <thead>
+            <tr>
+              <th>Member</th>
+              <th>Email</th>
+              <th className="r">Role</th>
+            </tr>
+          </thead>
+          <tbody>
+            {h.members.map((m) => (
+              <tr key={m.id}>
+                <td>{m.name}</td>
+                <td className="t2">{m.email}</td>
+                <td className="r cap">{m.role}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <InlineState>{hs.status === "error" ? hs.error.message : "The member list isn't available on the server yet."}</InlineState>
+      )}
       {admin ? (
         <>
+          <h4 className="fh">Invite someone</h4>
           <form
             className="row-form"
             onSubmit={async (e) => {
@@ -206,9 +231,39 @@ export function HouseholdPanel() {
             </div>
           )}
           {link && (
-            <Field label={`Invite link for ${link.email}`} hint={`Send it to them yourself. It's shown only now, works once, and expires ${dayShort(link.expires_at.slice(0, 10))}. They must sign in with exactly this email.`}>
+            <Field label={`Invite link for ${link.email}`} hint={`Send it to them yourself. It's shown only now, works once, and expires ${dayShort(dayIST(link.expires_at))}. They must sign in with exactly this email.`}>
               {() => <CopyField value={link.url} label={`Invite link for ${link.email}`} />}
             </Field>
+          )}
+          {h && h.invites.length > 0 && (
+            <div className="list mt">
+              {h.invites.map((i) => (
+                <div className="li" key={i.id}>
+                  <div className="mid">
+                    <b>{i.email}</b>
+                    <small>
+                      <span className="cap">{i.status}</span> · sent {dayShort(dayIST(i.created_at))}
+                      {i.status === "pending" ? ` · expires ${dayShort(dayIST(i.expires_at))}` : ""}
+                    </small>
+                  </div>
+                  {i.status === "pending" && (
+                    <button
+                      type="button"
+                      className="linkish"
+                      disabled={act.busy}
+                      onClick={async () => {
+                        if (!(await act.run(() => revokeInvite(i.id))).ok) return;
+                        // The link shown once belongs to the newest invite for that email; it's dead now.
+                        if (link?.email === i.email) setLink(null);
+                        toast(`Invite for ${i.email} revoked.`);
+                      }}
+                    >
+                      Revoke
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
           )}
         </>
       ) : (

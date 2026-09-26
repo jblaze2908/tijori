@@ -3,10 +3,11 @@ import { CopyField, Field, SecretInput, useAction } from "../../components/forms
 import { useToast } from "../../components/Toast";
 import { InlineState, Loading } from "../../components/ui";
 import { dataOf, read } from "../../lib/api";
-import { dayShort, plural } from "../../lib/format";
+import { dayIST, dayShort, plural, timeIST } from "../../lib/format";
 import {
   addMailSource,
   MAIL_ERROR,
+  preTestMail,
   PROVIDERS,
   removeMailSource,
   rotateMailPassword,
@@ -38,13 +39,15 @@ export function MailConnect({ onConnected }: { onConnected?: (s: MailSource) => 
   const [saved, setSaved] = useState<MailSource | null>(null);
   const [result, setResult] = useState<MailTest | null>(null);
   const act = useAction();
+  const pre = useAction();
   const custom = provider === "custom";
   const ready = !!(password.trim() && (saved || (email.trim() && (!custom || (host.trim() && (port === 993 || (port >= 1024 && port <= 65535)))))));
   const pw = () => password.replace(/\s+/g, "");
 
+  const body = () => ({ provider, host: host.trim(), port, email: email.trim(), app_password: pw(), label: LABEL });
   const connect = async () => {
     const r = await act.run(async () => {
-      const src = saved ?? (await addMailSource({ provider, host: host.trim(), port, email: email.trim(), app_password: pw(), label: LABEL }));
+      const src = saved ?? (await addMailSource(body()));
       if (saved) await rotateMailPassword(saved.id, pw());
       setSaved(src);
       return { src, test: await testMailSource(src.id) };
@@ -127,6 +130,7 @@ export function MailConnect({ onConnected }: { onConnected?: (s: MailSource) => 
       {result && (
         <div className={`result ${result.ok ? "ok" : "bad"}`} role="status">
           {testText(result, LABEL)}
+          {result.ok && !saved && " Nothing is saved yet: Save and connect to keep it."}
         </div>
       )}
       {act.error && (
@@ -134,9 +138,30 @@ export function MailConnect({ onConnected }: { onConnected?: (s: MailSource) => 
           {act.error}
         </div>
       )}
+      {pre.error && (
+        <div className="result bad" role="alert">
+          {pre.error}
+        </div>
+      )}
       <div className="row mt">
+        {!saved && (
+          <button
+            type="button"
+            className="btn ghost"
+            disabled={!ready || pre.busy || act.busy}
+            onClick={async () => {
+              setResult(null);
+              // Stores nothing. Only a passing password stays in the field, so the member can save it next.
+              const r = await pre.run(() => preTestMail(body()));
+              if (r.ok) setResult(r.value);
+              if (!r.ok || !r.value.ok) setPassword("");
+            }}
+          >
+            {pre.busy ? "Testing…" : "Test connection"}
+          </button>
+        )}
         <button type="submit" className="btn" disabled={!ready || act.busy}>
-          {act.busy ? "Connecting…" : saved ? "Replace and test again" : "Connect and test"}
+          {act.busy ? "Connecting…" : saved ? "Replace and test again" : "Save and connect"}
         </button>
       </div>
     </form>
@@ -183,7 +208,7 @@ export function MailSources() {
                 </span>
               </div>
               <div className="sub">
-                {s.last_tested_at ? `Last tested ${dayShort(s.last_tested_at.slice(0, 10))} ${s.last_tested_at.slice(11, 16)} UTC` : "Not tested yet"}
+                {s.last_tested_at ? `Last tested ${dayShort(dayIST(s.last_tested_at))}, ${timeIST(s.last_tested_at)}` : "Not tested yet"}
                 {s.last_error_code && <span className="bad"> · {MAIL_ERROR[s.last_error_code]}</span>}
               </div>
               {tests[s.id] && (

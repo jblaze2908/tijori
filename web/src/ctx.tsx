@@ -52,13 +52,13 @@ export function buildCtx(today: ISODate, picked: MonthKey | null, pick: (m: Mont
   const monthsState = read(api.months());
   const calendar = monthsState.status === "ready" ? (monthsState.data ?? lastTwelveMonths(today)) : null;
   const asOf = calendar?.as_of ?? today;
-  const startDay = settings.monthStartDay;
+  const startDay = calendar?.month_start_day ?? settings.monthStartDay;
   const meta = new Map(calendar?.items.map((m) => [m.month, m]));
   const cycle = (k: MonthKey): MonthCtx => {
     const period = monthPeriod(k, startDay);
     // The server applies month_start_day to its months list, so its through/complete win whenever it has the month.
     const mm = meta.get(k);
-    if (mm) return { key: k, period, through: mm.through, complete: mm.complete };
+    if (mm) return { key: k, period: mm.start && mm.end ? { ...period, start: mm.start, end: mm.end } : period, through: mm.through, complete: mm.complete };
     return { key: k, period, through: period.end < asOf ? period.end : asOf, complete: period.end < asOf };
   };
   const months = (calendar?.items ?? []).map((m) => m.month).filter((k) => monthPeriod(k, startDay).start <= asOf);

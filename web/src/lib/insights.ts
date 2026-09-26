@@ -151,6 +151,20 @@ export function withServerTrends(stats: PeriodStat[], points: TrendPoint[] | nul
   });
 }
 
+/** group_by=total points (docs/api.md) replace the client's income, invested, refunds and spend where periods line up. */
+export function withServerTotals(stats: PeriodStat[], points: TrendPoint[] | null): PeriodStat[] {
+  if (!points?.length) return stats;
+  const at = new Map(points.map((p) => [`${p.start}|${p.key}`, p.amount]));
+  return stats.map((s) => {
+    const get = (k: string) => at.get(`${s.period.start}|${k}`);
+    if (get("total") === undefined) return s;
+    return {
+      ...s,
+      totals: { ...s.totals, expense: get("total") ?? s.totals.expense, income: get("income") ?? s.totals.income, invest: get("invested") ?? s.totals.invest, refunds: get("refunds") ?? s.totals.refunds },
+    };
+  });
+}
+
 /** Mean of the completed periods: the reference line on spend-per-period. */
 export function trailingAverage(values: Paise[], lastInProgress: boolean): Paise | null {
   const done = lastInProgress ? values.slice(0, -1) : values;

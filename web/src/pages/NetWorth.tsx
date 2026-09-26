@@ -6,7 +6,7 @@ import { CardHead, Delta, Dot, Empty, ErrorState, InlineState, Loading } from ".
 import { api, invalidate, read, saveRemark, type ApiError, type ResourceState } from "../lib/api";
 import { DIV_BAD, DIV_GOOD, NW_SHEET_KEYS, slotColor } from "../lib/colors";
 import { html } from "../lib/dom";
-import { compact, dayLong, dayShort, inr, monthShortOf, monthShortYear, signed, toPaise } from "../lib/format";
+import { compact, dayIST, dayLong, dayShort, inr, monthShortOf, monthShortYear, signed, toPaise } from "../lib/format";
 import { allocation, allocationSlots, idleCash } from "../lib/insights";
 import { useStore } from "../lib/useStore";
 import type { Account, Health, Snapshot } from "../lib/types";
@@ -396,7 +396,7 @@ function Sources({ state }: { state: ResourceState<Account[] | null> }) {
             <tr key={a.id}>
               <td>{a.label}</td>
               <td className="t2">
-                {a.last_seen_at ? `Last alert ${dayShort(a.last_seen_at.slice(0, 10))}` : "Not connected yet"}
+                {a.last_seen_at ? `Last alert ${dayShort(dayIST(a.last_seen_at))}` : "Not connected yet"}
                 {a.coverage_pct != null ? ` · ${Math.round(a.coverage_pct)}% seen live` : ""}
               </td>
               <td className="t2">{a.last_statement ? `Statement ${dayShort(a.last_statement.period_start)} – ${dayShort(a.last_statement.period_end)}` : "No statement yet"}</td>

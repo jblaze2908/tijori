@@ -1,7 +1,7 @@
 import { BrandMark } from "../components/Icons";
 import { Loading } from "../components/ui";
 import { read } from "../lib/api";
-import { dayShort } from "../lib/format";
+import { dayIST, dayShort } from "../lib/format";
 import { setup } from "../lib/setup";
 import { useStore } from "../lib/useStore";
 
@@ -31,7 +31,7 @@ export function Invite({ token }: { token: string }) {
             <h1 className="solo-h">Join {household ?? "a household"} on Tijori</h1>
             <p className="sub">
               This invite is for <b className="t1">{info.email}</b>; sign in with that Google account. Your money stays yours: other members only see
-              what you choose to share. It expires {dayShort(info.expires_at.slice(0, 10))}.
+              what you choose to share. It expires {dayShort(dayIST(info.expires_at))}.
             </p>
             {/* A full page load on purpose: /auth/login is a server redirect to Google. */}
             <a className="btn btn-lg" href={`/auth/login?${q}`}>

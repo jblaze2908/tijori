@@ -3,7 +3,7 @@ import { CardHead } from "../components/ui";
 import { Link, navigate } from "../lib/router";
 import { signOut } from "../lib/setup";
 import { MailSources } from "./setup/mail";
-import { AccountsSettings, MonthStartForm } from "./setup/profile";
+import { AccountsSettings, ProfileForm } from "./setup/profile";
 import { FirstUpload, HouseholdPanel, StatementPasswords } from "./setup/secrets";
 
 export const SECTIONS = [
@@ -30,11 +30,11 @@ export function Settings({ section }: { section: Section }) {
       <div className="card settings-card">
         {section === "general" && (
           <>
-            <CardHead title="Month" />
-            <MonthStartForm />
+            <CardHead title="Profile" />
+            <ProfileForm submitLabel="Save" />
             <CardHead title="Setup" />
             <p className="sub">
-              Walk through the guided setup again: profile, mail, the label, statement passwords and a first statement.{" "}
+              Walk through the guided setup again: profile, accounts, mail, the label, statement passwords and a first statement.{" "}
               <Link href="/onboarding/profile" className="acc">
                 Open setup
               </Link>

@@ -19,6 +19,7 @@ import {
   trailingAverage,
   UNCATEGORIZED,
   weekdayAverages,
+  withServerTotals,
   withServerTrends,
   within,
   type DeltaRow,
@@ -94,20 +95,21 @@ function TrendsData({ app, m, g, n }: { app: AppCtx; m: MonthCtx; g: Granularity
   const st = txnsFor(app, from, to);
   // GET /api/trends buckets by the same month-start day (docs/api.md), so its points line up with ours.
   const server = dataOf(read(api.trends(g, n + 1, m.through)));
+  const totals = dataOf(read(api.trendTotals(g, n + 1, m.through)));
   if (st.status === "loading") return <Loading />;
   if (st.status === "error") return <ErrorState error={st.error} title="Couldn't load transactions" onRetry={() => invalidate(["/api/transactions", "/api/trends"])} />;
-  return <Body app={app} g={g} m={m} periods={periods} txns={st.data} server={server} back={back} />;
+  return <Body app={app} g={g} m={m} periods={periods} txns={st.data} server={server} totals={totals} back={back} />;
 }
 
-function Body(props: { app: AppCtx; g: Granularity; m: MonthCtx; periods: Period[]; txns: Transaction[]; server: TrendPoint[] | null; back: MonthCtx[] }) {
-  const { g, m, periods, txns, server, back } = props;
+function Body(props: { app: AppCtx; g: Granularity; m: MonthCtx; periods: Period[]; txns: Transaction[]; server: TrendPoint[] | null; totals: TrendPoint[] | null; back: MonthCtx[] }) {
+  const { g, m, periods, txns, server, totals, back } = props;
   const [moversOf, setMoversOf] = useState<"category" | "merchant">("category");
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "current", dir: -1 });
   const recurring = dataOf(read(api.recurring()));
   const unit = UNIT[g];
 
   const d = useMemo(() => {
-    const all = withServerTrends(periodStats(txns, periods), server);
+    const all = withServerTotals(withServerTrends(periodStats(txns, periods), server), totals);
     const shown = all.slice(1);
     const cur = all.at(-1)!;
     const prev = all.at(-2)!;
@@ -145,17 +147,19 @@ function Body(props: { app: AppCtx; g: Granularity; m: MonthCtx; periods: Period
       weekday: weekdayChart(txns, m),
     };
     // The month context is rebuilt every render; its value fields are the real deps (back derives from them).
-  }, [txns, periods, server, m.key, m.through, m.period.start]);
+  }, [txns, periods, server, totals, m.key, m.through, m.period.start]);
 
-  // Spend shown is the server's (GET /api/trends) wherever it has the period; an in-progress period is compared with
-  // the same days of the previous one, a finished one with the previous period's server figure.
-  const spentNow = d.cur.totals.expense;
-  const spentPrev = d.inProgress ? d.prevS.totals.expense : d.prev.totals.expense;
+  // Figures shown are the server's (GET /api/trends) wherever it has the period; an in-progress period is compared with
+  // the same days of the previous one, a finished one with the previous period's server figures.
+  const now = d.cur.totals;
+  const before = d.inProgress ? d.prevS.totals : d.prev.totals;
+  const spentNow = now.expense;
+  const spentPrev = before.expense;
   const cd = committedSplit(within(txns, d.curWin.start, d.curWin.end), recurring);
   const cdPrev = committedSplit(within(txns, d.prevWin.start, d.prevWin.end), recurring);
   const vs = `${d.prev.period.label}${d.inProgress ? ", same days" : ""}`;
-  const rate = savingsRate(d.curS.totals);
-  const prevRate = savingsRate(d.prevS.totals);
+  const rate = savingsRate(now);
+  const prevRate = savingsRate(before);
   const charts = useMemo(
     () => ({ spend: spendChart(d.shown, d.all, d.named, d.avg), flows: flowsChart(d.shown), rate: rateChart(d.shown) }),
     [d],
@@ -192,11 +196,11 @@ function Body(props: { app: AppCtx; g: Granularity; m: MonthCtx; periods: Period
         <Stat label={`Average per ${unit}`} value={d.avg == null ? "—" : compact(d.avg)} sub="completed periods shown">
           {d.avg != null && <Delta cur={spentNow} prev={d.avg} vs="average" upIsGood={false} compact />}
         </Stat>
-        <Stat label="Income" value={compact(d.curS.totals.income)} sub={`this ${unit}`}>
-          <Delta cur={d.curS.totals.income} prev={d.prevS.totals.income} vs={vs} upIsGood compact />
+        <Stat label="Income" value={compact(now.income)} sub={`this ${unit}`}>
+          <Delta cur={now.income} prev={before.income} vs={vs} upIsGood compact />
         </Stat>
-        <Stat label="Invested" value={compact(d.curS.totals.invest)} sub={`this ${unit}`}>
-          <Delta cur={d.curS.totals.invest} prev={d.prevS.totals.invest} vs={vs} upIsGood compact />
+        <Stat label="Invested" value={compact(now.invest)} sub={`this ${unit}`}>
+          <Delta cur={now.invest} prev={before.invest} vs={vs} upIsGood compact />
         </Stat>
         <Stat label="Savings rate" value={rate == null ? "—" : `${Math.round(rate * 100)}%`} sub="(income − spend) ÷ income">
           {rate != null && prevRate != null && <Delta cur={rate} prev={prevRate} vs={vs} upIsGood points compact />}

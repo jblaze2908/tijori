@@ -62,10 +62,16 @@ export function addMonths(m: MonthKey, n: number): MonthKey {
 export const daysInMonth = (m: MonthKey) => new Date(Date.UTC(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0)).getUTCDate();
 export const monthEnd = (m: MonthKey): ISODate => `${m}-${String(daysInMonth(m)).padStart(2, "0")}`;
 
+const IST_DAY = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" });
+const IST_TIME = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 /** Today in IST, where Tijori's money moves, whatever zone the browser is in. */
-export function todayIST(): ISODate {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+export const todayIST = (): ISODate => IST_DAY.format(new Date());
+/** The IST day of a server timestamp; slicing the UTC string would show the day before until 05:30 IST. */
+export function dayIST(ts: string): ISODate {
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime()) ? ts.slice(0, 10) : IST_DAY.format(d);
 }
+export const timeIST = (ts: string) => IST_TIME.format(new Date(ts));
 
 // Formatters are cached: Activity formats a date per row, and toLocaleString builds a new one per call.
 const fmt = (o: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("en-IN", { timeZone: "UTC", ...o });
