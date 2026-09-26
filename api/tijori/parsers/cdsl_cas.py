@@ -19,7 +19,30 @@ _DEMAT = re.compile(rf"^\s*(?P<isin>IN[EF][0-9A-Z]{{9}})\b(?P<name>.*?)\s(?P<bal
                     rf"(?P<price>{_N})\s+(?P<value>[\d,]+\.\d\d)\s*$", re.M)
 _FOLIO = re.compile(rf"^(?P<name>.*?)\s*(?P<isin>INF[0-9A-Z]{{9}})\s+(?P<folio>\S+)\s+(?P<units>{_N})\s+(?P<nav>{_N})\s+"
                     rf"(?P<cost>[\d,]+\.\d\d)\s+(?P<value>[\d,]+\.\d\d)", re.M)
+_NUMERIC = re.compile(r"IN[EF][0-9A-Z]{9}|\d+\.\d{3}|\bISIN\b|Security")
 _AS_OF = re.compile(r"Total Portfolio Value.*?as on (\d\d-\d\d-\d{4})")
+
+
+_CONT = re.compile(r"^(SUBDIVISION|SHARES|EQUITY SHARES|EACH|OF RS|OF RE)", re.I)  # the previous row's tail
+
+
+def _clean(line: str) -> str:
+    return re.split(r"\s*#|\s+-\s+", line.strip())[0].strip()
+
+
+def _name_above(rows: list[str], i: int) -> str:
+    """The name printed above a demat row; a long one wraps onto two lines ("TATA MOTORS PASSENGER" /
+    "VEHICLES LIMITED"), so a bare suffix line pulls in the one before it, unless that is the previous
+    row's tail."""
+    above = rows[i - 1].strip() if i else ""
+    if not above or _NUMERIC.search(above):
+        return ""
+    name = _clean(above)
+    if len(name.split()) <= 2 and i >= 2:
+        prev = rows[i - 2].strip()
+        if prev and not _NUMERIC.search(prev) and not _CONT.match(prev):
+            name = f"{_clean(prev)} {name}".strip()
+    return name
 
 
 def _d(s: str) -> Decimal:
@@ -48,8 +71,14 @@ class CdslCasParser:
         as_of = datetime.strptime(m[1], "%d-%m-%Y").date()
         lines: list[HoldingLine] = []
         stocks = mf = Decimal(0)
-        for r in _DEMAT.finditer(t):
-            name = re.sub(r"\s+", " ", r["name"]).strip(" #") or r["isin"]
+        rows = t.splitlines()
+        for i, line in enumerate(rows):
+            r = _DEMAT.match(line)
+            if not r:
+                continue
+            # The security's name sits on the line above its row ("AXIS BANK LIMITED # NEW"), cut at "#" or " - ".
+            company = _name_above(rows, i)
+            name = company or re.sub(r"\s+", " ", r["name"]).strip(" #") or r["isin"]
             lines.append(HoldingLine(r["isin"], name[:160], _d(r["free"]), _d(r["price"]), as_of))
             if r["isin"].startswith("INE"):
                 stocks += _d(r["value"])

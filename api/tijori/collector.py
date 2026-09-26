@@ -154,6 +154,11 @@ def _route(s: Session, ctx: MemberContext, settings: Settings, rm: RawMessage, m
     return status
 
 
+# PDFs in the label that carry no transactions of their own (holdings come from the monthly CAS).
+NOT_TRANSACTIONS = re.compile(r"Contract Note|Statement of Accounts? (?:for|of) (?:Securities|Funds)|Portfolio Disclosure|Ledger|Purchase Confirmation|"
+                              r"Processing of (Additional )?Purchase|Year End Statement|Fixed Deposit Advice|Amazon ?Pay|"
+                              r"Transaction Confirmation|Transaction request is processed|Holding Statement|"
+                              r"Quarterly settlement|Refund initiated|Add Money", re.I)
 RETRY_S = 3600
 RETRY = ("failed", "parser_needed", "needs_password")
 _last_retry: dict[int, float] = {}
@@ -210,7 +215,7 @@ def _statement(s: Session, ctx: MemberContext, settings: Settings, sender: str, 
         return _holdings(s, ctx, CAMS.parse_holdings(Message(text=text_)))
     parser = route(Message(text=text_, sender=sender, filename=att.filename))
     if parser is None:
-        return "parser_needed"
+        return "ignored" if NOT_TRANSACTIONS.search(f"{rm.subject or ''} {att.filename or ''}") else "parser_needed"
     try:
         stmts = parser.parse_statements(Message(text=text_)) if hasattr(parser, "parse_statements") \
             else [parser.parse_statement(Message(text=text_))]  # type: ignore[attr-defined]
@@ -248,10 +253,12 @@ def _components(s: Session, ctx: MemberContext, values: tuple[tuple[str, Any], .
 def _holdings(s: Session, ctx: MemberContext, lines: list[Any], source: str = "cams") -> str:
     """Units per scheme as of the statement's NAV date, and that NAV as a price point. Idempotent."""
     for h in lines:
-        seen = s.scalar(select(Holding.id).where(Holding.member_id == ctx.member_id, Holding.isin == h.isin,
-                                                 Holding.as_of == h.as_of, Holding.name == h.name))
+        q = select(Holding).where(Holding.member_id == ctx.member_id, Holding.as_of == h.as_of, Holding.source == source)
+        seen = s.scalars(q.where(Holding.isin == h.isin) if h.isin else q.where(Holding.name == h.name)).first()
         if seen is None:
             s.add(Holding(member_id=ctx.member_id, isin=h.isin, name=h.name, units=h.units, as_of=h.as_of, source=source))
+        else:  # a re-read statement (a fixed parser) corrects the row in place
+            seen.units, seen.name = h.units, h.name
         if h.isin:
             s.execute(pg_insert(Price).values(isin_or_symbol=h.isin, date=h.as_of, close=h.nav, source=source[:16])
                       .on_conflict_do_nothing())
