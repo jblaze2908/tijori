@@ -175,7 +175,7 @@ def live(s: Session, member_id: int, today: date) -> dict[str, Any]:
         offer(k, amount, as_of, "statement")
     for cv in s.scalars(select(ComponentValue).where(ComponentValue.member_id == member_id)
                         .order_by(ComponentValue.as_of, ComponentValue.id)).all():
-        offer(cv.key, cv.amount, cv.as_of, "manual")
+        offer(cv.key, cv.amount, cv.as_of, "statement" if cv.source == "statement" else "manual")
     if not picked:
         return {"as_of": today, "net_worth": None, "liquid": None, "components": [], "by_asset_class": {},
                 "changes": [], "history": [], "months": [], "projection": None}

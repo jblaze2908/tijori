@@ -3,7 +3,7 @@ synchronously for uploads inside the caller's member-scoped session."""
 
 import hashlib
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import case, func, insert, select, update
@@ -18,6 +18,7 @@ from tijori.db import MemberContext
 from tijori.models import (
     Account,
     Category,
+    ComponentValue,
     Member,
     Observation,
     RawAttachment,
@@ -54,9 +55,11 @@ def line_keys(account_id: int, lines: tuple[Line, ...] | list[Line]) -> list[str
     return keys
 
 
-def ensure_account(s: Session, member_id: int, institution: str, mask: str | None, kind: str = "bank") -> Account:
+def ensure_account(s: Session, member_id: int, institution: str, mask: str | None, kind: str = "bank",
+                   name: str | None = None) -> Account:
     """Match on (institution, kind, mask); adopt a mask-less account of the same bank and kind (e.g. from
-    the legacy import or setup) before creating a new one."""
+    the legacy import or setup) before creating a new one. A statement's product name ("HDFC Platinum")
+    replaces the generic name an alert gave the account."""
     q = select(Account).where(Account.member_id == member_id, Account.institution == institution,
                               Account.kind == kind)
     acct = s.scalars(q.where(Account.mask.is_not_distinct_from(mask)).order_by(Account.id).limit(1)).first()
@@ -64,10 +67,12 @@ def ensure_account(s: Session, member_id: int, institution: str, mask: str | Non
         acct = s.scalars(q.where(Account.mask.is_(None)).order_by(Account.id).limit(1)).first()
         if acct is not None:
             acct.mask = mask
+    generic = f"{institution} {'card' if kind == 'card' else 'savings'}"
     if acct is None:
-        acct = Account(member_id=member_id, kind=kind, institution=institution,
-                       name=f"{institution} {'card' if kind == 'card' else 'savings'}", mask=mask)
+        acct = Account(member_id=member_id, kind=kind, institution=institution, name=name or generic, mask=mask)
         s.add(acct)
+    elif name and acct.name in (None, generic) and name != acct.name:
+        acct.name = name
     s.flush()
     return acct
 
@@ -142,13 +147,50 @@ def reconciliation_out(st: ParsedStatement) -> dict[str, Any]:
     }
 
 
+ALERT_DAYS = 3  # an alert carries the transaction date; the statement may post it up to this much later
+
+
+def _soft_matches(s: Session, member_id: int, account_id: int, lines: tuple[Line, ...], keys: list[str],
+                  existing: dict[str, int]) -> tuple[dict[int, int], set[int]]:
+    """Statement lines with a new key whose txn already exists. The same line from another statement format
+    (a netbanking download vs the emailed PDF) matches on date, amount and direction. A txn first seen in an
+    alert matches within ±3 days, closest date first. One query over the account's txns in the window."""
+    todo = [i for i, k in enumerate(keys) if k not in existing]
+    if not todo:
+        return {}, set()
+    lo = min(lines[i].occurred_at for i in todo) - timedelta(days=ALERT_DAYS)
+    hi = max(lines[i].occurred_at for i in todo) + timedelta(days=ALERT_DAYS)
+    taken = set(existing.values())
+    pool = [r for r in s.execute(
+        select(Txn.id, Txn.occurred_at, Txn.amount, Txn.direction, Txn.sources)
+        .where(Txn.member_id == member_id, Txn.account_id == account_id, Txn.occurred_at.between(lo, hi))
+        .order_by(Txn.occurred_at, Txn.id)).all() if r.id not in taken]
+    out: dict[int, int] = {}
+    alert_only: set[int] = set()
+    for i in todo:
+        o = lines[i]
+        same = next((r for r in pool if r.occurred_at == o.occurred_at and r.amount == o.amount
+                     and r.direction == o.direction), None)
+        if same is None:
+            near = [r for r in pool if set(r.sources or []) == {"alert"} and r.amount == o.amount
+                    and r.direction == o.direction and abs((r.occurred_at - o.occurred_at).days) <= ALERT_DAYS]
+            same = min(near, key=lambda r: abs((r.occurred_at - o.occurred_at).days), default=None)
+            if same is not None:
+                alert_only.add(same.id)
+        if same is not None:
+            out[i] = same.id
+            pool.remove(same)
+    return out, alert_only
+
+
 def ingest_statement(s: Session, ctx: MemberContext, actor: str, st: ParsedStatement, *, filename: str | None,
-                     sha256: str, blob_ref: str) -> dict[str, Any]:
+                     sha256: str, blob_ref: str, raw: tuple[RawMessage, RawAttachment] | None = None) -> dict[str, Any]:
+    """`raw` is the collector's email and attachment; an upload records its own."""
     if not st.lines:
         raise ValueError("statement has no lines")
     rec = reconcile(st)
-    msg, att = record_raw(s, ctx, filename=filename, sha256=sha256, blob_ref=blob_ref, parse_status="parsed")
-    account = ensure_account(s, ctx.member_id, st.institution, st.account_mask, st.account_kind)
+    msg, att = raw or record_raw(s, ctx, filename=filename, sha256=sha256, blob_ref=blob_ref, parse_status="parsed")
+    account = ensure_account(s, ctx.member_id, st.institution, st.account_mask, st.account_kind, st.account_name)
     values = dict(member_id=ctx.member_id, account_id=account.id, period_start=st.period_start,
                   period_end=st.period_end, opening=st.summary.opening, closing=st.summary.closing,
                   raw_attachment_id=att.id, parser=st.parser, parser_version=st.parser_version,
@@ -175,6 +217,14 @@ def ingest_statement(s: Session, ctx: MemberContext, actor: str, st: ParsedState
     keys = line_keys(account.id, st.lines)
     existing = dict(s.execute(select(Txn.dedupe_key, Txn.id)
                               .where(Txn.member_id == ctx.member_id, Txn.dedupe_key.in_(keys))).all())
+    soft, alert_only = _soft_matches(s, ctx.member_id, account.id, st.lines, keys, existing)
+    for i, txn_id in soft.items():
+        existing[keys[i]] = txn_id
+        if txn_id in alert_only:  # the statement is the record: its date, narration and key replace the alert's
+            o = st.lines[i]
+            s.execute(update(Txn).where(Txn.member_id == ctx.member_id, Txn.id == txn_id).values(
+                occurred_at=o.occurred_at, posted_at=o.value_date, narration=o.narration, ref_no=o.ref_no,
+                dedupe_key=keys[i]))
     decisions = load_classifier(s, ctx).classify_batch(
         [TxnInput(o.occurred_at, o.amount, o.direction, o.narration, account.id, o.ref_no)  # type: ignore[arg-type]
          for o in st.lines])
@@ -213,10 +263,15 @@ def ingest_statement(s: Session, ctx: MemberContext, actor: str, st: ParsedState
     if hits:
         s.execute(pg_insert(RuleHit).on_conflict_do_nothing(), hits)
     created = [decisions[i] for i in txn_ids]
+    for key, amount in st.components:  # newest value wins in networth.live; an older statement never overrides
+        cv = pg_insert(ComponentValue).values(member_id=ctx.member_id, key=key, amount=amount, as_of=st.period_end,
+                                              source="statement")
+        s.execute(cv.on_conflict_do_update(constraint="uq_component_value_member_id_key_as_of",
+                                           set_={"amount": cv.excluded.amount}))
     linked = cards.link_card_payments(s, ctx.member_id)
     audit(s, ctx, actor, "statement.upload", f"statement:{statement_id}",
           {"parser": st.parser, "lines": len(st.lines), "created": len(created), "ok": rec.ok,
-           "card_payments_linked": linked})
+           "soft_matched": len(soft), "card_payments_linked": linked})
     return {
         "statement_id": statement_id, "raw_message_id": msg.id, "duplicate": False,
         "parser": st.parser, "parser_version": st.parser_version, "institution": st.institution,
@@ -227,3 +282,48 @@ def ingest_statement(s: Session, ctx: MemberContext, actor: str, st: ParsedState
         "txns": {"lines": len(st.lines), "created": len(created), "matched_existing": len(matched),
                  "filed": sum(1 for d in created if d.filed), "inbox": sum(1 for d in created if not d.filed)},
     }
+
+
+def ingest_alert(s: Session, ctx: MemberContext, clf: Classifier, obs: Line, msg: RawMessage, parser: str,
+                 version: str) -> int:
+    """One alert sighting → the txn it reports. An existing txn on the account with the same amount and
+    direction within ±3 days (a statement line, or the same alert re-sent) takes the sighting; otherwise a
+    `pending` txn is created until its statement arrives. Returns the txn id. Two queries plus writes."""
+    p = obs.payload
+    account = ensure_account(s, ctx.member_id, p["institution"], p["mask"], p["account_kind"])
+    obs_id = s.scalar(insert(Observation).returning(Observation.id).values(
+        member_id=ctx.member_id, raw_message_id=msg.id, parser=parser, parser_version=version, account_id=account.id,
+        occurred_at=obs.occurred_at, amount=obs.amount, direction=obs.direction, merchant_raw=obs.narration,
+        counterparty=parse_narration(obs.narration).payee, ref_no=obs.ref_no, confidence=obs.confidence,
+        payload_json={"narration": obs.narration, **{k: v for k, v in p.items() if v is not None}}))
+    near = s.execute(
+        select(Txn.id, Txn.occurred_at, Txn.sources)
+        .where(Txn.member_id == ctx.member_id, Txn.account_id == account.id, Txn.amount == obs.amount,
+               Txn.direction == obs.direction,
+               Txn.occurred_at.between(obs.occurred_at - timedelta(days=ALERT_DAYS),
+                                       obs.occurred_at + timedelta(days=ALERT_DAYS)),
+               # a txn already backed by another alert is a different payment of the same amount
+               ~Txn.id.in_(select(TxnObservation.txn_id).join(Observation, Observation.id == TxnObservation.observation_id)
+                           .where(Observation.member_id == ctx.member_id, Observation.raw_message_id.is_not(None),
+                                  Observation.parser == parser, Observation.raw_message_id != msg.id)))
+    ).all()
+    hit = min(near, key=lambda r: (abs((r.occurred_at - obs.occurred_at).days), r.id), default=None)
+    if hit is not None:
+        txn_id = hit.id
+        s.execute(update(Txn).where(Txn.id == txn_id).values(
+            sources=case((Txn.sources.contains(["alert"]), Txn.sources), else_=func.array_append(Txn.sources, "alert"))))
+    else:
+        d = clf.classify_batch([TxnInput(obs.occurred_at, obs.amount, obs.direction, obs.narration, account.id,
+                                         obs.ref_no)])[0]  # type: ignore[arg-type]
+        cat_ids = category_ids(s, ctx.household_id)
+        txn_id = s.scalar(insert(Txn).returning(Txn.id).values(
+            member_id=ctx.member_id, account_id=account.id, occurred_at=obs.occurred_at, amount=obs.amount,
+            direction=obs.direction, kind=d.kind, merchant_norm=d.merchant[:120],
+            counterparty=parse_narration(obs.narration).payee, ref_no=obs.ref_no, narration=obs.narration,
+            vpa=d.vpa, payee_key=d.payee_key[:80], category_id=cat_ids.get(d.category) if d.category else None,
+            bucket=d.bucket, classified_by=d.classified_by, rule_id=d.rule_id, review_reason=d.inbox_reason,
+            status="pending", sources=["alert"],
+            dedupe_key=hashlib.sha256(f"alert|{msg.sha256}|{obs.occurred_at}|{obs.amount}".encode()).hexdigest()))
+    s.execute(pg_insert(TxnObservation).on_conflict_do_nothing().values(txn_id=txn_id, observation_id=obs_id,
+                                                                        member_id=ctx.member_id))
+    return txn_id

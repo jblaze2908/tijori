@@ -7,11 +7,13 @@ from datetime import date
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, HTTPException, Path, Query, status
+from fastapi import APIRouter, HTTPException, Path, Query, Request, Response, status
 from sqlalchemy import or_, select
 
 from tijori.app.deps import MemberDep
 from tijori.app.schemas import (
+    LinkCandidates,
+    RawSources,
     Accounts,
     Alerts,
     CardList,
@@ -36,7 +38,7 @@ from tijori.app.schemas import (
 )
 from tijori.classify.taxonomy import KINDS
 from tijori.models import Category
-from tijori.services import cards, members, networth, recurring, reports, sources, txns
+from tijori.services import cards, members, networth, raw, recurring, reports, sources, txn_edit, txns
 from tijori.services.common import month_start_day, today_ist
 
 router = APIRouter(prefix="/api")
@@ -103,6 +105,26 @@ def transactions(
                        min_amount=min_amount, max_amount=max_amount, month_start_day=msd, sort=sort,
                        paid_with=paid_with)
     return txns.list_txns(db.session, db.ctx.member_id, f, page, page_size)
+
+
+@router.get("/transactions/{txn_id}/link-candidates", response_model=LinkCandidates)
+def link_candidates(db: MemberDep, txn_id: Annotated[int, Path(ge=1)]) -> dict:
+    return {"items": txn_edit.link_candidates(db.session, db.ctx.member_id, txn_id)}
+
+
+@router.get("/transactions/{txn_id}/sources", response_model=RawSources)
+def txn_sources(request: Request, db: MemberDep, txn_id: Annotated[int, Path(ge=1)]) -> dict:
+    return {"items": raw.sources_of(db.session, db.ctx.member_id, request.app.state.settings.blob_dir, txn_id)}
+
+
+@router.get("/raw/attachments/{attachment_id}")
+def raw_attachment(request: Request, db: MemberDep, attachment_id: Annotated[int, Path(ge=1)]) -> Response:
+    """The original statement file, as a download (never rendered inline)."""
+    name, data = raw.attachment(db.session, db.ctx.member_id, request.app.state.settings.blob_dir, attachment_id)
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", name)[:120] or "statement.pdf"
+    return Response(data, media_type="application/pdf" if data[:5] == b"%PDF-" else "application/octet-stream",
+                    headers={"Content-Disposition": f'attachment; filename="{safe}"', "X-Content-Type-Options": "nosniff",
+                             "Cache-Control": "private, no-store"})
 
 
 @router.get("/transactions/{txn_id}", response_model=TxnDetail)

@@ -6,6 +6,7 @@ per-account coverage). History is a few thousand rows, so this stays cheap; call
 than once per request should pass the result along rather than call again.
 """
 
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -14,6 +15,7 @@ from statistics import median
 from typing import Any
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.orm import Session
 
 from tijori.classify.brands import SUBSCRIPTIONS
@@ -115,6 +117,21 @@ def _amount_rule(amounts: list[Decimal], category: str | None) -> tuple[bool, bo
     return False, False
 
 
+CLUSTER = Decimal("0.02")  # charges within 2% of each other are one of a payee's parallel series
+
+
+def _clusters(txns: list[Any]) -> list[list[Any]]:
+    """A payee's charges grouped by amount (±2%), each in date order; only groups of 2+."""
+    groups: list[list[Any]] = []
+    for c in sorted(txns, key=lambda c: c.amount):
+        g = next((g for g in groups if abs(c.amount - g[0].amount) <= g[0].amount * CLUSTER), None)
+        if g is None:
+            groups.append([c])
+        else:
+            g.append(c)
+    return [sorted(g, key=lambda c: (c.occurred_at, c.id)) for g in groups if len(g) >= 2 and len(g) < len(txns)]
+
+
 def kind_of(key: str, category: str | None, bucket: str | None) -> str:
     if bucket == "invest":
         return "invest"
@@ -167,10 +184,11 @@ def detect(s: Session, member_id: int, today: date | None = None, *, include_dis
         groups[r.k].append(r)
     seen_per, seen_any = _seen_through(s, member_id)
     out: list[Series] = []
-    for k, txns in groups.items():
+
+    def evaluate(k: str, txns: list[Any], label: str | None = None) -> Series | None:
         d = decisions.get(k)
         if d is not None and d.decision == "dismissed" and not include_dismissed:
-            continue
+            return None
         confirmed = d is not None and d.decision == "confirmed"
         # Several charges on one day (a duplicate, a split bill) count once for the cadence.
         by_day: dict[date, Any] = {}
@@ -183,7 +201,7 @@ def detect(s: Session, member_id: int, today: date | None = None, *, include_dis
         ok, variable = _amount_rule(amounts, last.name) if cadence else (False, False)
         detected = bool(cadence and ok and len(days) >= MIN_CHARGES[cadence])
         if not detected and not confirmed:
-            continue
+            return None
         if not detected:
             cadence, variable = d.cadence, False  # type: ignore[union-attr]
         assert cadence is not None
@@ -195,15 +213,28 @@ def detect(s: Session, member_id: int, today: date | None = None, *, include_dis
         state = _state(cadence, due, seen or today, today, d is not None and d.status == "ended")
         if d is not None and d.decision == "dismissed":
             state = "dismissed"
-        out.append(Series(
-            key=k, merchant=last.merchant_norm or k, cadence=cadence,
-            kind=(d.kind if d is not None and d.kind else kind_of(k, last.name, last.bucket)), variable=variable,
-            amount_expected=expected, last_amount=last.amount,
+        return Series(
+            key=k, merchant=label or last.merchant_norm or k, cadence=cadence,
+            kind=(d.kind if d is not None and d.kind else kind_of(k.split("@")[0], last.name, last.bucket)),
+            variable=variable, amount_expected=expected, last_amount=last.amount,
             previous_amount=by_day[days[-2]].amount if len(days) > 1 else last.amount,
             first_at=days[0], last_at=days[-1], next_due=due, seen_through=seen or today, state=state,
             count=len(days), account_id=last.account_id, category=last.name, bucket=last.bucket,
             confirmed=confirmed, manual=confirmed and not detected,
-            charges=tuple(Charge(x, by_day[x].amount, by_day[x].id) for x in days[-12:])))
+            charges=tuple(Charge(x, by_day[x].amount, by_day[x].id) for x in days[-12:]))
+
+    for k, txns in groups.items():
+        whole = evaluate(k, txns)
+        if whole is not None:
+            out.append(whole)
+            continue
+        # Several fixed charges to one payee (four SIPs to one fund house) are separate series.
+        for cl in _clusters(txns):
+            amount = Decimal(median(c.amount for c in cl)).quantize(Decimal("1"))
+            name = cl[-1].merchant_norm or k
+            x = evaluate(f"{k}@{amount}", cl, f"{name} · ₹{amount:,}")
+            if x is not None:
+                out.append(x)
     out.sort(key=lambda x: (x.next_due, x.merchant))
     return out
 
@@ -266,12 +297,48 @@ def list_recurring(s: Session, member_id: int, today: date | None = None) -> dic
     return {
         "items": [series_out(x, labels) for x in series if x.state != "dismissed"],
         "dismissed": [{"id": x.key, "merchant": x.merchant} for x in series if x.state == "dismissed"],
+        "candidates": candidates(s, member_id, {x.key.split("@")[0] for x in series}, labels, today),
         "totals": {"monthly": fmt(spend), "yearly": fmt(spend * 12),
                    "invest_monthly": fmt(sum((monthly_cost(x) for x in live if x.kind == "invest"), Decimal(0))),
                    "active": len(live),
                    "next_30_days": fmt(sum((x.amount_expected for x in soon), Decimal(0))),
                    "next_30_days_count": len(soon)},
     }
+
+
+CANDIDATE_DAYS = 400
+
+
+def candidates(s: Session, member_id: int, listed: set[str], labels: dict[int, str], today: date) -> list[dict[str, Any]]:
+    """Subscription-like payees charged only once or twice in the last 400 days (too few for a cadence):
+    a known subscription brand, or anything filed under Bills & subscriptions. One grouped query."""
+    key = payee_key_expr()
+    decided = set(s.scalars(select(Recurring.payee_key).where(Recurring.member_id == member_id,
+                                                              Recurring.decision == "dismissed")))
+    rows = s.execute(
+        select(key.label("k"), func.max(Txn.merchant_norm).label("merchant"), func.count().label("n"),
+               func.max(Txn.occurred_at).label("last_at"), func.max(Category.name).label("category"),
+               func.array_agg(aggregate_order_by(Txn.amount, Txn.occurred_at.desc())).label("amounts"),
+               func.array_agg(aggregate_order_by(Txn.account_id, Txn.occurred_at.desc())).label("accounts"))
+        .outerjoin(Category, Category.id == Txn.category_id)
+        .where(Txn.member_id == member_id, Txn.direction == "debit", key.is_not(None),
+               Txn.occurred_at >= today - timedelta(days=CANDIDATE_DAYS),
+               Txn.bucket.is_distinct_from("excluded"), Txn.bucket.is_distinct_from("card"))
+        .group_by(key).having(func.count() <= 2)
+    ).all()
+    out = []
+    for r in rows:
+        if r.k in listed or r.k in decided:
+            continue
+        brand = r.k.startswith("brand:") and r.k[6:] in SUBSCRIPTIONS
+        if not (brand or r.category == "Bills & subscriptions"):
+            continue
+        out.append({"id": r.k, "merchant": r.merchant or r.k, "count": r.n, "last_at": r.last_at,
+                    "amount": fmt(r.amounts[0]), "category": r.category,
+                    "account": labels.get(r.accounts[0]) if r.accounts[0] else None,
+                    "kind": "subscription" if brand else "bill"})
+    out.sort(key=lambda x: x["last_at"], reverse=True)
+    return out
 
 
 def decide(s: Session, ctx: MemberContext, actor: str, key: str, decision: str, cadence: str | None,
@@ -283,9 +350,14 @@ def decide(s: Session, ctx: MemberContext, actor: str, key: str, decision: str, 
             s.execute(delete(Recurring).where(Recurring.id == row.id))
         audit(s, ctx, actor, "recurring.reset", f"payee:{key}", {})
         return {"id": key, "decision": None}
-    last = s.execute(select(Txn.merchant_norm, Txn.amount)
-                     .where(Txn.member_id == ctx.member_id, Txn.direction == "debit", payee_key_expr() == key)
-                     .order_by(Txn.occurred_at.desc(), Txn.id.desc()).limit(1)).first()
+    base, _, amount_part = key.partition("@")  # "payee@amount" names one of a payee's parallel series
+    if amount_part and not re.fullmatch(r"\d{1,12}", amount_part):
+        raise NotFound("no payments to this payee")
+    q = select(Txn.merchant_norm, Txn.amount).where(Txn.member_id == ctx.member_id, Txn.direction == "debit",
+                                                     payee_key_expr() == base)
+    if amount_part:
+        q = q.where(Txn.amount.between(Decimal(amount_part) * (1 - CLUSTER), Decimal(amount_part) * (1 + CLUSTER)))
+    last = s.execute(q.order_by(Txn.occurred_at.desc(), Txn.id.desc()).limit(1)).first()
     if last is None:
         raise NotFound("no payments to this payee")
     if row is None:
@@ -358,7 +430,7 @@ def alerts(s: Session, member_id: int, month: str, month_start_day: int = 1) -> 
 
 def committed_keys(series: list[Series]) -> set[str]:
     """Payee keys whose spend counts as committed (a live recurring series)."""
-    return {x.key for x in series if x.active}
+    return {x.key.split("@")[0] for x in series if x.active}
 
 
 def payee_key_expr() -> Any:

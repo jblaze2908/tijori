@@ -49,6 +49,8 @@ export interface MailSource {
   last_tested_at: string | null;
   last_error_code: MailError | null;
   last_message_count?: number | null;
+  last_poll_at?: string | null;
+  last_poll_error?: string | null;
   created_at: string;
 }
 export type MailError =

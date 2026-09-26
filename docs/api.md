@@ -588,7 +588,8 @@ Funds and stocks. Each holding shows its latest units times the newest price. Th
 
 The Settings view of source health.
 
-- `unparsed`: raw messages no parser could read, grouped by sender and subject. An upload's subject is its filename.
+- `collected`: collector messages by `parse_status` (`parsed`, `ignored`, `needs_password`, `parser_needed`, `failed`).
+- `unparsed`: raw messages no parser could read, grouped by sender and status (`subject` is the newest one). `needs_password` means no stored password opened the PDF.
 - `uploads`: the last 5 statement uploads.
 
 ```json
@@ -781,4 +782,47 @@ Browser flow: OIDC authorization code with PKCE (S256), `state` and `nonce`, sco
   - Only its SHA-256 is stored.
   - Each sign-in issues a new id and ends this browser's previous session.
 
-Not built yet: split, manual links between txns, and MCP.
+## Mail collector
+
+The `worker` service (`python -m tijori.collector`) polls each connected mailbox every 2 minutes. It uses read-only IMAP (EXAMINE, BODY.PEEK) and a UID watermark per mailbox (`mail_source.last_uid`, reset when UIDVALIDITY changes). `GET /api/mail-sources` adds `last_poll_at` and `last_poll_error`.
+
+- Every message is stored raw first (`raw_message`, blobs), then routed:
+  - Alert emails go to `parsers/alerts.py`: HDFC UPI, account and card alerts, SBI CBS alerts, ICICI card alerts and payments. Only INR amounts are taken.
+  - Statement PDFs go to the statement parsers: HDFC card, ICICI card, HDFC combined email statement, SBI e-statement, plus the two netbanking formats.
+  - CAMS account statements set holdings (units as of the NAV date).
+- **Matching.** An alert becomes a `pending` txn, unless a txn on the same account with the same amount and direction exists within ±3 days, in which case it's attached as a sighting. A statement line matches first on its key. Otherwise it matches the same line from another statement format (same date, amount and direction), or an alert-only txn within ±3 days, which takes the statement's date, narration and key.
+- **Passwords.** Statement PDFs open with vault entries named `statement_password:scheme:<hdfc|icici_card|sbi|pan>` (the scheme each bank states in its mail), or any `statement_password:account:<id>`.
+- **Net worth.** SBI e-statements print the PPF balance and HDFC statements the FD total. Both are stored as `component_value` with `source: "statement"`.
+- **Prices.** Once a day the worker fetches AMFI's NAVAll.txt and stores NAVs for the ISINs you hold.
+
+## `POST /api/transactions/{id}/split` and `POST /api/transactions/{id}/unsplit`
+
+`{"parts": [{"amount": "2000.00", "category_id": 4, "note"?: "…"}, …]}`, with 2–10 parts.
+
+- The parts must add up to the txn to the paisa.
+- The original stays, with `bucket` `excluded` and `split_parts: n`. Each part is a txn of its own, with `split_of`.
+- Splitting again replaces the earlier parts. `unsplit` removes the parts and puts the original back on its category's bucket.
+- `GET /api/transactions/{id}` adds `split_parts` (amount, category, note).
+
+## Links: `POST /api/transactions/{id}/links`, `…/links/remove`, `GET …/link-candidates`
+
+`{"txn_id": 123, "kind": "transfer" | "refund" | "dup" | "pass_through"}`.
+
+- `transfer` and `pass_through` take both legs out of spend and income.
+- `dup` takes the linked (second) txn out.
+- `refund` only records the link.
+- `card_payment` links are made automatically (see [`/api/cards`](#get-apicards)). They can be removed, which puts the bill payment back to standing in for card spend, but not added by hand.
+- `link-candidates` lists up to 8 txns within 10 days: the same amount the other way (`suggest: "transfer"`), or the same way on the same day (`suggest: "dup"`).
+
+## `GET /api/transactions/{id}/sources` and `GET /api/raw/attachments/{id}`
+
+The emails and files a txn was read from.
+
+- `sources` returns `[{raw_message_id, kind: "email"|"file", sender, subject, received_at, text, files: [{id, filename}]}]`. `text` is the email's plain text (HTML is stripped and never rendered), up to 20,000 characters.
+- `raw/attachments/{id}` downloads the original file (`Content-Disposition: attachment`, `nosniff`, `no-store`).
+
+## `GET /api/recurring`: candidates
+
+`candidates` lists subscription-like payees (a known subscription brand, or Bills & subscriptions) charged only once or twice in the last 400 days. `PUT /api/recurring/{id}` with `confirmed` tracks one. A payee with several fixed charges (four SIPs to one fund house) gets one series per amount, with the id `payee@amount`.
+
+Not built yet: MCP.

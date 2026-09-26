@@ -52,8 +52,13 @@ export function Sources() {
               <Fact k="Host" v={`${m.host}:${m.port}`} />
               <Fact k="Last tested" v={ago(m.last_tested_at)} />
               <Fact k="Messages in label" v={m.last_message_count != null ? m.last_message_count.toLocaleString("en-IN") : "—"} />
+              <Fact k="Last collected" v={m.last_poll_at ? `${ago(m.last_poll_at)}${m.last_poll_error ? ` · ${m.last_poll_error.replace(/_/g, " ")}` : ""}` : "not yet"} />
+              <Fact k="Read so far" v={queue?.collected ? Object.values(queue.collected).reduce((a, n) => a + n, 0).toLocaleString("en-IN") : "—"} />
             </div>
-            <span className="foot">App Password stored encrypted, never shown again. It grants full mailbox access; Tijori opens only the {m.label} label, read-only. The live collector lands in M1.</span>
+            <span className="foot">
+              App Password stored encrypted, never shown again. It grants full mailbox access; Tijori opens only the {m.label} label, read-only, every 2 minutes.
+              {queue?.collected ? ` ${queue.collected.parsed ?? 0} read · ${queue.collected.ignored ?? 0} not transactions · ${queue.collected.needs_password ?? 0} need a password · ${(queue.collected.parser_needed ?? 0) + (queue.collected.failed ?? 0)} unread.` : ""}
+            </span>
           </section>
         ))
       ) : (
@@ -133,7 +138,10 @@ export function Sources() {
                 <div key={`${u.sender}${u.subject}${u.status}`} className="lrow static">
                   <span className="mid">
                     <b className="mono-n" style={{ fontSize: 13 }}>{u.sender === "upload" ? "Upload" : u.sender}</b>
-                    <small>{u.subject}</small>
+                    <small>
+                      {u.status === "needs_password" ? "Needs a statement password (Settings → Statement passwords) · " : u.status === "failed" ? "Couldn't be read · " : ""}
+                      {u.subject}
+                    </small>
                   </span>
                   <span className="amt" style={{ width: 80 }}>{u.count}</span>
                   <span className="ac" style={{ width: 110 }}>first {dayShort(u.first_seen.slice(0, 10))}</span>

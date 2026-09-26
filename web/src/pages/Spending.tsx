@@ -89,7 +89,7 @@ export function Spending({ app }: { app: AppCtx }) {
       {st.status === "loading" && <Loading />}
       {st.status === "error" && <ErrorState error={st.error} title="Couldn't load spending" onRetry={() => invalidate(["/api/transactions", "/api/trends"])} />}
       {st.status === "ready" && (
-        <Body app={app} preset={preset} r={r} group={group} txns={st.data[0]} trends={st.data[1]} recurringIds={new Set((dataOf(recurring) ?? []).map((x) => x.id))} />
+        <Body app={app} preset={preset} r={r} group={group} txns={st.data[0]} trends={st.data[1]} recurringIds={new Set((dataOf(recurring) ?? []).map((x) => x.id.split("@")[0]!))} />
       )}
     </>
   );

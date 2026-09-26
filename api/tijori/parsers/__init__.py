@@ -9,7 +9,11 @@ from tijori.parsers.base import (
     StatementParser,
     StatementSummary,
 )
+from tijori.parsers.hdfc_card_statement import HdfcCardStatementParser
+from tijori.parsers.hdfc_email_statement import HdfcEmailStatementParser
 from tijori.parsers.hdfc_savings_statement import HdfcSavingsStatementParser
+from tijori.parsers.icici_card_statement import IciciCardStatementParser
+from tijori.parsers.sbi_estatement import SbiEstatementParser
 from tijori.parsers.reconcile import Reconciliation, reconcile
 from tijori.parsers.sbi_statement import SbiStatementParser
 
@@ -32,6 +36,11 @@ def route(msg: Message) -> Parser | None:
     return next((p for p in _REGISTRY if p.match(msg)), None)
 
 
+# Statement PDFs, most specific first. Alert emails route through parsers.alerts, not here.
+register(HdfcCardStatementParser())
+register(IciciCardStatementParser())
+register(HdfcEmailStatementParser())
+register(SbiEstatementParser())
 register(SbiStatementParser())
 register(HdfcSavingsStatementParser())
 

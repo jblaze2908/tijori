@@ -489,8 +489,8 @@ function Row({ t, sel, onOpen }: { t: Transaction; sel: boolean; onOpen: () => v
   const muted = t.bucket === "excluded" || t.bucket === "card";
   const onCard = t.account_kind === "card";
   // A bill payment is a transfer once matched to the card (its purchases are counted there); unmatched, it stands in.
-  const tag = t.category == null ? null : t.bucket === "card" ? ["Card bill", "stand"] : t.bucket === "excluded" ? ["Transfer", ""] : t.bucket === "invest" ? ["Invest", "invest"] : t.bucket === "income" ? ["Income", "income"] : null;
-  const catText = t.settles?.card ? `Paid ${t.settles.card}` : t.settles?.from_account ? `From ${t.settles.from_account}` : t.bucket === "card" ? "Counts as spend" : (t.category ?? "Uncategorized");
+  const tag = t.split_parts ? ["Split", ""] : t.split_of ? ["Part", ""] : t.category == null ? null : t.bucket === "card" ? ["Card bill", "stand"] : t.bucket === "excluded" ? ["Transfer", ""] : t.bucket === "invest" ? ["Invest", "invest"] : t.bucket === "income" ? ["Income", "income"] : null;
+  const catText = t.split_parts ? `Into ${t.split_parts} parts` : t.settles?.card ? `Paid ${t.settles.card}` : t.settles?.from_account ? `From ${t.settles.from_account}` : t.bucket === "card" ? "Counts as spend" : (t.category ?? "Uncategorized");
   return (
     <button type="button" className={`trow${sel ? " sel" : ""}`} onClick={onOpen}>
       <span className="c-date">{dayShort(t.date)}</span>

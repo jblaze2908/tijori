@@ -5,9 +5,9 @@ import { ErrorState, Loading } from "../components/ui";
 import type { AppCtx } from "../ctx";
 import { api, decideRecurring, invalidate, read } from "../lib/api";
 import { monogramColor } from "../lib/colors";
-import { addDays, dayShort, daysBetween, inr, monthApos, plural } from "../lib/format";
+import { addDays, dayShort, daysBetween, inr, monthApos, plural, toPaise } from "../lib/format";
 import { navigate } from "../lib/router";
-import type { Cadence, Recurring, RecurringKind, RecurringList } from "../lib/types";
+import type { Cadence, Recurring, RecurringCandidate, RecurringKind, RecurringList } from "../lib/types";
 
 const GROUPS: { kind: RecurringKind | "ended"; title: string }[] = [
   { kind: "subscription", title: "Subscriptions" },
@@ -116,6 +116,8 @@ function Body({ data, today }: { data: RecurringList; today: string }) {
           </div>
         </section>
       ))}
+
+      {data.candidates.length > 0 && <Candidates items={data.candidates} />}
 
       <div className="subfoot">
         <span className="foot">
@@ -316,6 +318,63 @@ function Menu({ x, close }: { x: Recurring; close: () => void }) {
         See {plural(x.count, "transaction")}
       </button>
     </div>
+  );
+}
+
+/** Subscription-like payees seen only once or twice: too few charges for a cadence, so you decide. */
+function Candidates({ items }: { items: RecurringCandidate[] }) {
+  const toast = useToast();
+  const [cadence, setCadence] = useState<Record<string, Cadence>>({});
+  const act = async (c: RecurringCandidate, decision: "confirmed" | "dismissed") => {
+    try {
+      await decideRecurring(c.id, { decision, cadence: cadence[c.id] ?? "monthly", kind: c.kind === "subscription" ? "subscription" : "bill" });
+      toast(decision === "confirmed" ? `${c.merchant} added` : `${c.merchant} hidden`);
+    } catch {
+      toast("Couldn't save that. Try again.");
+    }
+  };
+  return (
+    <section className="subgroup" aria-label="Possibly recurring">
+      <div className="subhead">
+        <h2>Possibly recurring</h2>
+        <span className="faint" style={{ fontSize: 13 }}>
+          {plural(items.length, "payee")} seen once or twice · confirm to track
+        </span>
+      </div>
+      <div className="subtable">
+        {items.map((c) => (
+          <div key={c.id} className="subrow cand">
+            <span className="c-pay">
+              <span className="mg sq" style={{ background: monogramColor(c.merchant) }}>
+                {(c.merchant.replace(/[^A-Za-z0-9]/g, "")[0] ?? "•").toUpperCase()}
+              </span>
+              <span className="who2">
+                <b>{c.merchant}</b>
+                <small>
+                  {c.account ?? "Unknown account"} · {plural(c.count, "charge")} · last {dayShort(c.last_at)} {c.last_at.slice(0, 4)}
+                </small>
+              </span>
+            </span>
+            <span className="c-amt r mono-n strong">{inr(toPaise(c.amount))}</span>
+            <span className="c-cand">
+              <select className="inp2" value={cadence[c.id] ?? "monthly"} aria-label={`How often ${c.merchant} charges`} onChange={(e) => setCadence({ ...cadence, [c.id]: e.target.value as Cadence })}>
+                {(["monthly", "yearly", "quarterly", "weekly"] as Cadence[]).map((k) => (
+                  <option key={k} value={k}>
+                    {k[0]!.toUpperCase() + k.slice(1)}
+                  </option>
+                ))}
+              </select>
+              <button type="button" className="btn2 sm primary" onClick={() => act(c, "confirmed")}>
+                Track
+              </button>
+              <button type="button" className="btn2 sm" onClick={() => act(c, "dismissed")}>
+                Not recurring
+              </button>
+            </span>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 

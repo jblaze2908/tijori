@@ -62,6 +62,9 @@ class Statement:
     account_kind: Literal["bank", "card"] = "bank"  # card: purchases are debits, payments to it are credits
     total_due: Decimal | None = None  # card statements: amount asked for, and by when
     due_date: date | None = None
+    account_name: str | None = None  # e.g. the card's product name, for a new account
+    # Balances a statement prints for net-worth components it isn't about (SBI's PPF, HDFC's FDs).
+    components: tuple[tuple[str, Decimal], ...] = ()
 
 
 @runtime_checkable

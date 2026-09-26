@@ -13,8 +13,12 @@ from tijori.app.schemas import (
     CategorizeOut,
     ComponentIn,
     ComponentOut,
+    LinkIn,
+    LinkResult,
     RecurringDecision,
     RecurringIn,
+    SplitIn,
+    SplitOut,
     RulePatch,
     RuleState,
     TxnNotes,
@@ -28,7 +32,7 @@ from tijori.app.schemas import (
     SettingsIn,
     SettingsOut,
 )
-from tijori.services import members, networth, recurring, txns
+from tijori.services import members, networth, recurring, txn_edit, txns
 from tijori.services.common import today_ist
 from tijori.services.networth import COMPONENT_KEYS
 from tijori.services.errors import NotFound
@@ -78,6 +82,28 @@ def put_component(db: MemberDep, key: str, body: ComponentIn) -> dict:
 
 
 # :path because a payee key may contain "/" (keys built from narration text).
+@router.post("/transactions/{txn_id}/split", response_model=SplitOut)
+def split_txn(db: MemberDep, txn_id: Annotated[int, Path(ge=1)], body: SplitIn) -> dict:
+    return txn_edit.split(db.session, db.ctx, db.actor, txn_id, [p.model_dump() for p in body.parts])
+
+
+@router.post("/transactions/{txn_id}/unsplit", response_model=SplitOut)
+def unsplit_txn(db: MemberDep, txn_id: Annotated[int, Path(ge=1)]) -> dict:
+    return txn_edit.unsplit(db.session, db.ctx, db.actor, txn_id)
+
+
+@router.post("/transactions/{txn_id}/links", response_model=LinkResult)
+def link_txn(db: MemberDep, txn_id: Annotated[int, Path(ge=1)], body: LinkIn) -> dict:
+    if body.kind == "card_payment":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "card payments are matched automatically")
+    return txn_edit.link(db.session, db.ctx, db.actor, txn_id, body.txn_id, body.kind)
+
+
+@router.post("/transactions/{txn_id}/links/remove", response_model=LinkResult)
+def unlink_txn(db: MemberDep, txn_id: Annotated[int, Path(ge=1)], body: LinkIn) -> dict:
+    return txn_edit.unlink(db.session, db.ctx, db.actor, txn_id, body.txn_id, body.kind)
+
+
 @router.put("/recurring/{payee_key:path}", response_model=RecurringDecision)
 def put_recurring(db: MemberDep, payee_key: Annotated[str, Path(min_length=1, max_length=120)],
                   body: RecurringIn) -> dict:

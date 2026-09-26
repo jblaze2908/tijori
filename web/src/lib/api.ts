@@ -7,6 +7,9 @@ import type {
   ApiNetWorth,
   ApiPage,
   ApiCards,
+  LinkCandidate,
+  LinkKind,
+  RawSource,
   ApiRecurringList,
   Cadence,
   RecurringKind,
@@ -264,6 +267,8 @@ const mapTxn = (t: ApiTxn): Transaction => ({
   notes: t.notes,
   tags: t.tags ?? [],
   settles: t.settles ?? null,
+  split_of: t.split_of != null ? String(t.split_of) : null,
+  split_parts: t.split_parts ?? 0,
 });
 
 const byDate = (a: { date: string }, b: { date: string }) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
@@ -424,6 +429,8 @@ export const api = {
   recurring: () => optional("/api/recurring", (r: ApiRecurringList): Recurring[] => mapRecurring(r).items.filter((x) => x.active)),
   subscriptions: () => resource("/api/recurring", mapRecurring),
   cards: () => resource("/api/cards", (r: ApiCards) => r),
+  linkCandidates: (id: string) => resource(`/api/transactions/${encodeURIComponent(id)}/link-candidates`, (r: { items: LinkCandidate[] }) => r.items),
+  txnSources: (id: string) => resource(`/api/transactions/${encodeURIComponent(id)}/sources`, (r: { items: RawSource[] }) => r.items),
   alerts: (month: MonthKey) => optional(`/api/alerts?${qs({ month })}`, (r: { items: ServerAlert[] }) => r.items),
   /** One page of a filtered list, with the whole set's totals. */
   txnPage: (f: TxnQuery, page: number, pageSize = 50) => resource(`/api/transactions?${txnQueryString(f, page, pageSize)}`, mapPage),
@@ -463,6 +470,7 @@ function mapRecurring(r: ApiRecurringList): RecurringList {
       active: ACTIVE_STATES.has(x.state),
     })),
     dismissed: r.dismissed,
+    candidates: r.candidates ?? [],
     totals: {
       monthly: toPaise(r.totals.monthly),
       yearly: toPaise(r.totals.yearly),
@@ -531,6 +539,24 @@ export async function patchTxn(id: string, body: { notes?: string | null; tags?:
 export async function setComponent(key: string, amount: string, asOf?: ISODate): Promise<void> {
   await request<unknown>(`/api/networth/components/${encodeURIComponent(key)}`, "PUT", { amount, ...(asOf ? { as_of: asOf } : {}) });
   invalidate(["/api/networth"]);
+}
+
+const AFTER_EDIT = ["/api/transactions", "/api/summary", "/api/trends", "/api/recurring", "/api/cards", "/api/inbox"];
+
+/** Splits a txn into parts that add up to it; the original stays, out of every total. */
+export async function splitTxn(id: string, parts: { amount: string; category_id: number; note?: string }[]): Promise<void> {
+  await request<unknown>(`/api/transactions/${encodeURIComponent(id)}/split`, "POST", { parts });
+  invalidate(AFTER_EDIT);
+}
+
+export async function unsplitTxn(id: string): Promise<void> {
+  await request<unknown>(`/api/transactions/${encodeURIComponent(id)}/unsplit`, "POST", {});
+  invalidate(AFTER_EDIT);
+}
+
+export async function linkTxn(id: string, other: number, kind: LinkKind, remove = false): Promise<void> {
+  await request<unknown>(`/api/transactions/${encodeURIComponent(id)}/links${remove ? "/remove" : ""}`, "POST", { txn_id: other, kind });
+  invalidate(AFTER_EDIT);
 }
 
 /** Your call on a payee's series; "auto" forgets it so detection decides again. */

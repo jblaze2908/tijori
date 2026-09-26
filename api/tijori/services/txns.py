@@ -12,7 +12,7 @@ from tijori.classify.merchants import MERCHANT_QR_HANDLES
 from tijori.db import MemberContext
 from tijori.models import Account, Category, Observation, RawMessage, Rule, RuleHit, Txn, TxnLink, TxnObservation
 from tijori.money import ZERO, fmt
-from tijori.services import cards
+from tijori.services import cards, txn_edit
 from tijori.services.common import audit, category_by_ref, cycle_bounds, txn_out, txn_query
 from tijori.services.errors import Invalid, NotFound
 from tijori.services.reports import is_expense
@@ -120,7 +120,9 @@ def list_txns(s: Session, member_id: int, f: TxnFilter, page: int, page_size: in
     rows = s.execute(txn_query().where(where).order_by(*_ORDER[f.sort])
                      .limit(page_size).offset((page - 1) * page_size)).all()
     paid = cards.settles(s, member_id, [r.Txn.id for r in rows if r.Txn.bucket == "excluded"])
-    return {"items": [{**txn_out(r), "settles": paid.get(r.Txn.id)} for r in rows], "page": page,
+    parts = txn_edit.split_counts(s, member_id, [r.Txn.id for r in rows if r.Txn.bucket == "excluded"])
+    return {"items": [{**txn_out(r), "settles": paid.get(r.Txn.id), "split_parts": parts.get(r.Txn.id, 0)} for r in rows],
+            "page": page,
             "page_size": page_size, "total": total,
             "totals": {k: {"amount": fmt(v["amount"]), "count": v["count"]} for k, v in totals.items()}}
 
@@ -181,13 +183,14 @@ def get_txn(s: Session, member_id: int, txn_id: int) -> dict[str, Any]:
     return {
         "transaction": {**txn_out(row), "settles": cards.settles(s, member_id, [txn_id]).get(txn_id)},
         "observations": [
-            {"id": o.id, "source": "statement", "parser": o.parser, "parser_version": o.parser_version,
+            {"id": o.id, "source": "alert" if o.parser == "bank_alerts" else "statement", "parser": o.parser, "parser_version": o.parser_version,
              "occurred_at": o.occurred_at, "amount": fmt(o.amount), "direction": o.direction,
              "balance_after": fmt(o.balance_after) if o.balance_after is not None else None, "ref_no": o.ref_no,
              "raw_message_id": o.raw_message_id, "received_at": received_at, "filename": filename}
             for o, received_at, filename in obs
         ],
         "links": [{"kind": k, "txn_id": b if a == txn_id else a} for k, a, b in links],
+        "split_parts": txn_edit.parts_of(s, member_id, txn_id),
         "payee": payee,
     }
 

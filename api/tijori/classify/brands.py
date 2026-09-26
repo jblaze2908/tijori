@@ -113,7 +113,15 @@ BRANDS: tuple[Brand, ...] = (
     _b("digitalocean", "DigitalOcean", "Bills & subscriptions", r"DIGITALOCEAN"),
     _b("godaddy", "GoDaddy", "Bills & subscriptions", r"GODADDY"),
     _b("namecheap", "Namecheap", "Bills & subscriptions", r"NAMECHEAP"),
+    _b("paper_design", "Paper", "Bills & subscriptions", r"PAPER\.DESIGN"),
+    _b("canva", "Canva", "Bills & subscriptions", r"\bCANVA\b"),
+    _b("expressvpn", "ExpressVPN", "Bills & subscriptions", r"EXPRESS ?VPN"),
+    # Card statement fee and tax lines (before shopping: "IGST" lines carry merchant refs)
+    _b("card_fees", "Card fees & GST", "Bank charges", r"^\s*[ICS]GST\b", r"MARKUP FEE", r"\bDCC\b", r"FEE ON GAMING",
+       r"FINANCE CHARGE", r"LATE PAYMENT FEE", r"ANNUAL FEE", r"RENEWAL FEE", r"FUEL SURCHARGE"),
+    _b("cashback", "Cashback", "Refunds", r"CASHBACK"),
     # Shopping
+    _b("smartbuy", "HDFC SmartBuy", "Shopping", r"SMARTBUY", r"GYFTR"),
     _b("amazon", "Amazon", "Shopping", r"AMAZON", r"\bAMZN", r"AMZNLPA"),
     _b("flipkart", "Flipkart", "Shopping", r"FLIPKART"),
     _b("myntra", "Myntra", "Shopping", r"MYNTRA"),
@@ -171,5 +179,5 @@ SUBSCRIPTIONS: frozenset[str] = frozenset({
     "amazon_prime", "aws", "apple_services", "google_play", "youtube", "google_one", "netflix", "spotify",
     "hotstar", "zee5", "sonyliv", "tata_play", "hostinger", "openrouter", "anthropic", "openai", "github",
     "google_cloud", "microsoft", "adobe", "cloudflare", "digitalocean", "godaddy", "namecheap", "cult_fit",
-    "playstation", "xbox", "steam",
+    "playstation", "xbox", "steam", "paper_design", "canva", "expressvpn",
 })

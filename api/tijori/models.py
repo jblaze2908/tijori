@@ -130,8 +130,11 @@ class RawMessage(Base):
     sha256: Mapped[str] = mapped_column(String(64))
     blob_ref: Mapped[str] = mapped_column(Text)
     parse_status: Mapped[str] = mapped_column(
-        _enum("parse_status", "pending", "parsed", "failed", "parser_needed"), server_default="pending"
+        _enum("parse_status", "pending", "parsed", "failed", "parser_needed", "needs_password", "ignored"),
+        server_default="pending",
     )
+    mail_source_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("mail_source.id", ondelete="SET NULL"))
+    mail_uid: Mapped[int | None] = mapped_column(BigInteger)
     __table_args__ = (UniqueConstraint("member_id", "sha256"),)
 
 
@@ -210,6 +213,7 @@ class Txn(Base):
     tags: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default=text("'{}'::text[]"))
     sources: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default=text("'{}'::text[]"))
     dedupe_key: Mapped[str] = mapped_column(String(64))
+    split_of: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("txn.id", ondelete="CASCADE"), index=True)
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -478,6 +482,11 @@ class MailSource(Base):
     last_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error_code: Mapped[str | None] = mapped_column(String(40))
     last_message_count: Mapped[int | None] = mapped_column(Integer)  # messages in the label at the last test
+    # Collector watermark: UIDs are only comparable within one UIDVALIDITY.
+    uid_validity: Mapped[int | None] = mapped_column(BigInteger)
+    last_uid: Mapped[int | None] = mapped_column(BigInteger)
+    last_poll_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_poll_error: Mapped[str | None] = mapped_column(String(40))
     created_at: Mapped[datetime] = _created()
 
 
@@ -491,4 +500,5 @@ class ComponentValue(Base):
     amount: Mapped[Decimal] = mapped_column(Money)
     as_of: Mapped[date] = mapped_column(Date)
     created_at: Mapped[datetime] = _created()
+    source: Mapped[str | None] = mapped_column(String(16))  # null or "manual": set by hand; "statement": read from one
     __table_args__ = (UniqueConstraint("member_id", "key", "as_of"),)

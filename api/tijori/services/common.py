@@ -86,7 +86,7 @@ def txn_out(row: Any) -> dict[str, Any]:
         "category": {"id": t.category_id, "name": row.category_name} if t.category_id is not None else None,
         "bucket": t.bucket, "classified_by": t.classified_by, "rule_id": t.rule_id,
         "review_reason": t.review_reason, "status": t.status, "sources": list(t.sources or []),
-        "notes": t.notes, "tags": list(t.tags or []),
+        "notes": t.notes, "tags": list(t.tags or []), "split_of": t.split_of,
     }
 
 

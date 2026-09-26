@@ -52,6 +52,8 @@ export interface ApiTxn {
   tags: string[];
   /** A bill payment matched to a card's payment line: the other leg. */
   settles?: ApiSettles | null;
+  split_of?: number | null;
+  split_parts?: number;
 }
 export interface ApiSettles {
   txn_id: number;
@@ -196,9 +198,20 @@ export interface ApiRecurring {
   change: { from: Decimal; to: Decimal; at: ISODate } | null;
   charges: { date: ISODate; amount: Decimal; txn_id: number }[];
 }
+export interface RecurringCandidate {
+  id: string;
+  merchant: string;
+  count: number;
+  last_at: ISODate;
+  amount: Decimal;
+  category: string | null;
+  account: string | null;
+  kind: "subscription" | "bill";
+}
 export interface ApiRecurringList {
   items: ApiRecurring[];
   dismissed: { id: string; merchant: string }[];
+  candidates: RecurringCandidate[];
   totals: { monthly: Decimal; yearly: Decimal; invest_monthly: Decimal; active: number; next_30_days: Decimal; next_30_days_count: number };
 }
 export interface ApiCards {
@@ -291,6 +304,10 @@ export interface Transaction {
   notes: string | null;
   tags: string[];
   settles: ApiSettles | null;
+  /** Set on a part of a split: the original's id. */
+  split_of: string | null;
+  /** On the original: how many parts it was split into. */
+  split_parts: number;
 }
 
 export interface Totals {
@@ -327,6 +344,7 @@ export type Recurring = Omit<ApiRecurring, "amount_expected" | "amount_min" | "a
 export interface RecurringList {
   items: Recurring[];
   dismissed: { id: string; merchant: string }[];
+  candidates: RecurringCandidate[];
   totals: { monthly: Paise; yearly: Paise; investMonthly: Paise; active: number; next30: Paise; next30Count: number };
 }
 
@@ -419,6 +437,7 @@ export interface ApiTxnDetail {
   transaction: ApiTxn;
   observations: (ApiObservation & { filename: string | null; raw_message_id: number | null })[];
   links: { kind: string; txn_id: number }[];
+  split_parts: { id: number; amount: Decimal; category: string | null; note: string | null }[];
   payee: {
     payee_key: string;
     count: number;
@@ -491,7 +510,27 @@ export interface Rule {
   last_hit_at: string | null;
   editable: boolean;
 }
+export interface LinkCandidate {
+  id: number;
+  occurred_at: ISODate;
+  amount: Decimal;
+  direction: Direction;
+  merchant: string | null;
+  account_id: number | null;
+  suggest: "transfer" | "dup";
+}
+export interface RawSource {
+  raw_message_id: number;
+  kind: "email" | "file";
+  sender: string | null;
+  subject: string | null;
+  received_at: string;
+  text: string | null;
+  files: { id: number; filename: string | null }[];
+}
+export type LinkKind = "transfer" | "refund" | "dup" | "pass_through" | "card_payment";
 export interface ParseQueue {
+  collected?: Record<string, number>;
   unparsed: { sender: string | null; subject: string | null; status: string; count: number; first_seen: string; last_seen: string }[];
   uploads: {
     id: number;

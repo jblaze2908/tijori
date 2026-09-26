@@ -60,6 +60,8 @@ class TxnOut(BaseModel):
     notes: str | None
     tags: list[str]
     settles: Settles | None = None  # a bill payment matched to a card's payment line
+    split_of: int | None = None  # this is a part of that txn's split
+    split_parts: int = 0  # this txn was split into this many parts
 
 
 class TotalLine(BaseModel):
@@ -118,11 +120,81 @@ class PayeeStats(BaseModel):
     recent: list[PayeeRecent]
 
 
+class SplitPartOut(BaseModel):
+    id: int
+    amount: Money
+    category: str | None
+    note: str | None
+
+
 class TxnDetail(BaseModel):
     transaction: TxnOut
     observations: list[ObservationOut]
     links: list[LinkOut]
     payee: PayeeStats | None
+    split_parts: list[SplitPartOut] = []
+
+
+class SplitPartIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    amount: Annotated[str, Field(pattern=r"^\d{1,12}(\.\d{1,2})?$")]
+    category_id: Annotated[int, Field(ge=1)]
+    note: Annotated[str, Field(max_length=200)] | None = None
+
+
+class SplitIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    parts: Annotated[list[SplitPartIn], Field(min_length=2, max_length=10)]
+
+
+class SplitOut(BaseModel):
+    id: int
+    parts: int
+
+
+class LinkIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    txn_id: Annotated[int, Field(ge=1)]
+    kind: Literal["transfer", "refund", "dup", "pass_through", "card_payment"]
+
+
+class LinkResult(BaseModel):
+    txn_id: int
+    other_id: int
+    kind: str
+
+
+class LinkCandidate(BaseModel):
+    id: int
+    occurred_at: date
+    amount: Money
+    direction: str
+    merchant: str | None
+    account_id: int | None
+    suggest: Literal["transfer", "dup"]
+
+
+class LinkCandidates(BaseModel):
+    items: list[LinkCandidate]
+
+
+class RawFile(BaseModel):
+    id: int
+    filename: str | None
+
+
+class RawSource(BaseModel):
+    raw_message_id: int
+    kind: Literal["email", "file"]
+    sender: str | None
+    subject: str | None
+    received_at: datetime
+    text: str | None
+    files: list[RawFile]
+
+
+class RawSources(BaseModel):
+    items: list[RawSource]
 
 
 class InboxItem(BaseModel):
@@ -496,6 +568,8 @@ class MailSourceOut(BaseModel):
     last_tested_at: datetime | None
     last_error_code: str | None
     last_message_count: int | None
+    last_poll_at: datetime | None
+    last_poll_error: str | None
     created_at: datetime
 
 
@@ -663,9 +737,21 @@ class RecurringTotals(BaseModel):
     next_30_days_count: int
 
 
+class RecurringCandidate(BaseModel):
+    id: str
+    merchant: str
+    count: int
+    last_at: date
+    amount: Money
+    category: str | None
+    account: str | None
+    kind: Literal["subscription", "bill"]
+
+
 class RecurringList(BaseModel):
     items: list[RecurringOut]
     dismissed: list[RecurringRef]
+    candidates: list[RecurringCandidate]
     totals: RecurringTotals
 
 
@@ -869,5 +955,6 @@ class UploadOut(BaseModel):
 
 
 class ParseQueue(BaseModel):
+    collected: dict[str, int]  # collector messages by parse_status
     unparsed: list[Unparsed]
     uploads: list[UploadOut]

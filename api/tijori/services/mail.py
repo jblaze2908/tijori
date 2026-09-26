@@ -26,7 +26,7 @@ def _out(m: MailSource) -> dict[str, Any]:
     return {"id": m.id, "provider": m.provider, "host": m.host, "port": m.port, "email": m.username,
             "label": m.label, "status": m.status, "last_tested_at": m.last_tested_at,
             "last_error_code": m.last_error_code, "last_message_count": m.last_message_count,
-            "created_at": m.created_at}
+            "last_poll_at": m.last_poll_at, "last_poll_error": m.last_poll_error, "created_at": m.created_at}
 
 
 def _endpoint(provider: str, host: str | None, port: int | None) -> tuple[str, int]:

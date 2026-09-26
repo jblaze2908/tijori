@@ -79,25 +79,33 @@ services:
     #   - traefik.http.routers.tijori.tls=true
     #   - traefik.http.services.tijori.loadbalancer.server.port=8000
 
-  # Placeholder for the M1 pipeline (collect → parse → resolve → classify → reconcile → notify).
-  # Behind a profile so `up` does not start it; it will need an egress network for Gmail.
+  # M1 collector: polls each member's IMAP label every 2 minutes, stores raw mail, runs the parsers
+  # (tijori/collector.py). Same image and role as the api; `edge` only for egress to the mail host.
   worker:
     image: tijori-api:local
-    profiles: ["worker"]
-    command: ["python", "-c", "raise SystemExit('tijori-worker is not implemented until M1')"]
+    command: ["python", "-m", "tijori.collector"]
+    restart: unless-stopped
     environment:
       TIJORI_ENV: prod
       TIJORI_DATABASE_URL: postgresql+psycopg://tijori_app:${TIJORI_APP_DB_PASSWORD}@db:5432/tijori
+      # Settings validation in prod needs the sign-in pair even though the worker serves no pages.
+      TIJORI_PUBLIC_URL: ${TIJORI_PUBLIC_URL:-https://tijori.example.com}
+      TIJORI_OIDC_CLIENT_ID: ${TIJORI_OIDC_CLIENT_ID:?set in the env file}
+      TIJORI_OIDC_CLIENT_SECRET: ${TIJORI_OIDC_CLIENT_SECRET:?set in the env file}
+      TIJORI_MASTER_KEY: ${TIJORI_MASTER_KEY:?set in the env file}
+      TIJORI_MASTER_KEY_OLD: ${TIJORI_MASTER_KEY_OLD:-}
     depends_on:
+      db:
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
     volumes:
       - blobs:/data/blobs
-    networks: [backend]
+    networks: [backend, edge]
     read_only: true
+    tmpfs: [/tmp]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
-    restart: "no"
 
 networks:
   # No route in or out: Postgres is reachable only by Tijori's own containers.
