@@ -2,10 +2,12 @@
 
 One HTTPS GET of portal.amfiindia.com's NAVAll.txt (≈1.5 MB, every scheme's latest NAV) per day, run
 by the collector; skipped when the newest stored AMFI price is from today or yesterday (NAVs publish
-after market close). Rows are `code;ISIN growth;ISIN reinvest;name;NAV;DD-Mon-YYYY`.
+after market close), and attempted at most every 6 hours. Rows are
+`code;ISIN growth;ISIN reinvest;name;[plan;option;]NAV;DD-Mon-YYYY`: NAV and date are read from the end.
 """
 
 import logging
+import time
 import urllib.request
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -38,16 +40,24 @@ def parse_navall(text: str, wanted: set[str]) -> list[tuple[str, date, Decimal, 
         if len(parts) < 6:
             continue
         try:
-            nav, day = Decimal(parts[4]), datetime.strptime(parts[5].strip(), "%d-%b-%Y").date()
+            nav, day = Decimal(parts[-2]), datetime.strptime(parts[-1].strip(), "%d-%b-%Y").date()
         except (InvalidOperation, ValueError):
             continue
+        name = " - ".join(p.strip() for p in parts[3:-2] if p.strip())
         for isin in (parts[1].strip(), parts[2].strip()):
             if isin in wanted:
-                out.append((isin, day, nav, parts[3].strip()))
+                out.append((isin, day, nav, name))
     return out
 
 
+_ATTEMPT_S = 6 * 3600
+_last_attempt = [-float(_ATTEMPT_S)]
+
+
 def refresh_navs(engine: Engine, members: list[MemberContext], today: date | None = None) -> int:
+    if time.monotonic() - _last_attempt[0] < _ATTEMPT_S:
+        return 0
+    _last_attempt[0] = time.monotonic()
     wanted = _held(engine, members)
     if not wanted or not members:
         return 0
