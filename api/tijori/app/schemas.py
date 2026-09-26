@@ -204,6 +204,8 @@ class Summary(BaseModel):
     month: str
     previous_month: str
     currency: str
+    month_start_day: int
+    period: "Period"
     totals: Totals
     previous_totals: Totals
     buckets: list[BucketLine]
@@ -213,6 +215,8 @@ class Summary(BaseModel):
 
 class MonthOut(BaseModel):
     month: str
+    start: date
+    end: date
     through: date
     complete: bool
     txn_count: int
@@ -220,6 +224,7 @@ class MonthOut(BaseModel):
 
 class Months(BaseModel):
     as_of: date
+    month_start_day: int
     items: list[MonthOut]
 
 
@@ -479,3 +484,48 @@ class MailTestOut(BaseModel):
 class StatementPasswordIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     password: str = Field(min_length=1, max_length=256, repr=False)
+
+
+Summary.model_rebuild()
+
+
+class HouseholdMember(BaseModel):
+    id: int
+    name: str
+    email: str
+    role: str
+    joined_at: datetime
+
+
+class HouseholdInvite(BaseModel):
+    id: int
+    email: str
+    status: Literal["pending", "accepted", "expired"]
+    created_at: datetime
+    expires_at: datetime
+
+
+class HouseholdOut(BaseModel):
+    id: int
+    name: str | None
+    members: list[HouseholdMember]
+    invites: list[HouseholdInvite]
+
+
+class MeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=120)
+
+
+class AccountIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    institution: str = Field(min_length=1, max_length=80)
+    kind: Literal["bank", "card", "wallet", "deposit", "holding", "cash"]
+    name: str | None = Field(default=None, max_length=120)
+    mask: str | None = Field(default=None, pattern=r"^\d{4}$")
+
+
+class AccountPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = Field(default=None, max_length=120)
+    mask: str | None = Field(default=None, pattern=r"^\d{4}$")

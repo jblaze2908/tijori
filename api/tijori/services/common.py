@@ -31,6 +31,22 @@ def month_bounds(month: str) -> tuple[date, date]:
     return date(y, m, 1), date(y + (m == 12), m % 12 + 1, 1)
 
 
+def cycle_bounds(month: str, month_start_day: int = 1) -> tuple[date, date]:
+    """[start, end) of the month cycle labelled 'YYYY-MM': it starts on `month_start_day` of that
+    month (1 = calendar month; 25 = the 25th to the 24th, a salary cycle)."""
+    start, end = month_bounds(month)
+    shift = timedelta(days=month_start_day - 1)
+    return start + shift, end + shift
+
+
+def month_start_day(s: Session, member_id: int) -> int:
+    """One primary-key lookup; every month-based endpoint needs it."""
+    from tijori.models import Member
+
+    settings = s.scalar(select(Member.settings).where(Member.id == member_id)) or {}
+    return int(settings.get("month_start_day", 1))
+
+
 def previous_month(month: str) -> str:
     y, m = (int(p) for p in month.split("-"))
     return f"{y - (m == 1)}-{(m - 2) % 12 + 1:02d}"

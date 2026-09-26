@@ -28,6 +28,7 @@ from tijori.app.schemas import (
 from tijori.classify.taxonomy import KINDS
 from tijori.models import Category
 from tijori.services import members, networth, reports, txns
+from tijori.services.common import month_start_day
 
 router = APIRouter(prefix="/api")
 
@@ -48,7 +49,7 @@ def get_me(db: MemberDep) -> dict:
 
 @router.get("/months", response_model=Months)
 def get_months(db: MemberDep) -> dict:
-    return reports.months(db.session, db.ctx.member_id)
+    return reports.months(db.session, db.ctx.member_id, month_start_day(db.session, db.ctx.member_id))
 
 
 @router.get("/accounts", response_model=Accounts)
@@ -58,7 +59,7 @@ def get_accounts(db: MemberDep) -> dict:
 
 @router.get("/summary", response_model=Summary)
 def summary(db: MemberDep, month: Annotated[str, Query(pattern=MONTH_PATTERN)]) -> dict:
-    return reports.summary(db.session, db.ctx.member_id, month)
+    return reports.summary(db.session, db.ctx.member_id, month, month_start_day(db.session, db.ctx.member_id))
 
 
 @router.get("/transactions", response_model=TxnPage)
@@ -81,8 +82,10 @@ def transactions(
         raise _unprocessable("min", "must not exceed max")
     if date_from and date_to and date_from > date_to:
         raise _unprocessable("from", "must not be after to")
+    msd = month_start_day(db.session, db.ctx.member_id) if month else 1
     f = txns.TxnFilter(month=month, date_from=date_from, date_to=date_to, account=account, category=category,
-                       kind=kind, direction=direction, q=q, min_amount=min_amount, max_amount=max_amount)
+                       kind=kind, direction=direction, q=q, min_amount=min_amount, max_amount=max_amount,
+                       month_start_day=msd)
     return txns.list_txns(db.session, db.ctx.member_id, f, page, page_size)
 
 
@@ -130,11 +133,11 @@ def trends(
     end: date | None = None,
     limit: Annotated[int, Query(ge=1, le=50)] = 10,
 ) -> dict:
-    msd = members.get_settings(db.session, db.ctx.member_id)["month_start_day"]
+    msd = month_start_day(db.session, db.ctx.member_id)
     return reports.trends(db.session, db.ctx.member_id, granularity=granularity, periods=periods,
                           group_by=group_by, end=end, month_start_day=msd, limit=limit)
 
 
 @router.get("/budgets", response_model=Budgets)
 def get_budgets(db: MemberDep, month: Annotated[str, Query(pattern=MONTH_PATTERN)]) -> dict:
-    return reports.budgets(db.session, db.ctx.member_id, month)
+    return reports.budgets(db.session, db.ctx.member_id, month, month_start_day(db.session, db.ctx.member_id))

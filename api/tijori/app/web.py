@@ -20,6 +20,7 @@ class SpaFiles(StaticFiles):
     def __init__(self, directory: Path) -> None:
         super().__init__(directory=directory, html=True, check_dir=True)
         self.index = directory / "index.html"
+        self.favicon = directory / "favicon.svg"
 
     async def get_response(self, path: str, scope: Scope) -> Response:
         if path.split("/", 1)[0] in RESERVED:
@@ -29,6 +30,11 @@ class SpaFiles(StaticFiles):
         except HTTPException as exc:
             if exc.status_code != 404 or scope["method"] not in ("GET", "HEAD") or not self.index.exists():
                 raise
+            last = path.rsplit("/", 1)[-1]
+            if last == "favicon.ico" and self.favicon.exists():
+                return FileResponse(self.favicon, media_type="image/svg+xml")
+            if "." in last:
+                raise  # a missing asset is a 404, not the app shell
             return FileResponse(self.index)
 
 

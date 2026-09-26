@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from tijori.db import MemberContext
 from tijori.models import Category, Observation, RawMessage, Rule, RuleHit, Txn, TxnLink, TxnObservation
 from tijori.money import fmt
-from tijori.services.common import audit, category_by_ref, month_bounds, txn_out, txn_query
+from tijori.services.common import audit, category_by_ref, cycle_bounds, txn_out, txn_query
 from tijori.services.errors import Invalid, NotFound
 
 
@@ -27,6 +27,7 @@ class TxnFilter:
     q: str | None = None
     min_amount: Decimal | None = None
     max_amount: Decimal | None = None
+    month_start_day: int = 1  # `month` is a cycle starting on this day
 
 
 def _like(q: str) -> str:
@@ -37,7 +38,7 @@ def _like(q: str) -> str:
 def _conditions(member_id: int, f: TxnFilter) -> ColumnElement[bool]:
     conds: list[ColumnElement[bool]] = [Txn.member_id == member_id]
     if f.month:
-        start, end = month_bounds(f.month)
+        start, end = cycle_bounds(f.month, f.month_start_day)
         conds += [Txn.occurred_at >= start, Txn.occurred_at < end]
     if f.date_from:
         conds.append(Txn.occurred_at >= f.date_from)

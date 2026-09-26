@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from tijori.classify.taxonomy import EXPENSE_BUCKETS
 from tijori.models import Budget, Category, Recurring, Txn
 from tijori.money import ZERO, fmt
-from tijori.services.common import month_bounds, previous_month, today_ist
+from tijori.services.common import cycle_bounds, previous_month, today_ist
 
 SUMMARY_BUCKETS = ("everyday", "card", "oneoff", "invest", "income")
 
@@ -68,11 +68,11 @@ def _category_lines(rows: list[Any], direction: str, buckets: tuple[str, ...],
     return sorted(lines, key=lambda c: (-Decimal(c["amount"]), -Decimal(c["previous_amount"]), c["name"]))
 
 
-def summary(s: Session, member_id: int, month: str) -> dict[str, Any]:
-    """One grouped query covers the month and the one before it."""
-    cur_start, cur_end = month_bounds(month)
+def summary(s: Session, member_id: int, month: str, month_start_day: int = 1) -> dict[str, Any]:
+    """One grouped query covers the month cycle and the one before it."""
+    cur_start, cur_end = cycle_bounds(month, month_start_day)
     prev = previous_month(month)
-    prev_start, _ = month_bounds(prev)
+    prev_start, _ = cycle_bounds(prev, month_start_day)
     base = (
         select(case((Txn.occurred_at >= cur_start, literal_column("'cur'")), else_=literal_column("'prev'"))
                .label("period"), Txn.direction, Txn.bucket, Txn.kind, Txn.category_id, Txn.amount)
@@ -92,26 +92,33 @@ def summary(s: Session, member_id: int, month: str) -> dict[str, Any]:
         a, p = Decimal(totals[b]), Decimal(prev_totals[b])
         buckets.append({"bucket": b, "amount": fmt(a), "previous_amount": fmt(p), "change": fmt(a - p)})
     return {
-        "month": month, "previous_month": prev, "currency": "INR", "totals": totals, "previous_totals": prev_totals,
+        "month": month, "previous_month": prev, "currency": "INR", "month_start_day": month_start_day,
+        "period": {"start": cur_start, "end": cur_end - timedelta(days=1)},
+        "totals": totals, "previous_totals": prev_totals,
         "buckets": buckets,
         "categories": _category_lines(rows, "debit", EXPENSE_BUCKETS, with_uncategorized=True),
         "income_categories": _category_lines(rows, "credit", ("income",), with_uncategorized=False),
     }
 
 
-def months(s: Session, member_id: int) -> dict[str, Any]:
+def months(s: Session, member_id: int, month_start_day: int = 1) -> dict[str, Any]:
+    """Month cycles with data. A cycle is labelled by the calendar month it starts in."""
     as_of = today_ist()
-    m = func.to_char(func.date_trunc("month", Txn.occurred_at), "YYYY-MM").label("month")
+    shift = bindparam("shift", month_start_day - 1, type_=Integer)
+    m = func.to_char(Txn.occurred_at - shift, "YYYY-MM").label("month")
     base = select(m, Txn.occurred_at).where(Txn.member_id == member_id).subquery()
     rows = s.execute(select(base.c.month, func.max(base.c.occurred_at).label("through"), func.count().label("n"))
                      .group_by(base.c.month).order_by(base.c.month)).all()
-    return {"as_of": as_of, "items": [
-        {"month": r.month, "through": r.through, "complete": month_bounds(r.month)[1] <= as_of, "txn_count": r.n}
-        for r in rows]}
+    items = []
+    for r in rows:
+        start, end = cycle_bounds(r.month, month_start_day)
+        items.append({"month": r.month, "start": start, "end": end - timedelta(days=1), "through": r.through,
+                      "complete": end <= as_of, "txn_count": r.n})
+    return {"as_of": as_of, "month_start_day": month_start_day, "items": items}
 
 
-def budgets(s: Session, member_id: int, month: str) -> dict[str, Any]:
-    start, end = month_bounds(month)
+def budgets(s: Session, member_id: int, month: str, month_start_day: int = 1) -> dict[str, Any]:
+    start, end = cycle_bounds(month, month_start_day)
     spent = (select(Txn.category_id, func.sum(Txn.amount).label("spent"))
              .where(Txn.member_id == member_id, Txn.direction == "debit", Txn.occurred_at >= start,
                     Txn.occurred_at < end)
@@ -179,65 +186,82 @@ def period_grid(end: date, granularity: str, periods: int, month_start_day: int)
     return [(st, _next_start(st, granularity, month_start_day) - timedelta(days=1)) for st in starts]
 
 
-def _series_key(group_by: str) -> Any:
-    if group_by == "total":
-        # Committed: the merchant has an active recurring series (none until recurring detection, M2).
-        committed = exists().where(Recurring.member_id == Txn.member_id, Recurring.status == "active",
-                                   func.lower(Recurring.merchant_norm) == func.lower(Txn.merchant_norm))
-        return case((committed, literal_column("'committed'")), else_=literal_column("'discretionary'"))
-    if group_by == "category":
-        return func.coalesce(Category.name, literal_column("'Uncategorized'"))
-    if group_by == "merchant":
-        return func.coalesce(Txn.merchant_norm, literal_column("'Unknown'"))
-    return Txn.kind
+def _committed() -> Any:
+    # Committed: the merchant has an active recurring series (none until recurring detection, M2).
+    return exists().where(Recurring.member_id == Txn.member_id, Recurring.status == "active",
+                          func.lower(Recurring.merchant_norm) == func.lower(Txn.merchant_norm))
+
+
+def is_expense() -> Any:
+    """The one spend definition, shared with /api/summary: debits in the everyday, one-off and
+    card buckets, plus uncategorized debits. Refund credits are reported apart, never netted."""
+    return and_(Txn.direction == "debit", or_(Txn.bucket.in_(EXPENSE_BUCKETS), Txn.category_id.is_(None)))
+
+
+def _measure() -> Any:
+    """For group_by=total: which summary figure a txn feeds, or NULL for none."""
+    return case(
+        (is_expense(), literal_column("'expense'")),
+        (and_(Txn.direction == "credit", Txn.bucket == "income"), literal_column("'income'")),
+        (and_(Txn.direction == "debit", Txn.bucket == "invest"), literal_column("'invested'")),
+        else_=None,
+    )
 
 
 def trends(s: Session, member_id: int, *, granularity: str, periods: int, group_by: str, end: date | None,
            month_start_day: int, limit: int) -> dict[str, Any]:
     grid = period_grid(end or today_ist(), granularity, periods, month_start_day)
     shift = bindparam("shift", month_start_day - 1, type_=Integer)
-    if group_by == "kind":
-        # Each kind in its natural direction: credits for income/refund, debits otherwise.
-        natural = or_(and_(Txn.kind.in_(("income", "refund")), Txn.direction == "credit"),
-                      and_(Txn.kind.not_in(("income", "refund")), Txn.direction == "debit"))
-        amount, where = case((natural, Txn.amount), else_=-Txn.amount), true()
-    else:
-        # Spend: spend/fee/cash debits plus card bills (card spend until cards are itemised),
-        # minus refund credits that are not reversal pairs.
-        amount = case((Txn.direction == "debit", Txn.amount), else_=-Txn.amount)
-        where = or_(and_(Txn.direction == "debit", or_(Txn.kind.in_(("spend", "fee", "cash")), Txn.bucket == "card")),
-                    and_(Txn.direction == "credit", Txn.kind == "refund", Txn.bucket.is_distinct_from("excluded")))
-    base = (
-        select(_period_sql(granularity, shift).label("period_start"), _series_key(group_by).label("key"),
-               amount.label("amount"))
-        .outerjoin(Category, Category.id == Txn.category_id)
-        .where(Txn.member_id == member_id, Txn.occurred_at >= grid[0][0], Txn.occurred_at <= grid[-1][1], where)
-        .subquery()
-    )
-    rows = s.execute(select(base.c.period_start, base.c.key, func.sum(base.c.amount).label("amount"),
-                            func.count().label("n")).group_by(base.c.period_start, base.c.key)).all()
-
+    period = _period_sql(granularity, shift).label("period_start")
+    in_range = and_(Txn.member_id == member_id, Txn.occurred_at >= grid[0][0], Txn.occurred_at <= grid[-1][1])
     cells: dict[str, dict[date, list]] = defaultdict(dict)
-    for r in rows:
-        cells[r.key][r.period_start] = [r.amount, r.n]
 
-    def merge(keys: list[str]) -> dict[date, list]:
-        out: dict[date, list] = {}
-        for k in keys:
-            for ps, (a, n) in cells.get(k, {}).items():
-                o = out.setdefault(ps, [ZERO, 0])
-                o[0] += a
-                o[1] += n
-        return out
+    def add(key: str, ps: date, amount: Decimal, n: int) -> None:
+        cell = cells[key].setdefault(ps, [ZERO, 0])
+        cell[0] += amount
+        cell[1] += n
 
     if group_by == "total":
-        cells["total"] = merge(["committed", "discretionary"])
-        keys = ["total", "committed", "discretionary"]
+        base = (select(period, _measure().label("measure"), _committed().label("committed"),
+                       (Txn.kind == "refund").label("refund"), Txn.amount)
+                .where(in_range).subquery())
+        rows = s.execute(
+            select(base.c.period_start, base.c.measure, base.c.committed, base.c.refund,
+                   func.sum(base.c.amount).label("amount"), func.count().label("n"))
+            .where(base.c.measure.is_not(None))
+            .group_by(base.c.period_start, base.c.measure, base.c.committed, base.c.refund)
+        ).all()
+        for r in rows:
+            if r.measure == "expense":
+                add("total", r.period_start, r.amount, r.n)
+                add("committed" if r.committed else "discretionary", r.period_start, r.amount, r.n)
+            else:
+                add(r.measure, r.period_start, r.amount, r.n)
+                if r.measure == "income" and r.refund:
+                    add("refunds", r.period_start, r.amount, r.n)
+        keys = ["total", "committed", "discretionary", "income", "refunds", "invested"]
     else:
+        if group_by == "kind":
+            # Each kind in its natural direction: credits for income/refund, debits otherwise.
+            natural = or_(and_(Txn.kind.in_(("income", "refund")), Txn.direction == "credit"),
+                          and_(Txn.kind.not_in(("income", "refund")), Txn.direction == "debit"))
+            amount, where, key = case((natural, Txn.amount), else_=-Txn.amount), true(), Txn.kind
+        else:
+            amount, where = Txn.amount, is_expense()
+            key = (func.coalesce(Category.name, literal_column("'Uncategorized'")) if group_by == "category"
+                   else func.coalesce(Txn.merchant_norm, literal_column("'Unknown'")))
+        base = (select(period, key.label("key"), amount.label("amount"))
+                .outerjoin(Category, Category.id == Txn.category_id).where(in_range, where).subquery())
+        rows = s.execute(select(base.c.period_start, base.c.key, func.sum(base.c.amount).label("amount"),
+                                func.count().label("n")).group_by(base.c.period_start, base.c.key)).all()
+        for r in rows:
+            add(r.key, r.period_start, r.amount, r.n)
         ranked = sorted(cells, key=lambda k: (-sum(v[0] for v in cells[k].values()), k))
         keys = ranked[:limit]
         if len(ranked) > limit:
-            cells["Other"] = merge(ranked[limit:])
+            for k in ranked[limit:]:
+                for ps, (a, n) in cells[k].items():
+                    add("Other", ps, a, n)
             keys.append("Other")
     series = []
     for k in keys:
