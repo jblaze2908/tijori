@@ -1,0 +1,25 @@
+# secrets and real personal data never enter git
+.env
+.env.*
+!.env.example
+data/
+samples/
+*.pdf
+*.local.*
+prototype/data.local.js
+# build/runtime
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+dist/
+.pytest_cache/
+.DS_Store
+
+# prototype hard-codes real balances/account masks; the real UI lives in web/
+prototype/
+.ruff_cache/
+.mypy_cache/
+
+# Plan of record holds personal account details; stays local (see memory)
+PLAN.md

@@ -1,0 +1,17 @@
+[Unit]
+Description=Verify and deploy Tijori
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/tijori
+Environment=DEPLOY_DIR=/opt/tijori
+Environment=TIJORI_ENV_FILE=/etc/tijori/tijori.env
+Environment=DEPLOY_BRANCH=main
+# Image builds plus the e2e gate can take several minutes on 2 vCPU.
+TimeoutStartSec=25min
+NoNewPrivileges=true
+PrivateTmp=true
+ExecStart=/opt/tijori/deploy/pull-update.sh

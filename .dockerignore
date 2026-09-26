@@ -1,0 +1,18 @@
+# Build context is the repo root; send only what the image needs, and never real data.
+.git
+**/.env
+**/.env.*
+!**/.env.example
+**/*.pdf
+**/*.local.*
+data/
+samples/
+prototype/
+PLAN.md
+docs/
+**/__pycache__
+**/.pytest_cache
+api/.venv
+api/uv.lock
+web/node_modules
+web/dist

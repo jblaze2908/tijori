@@ -1,0 +1,25 @@
+[project]
+name = "tijori"
+version = "0.1.0"
+description = "Self-hosted family finance autopilot: backend API, parsers and classifier"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.13",
+    # SecretBox (AES-256-GCM envelope); approved by Jai, pinned exactly.
+    "cryptography==50.0.1",
+    "fastapi>=0.115",
+    "psycopg[binary]>=3.2",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "sqlalchemy>=2.0.36",
+    "uvicorn>=0.32",
+]
+
+
+[tool.uv]
+# Run from source (`python -m tijori.cli`); no build backend needed.
+package = false
+# Release-age cooldown: nothing published in the 7 days before 2026-09-26.
+exclude-newer = "2026-09-19T00:00:00Z"
+

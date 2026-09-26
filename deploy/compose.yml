@@ -1,0 +1,111 @@
+# Tijori on host, from the repo root (deploy/pull-update.sh does this):
+#   docker compose -f deploy/compose.yml --env-file /etc/tijori/tijori.env up --detach --build --remove-orphans
+# Secrets come only from the env file (chmod 600, never committed); deploy/.env.example lists the names.
+name: tijori
+
+services:
+  db:
+    image: postgres:17.11@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tijori
+      POSTGRES_USER: tijori_owner
+      POSTGRES_PASSWORD: ${TIJORI_OWNER_DB_PASSWORD:?set in .env}
+      # Read once by the init script to create the runtime role.
+      TIJORI_APP_DB_PASSWORD: ${TIJORI_APP_DB_PASSWORD:?set in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init-app-role.sh:/docker-entrypoint-initdb.d/10-app-role.sh:ro
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tijori_owner -d tijori"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: migrations run as the owner role before the API starts (PLAN §11).
+  migrate:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: runtime
+    image: tijori-api:local
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      TIJORI_ADMIN_DATABASE_URL: postgresql+psycopg://tijori_owner:${TIJORI_OWNER_DB_PASSWORD}@db:5432/tijori
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [backend]
+    restart: "no"
+
+  api:
+    image: tijori-api:local
+    restart: unless-stopped
+    environment:
+      TIJORI_ENV: prod
+      # Runtime role: no superuser, no BYPASSRLS, so row-level security always applies.
+      TIJORI_DATABASE_URL: postgresql+psycopg://tijori_app:${TIJORI_APP_DB_PASSWORD}@db:5432/tijori
+      # Google sign-in; the api refuses to start in prod without these.
+      TIJORI_PUBLIC_URL: ${TIJORI_PUBLIC_URL:-https://tijori.example.com}
+      TIJORI_OIDC_CLIENT_ID: ${TIJORI_OIDC_CLIENT_ID:?set in the env file}
+      TIJORI_OIDC_CLIENT_SECRET: ${TIJORI_OIDC_CLIENT_SECRET:?set in the env file}
+      TIJORI_ALLOWED_EMAILS: ${TIJORI_ALLOWED_EMAILS:-}
+      # SecretBox master key (base64 of 32 bytes); _OLD only while rotating.
+      TIJORI_MASTER_KEY: ${TIJORI_MASTER_KEY:?set in the env file}
+      TIJORI_MASTER_KEY_OLD: ${TIJORI_MASTER_KEY_OLD:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - blobs:/data/blobs
+    # docker0 gateway only (not public): Traefik reaches host services here, same as brain.
+    ports:
+      - "172.17.0.1:8310:8000"
+    networks: [backend, edge]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # Traefik/the SSO proxy route: placeholders only. Enabling it is a network change, confirmed
+    # with Jai when it is made (PLAN §5). Alternative to the loopback port: join the proxy's network.
+    # labels:
+    #   - traefik.enable=true
+    #   - traefik.docker.network=<proxy-network>
+    #   - traefik.http.routers.tijori.rule=Host(`tijori.example.com`)
+    #   - traefik.http.routers.tijori.entrypoints=websecure
+    #   - traefik.http.routers.tijori.tls=true
+    #   - traefik.http.services.tijori.loadbalancer.server.port=8000
+
+  # Placeholder for the M1 pipeline (collect → parse → resolve → classify → reconcile → notify).
+  # Behind a profile so `up` does not start it; it will need an egress network for Gmail.
+  worker:
+    image: tijori-api:local
+    profiles: ["worker"]
+    command: ["python", "-c", "raise SystemExit('tijori-worker is not implemented until M1')"]
+    environment:
+      TIJORI_ENV: prod
+      TIJORI_DATABASE_URL: postgresql+psycopg://tijori_app:${TIJORI_APP_DB_PASSWORD}@db:5432/tijori
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - blobs:/data/blobs
+    networks: [backend]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"
+
+networks:
+  # No route in or out: Postgres is reachable only by Tijori's own containers.
+  backend:
+    internal: true
+  # The api's published port needs a non-internal network; only the api joins it.
+  edge: {}
+
+volumes:
+  pgdata:
+  blobs:

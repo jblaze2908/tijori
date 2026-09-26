@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for Tijori updates
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+RandomizedDelaySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

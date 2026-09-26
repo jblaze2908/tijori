@@ -1,0 +1,108 @@
+"""Shared helpers for the service layer: dates in IST, the txn read shape, masking, audit."""
+
+import hashlib
+import re
+from datetime import UTC, date, datetime, timedelta, timezone
+from typing import Any
+
+from sqlalchemy import Select, select
+from sqlalchemy.orm import Session
+
+from tijori.classify.merchants import MERCHANT_QR_HANDLES
+from tijori.db import MemberContext
+from tijori.models import Account, AuditLog, Category, Txn
+from tijori.money import fmt
+
+# India has no DST, so a fixed offset is exact and needs no tz database in the image.
+IST = timezone(timedelta(hours=5, minutes=30), "Asia/Kolkata")
+
+
+def sha256_hex(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def today_ist() -> date:
+    return datetime.now(IST).date()
+
+
+def month_bounds(month: str) -> tuple[date, date]:
+    """[first day, first day of next month) for 'YYYY-MM'."""
+    y, m = (int(p) for p in month.split("-"))
+    return date(y, m, 1), date(y + (m == 12), m % 12 + 1, 1)
+
+
+def previous_month(month: str) -> str:
+    y, m = (int(p) for p in month.split("-"))
+    return f"{y - (m == 1)}-{(m - 2) % 12 + 1:02d}"
+
+
+def account_label(institution: str | None, name: str | None, mask: str | None) -> str | None:
+    if institution is None:
+        return None
+    return f"{institution} ••{mask}" if mask else (name or institution)
+
+
+def is_person_handle(vpa: str | None, payee_key: str | None) -> bool:
+    if not vpa or (payee_key or "").startswith("brand:"):
+        return False
+    return not MERCHANT_QR_HANDLES.match(vpa)
+
+
+def mask_handle(vpa: str) -> str:
+    local, _, domain = vpa.partition("@")
+    masked = local[:2] + "•••"
+    return f"{masked}@{domain}" if domain else masked
+
+
+def txn_query() -> Select[Any]:
+    return (
+        select(Txn, Category.name.label("category_name"), Account.institution, Account.name.label("account_name"),
+               Account.kind.label("account_kind"), Account.mask)
+        .outerjoin(Category, Category.id == Txn.category_id)
+        .outerjoin(Account, Account.id == Txn.account_id)
+    )
+
+
+def account_ref(account_id: int | None, institution: str | None, name: str | None, kind: str | None,
+                mask: str | None) -> dict[str, Any] | None:
+    if account_id is None:
+        return None
+    return {"id": account_id, "institution": institution, "name": name,
+            "label": account_label(institution, name, mask), "kind": kind, "mask": mask}
+
+
+def txn_out(row: Any) -> dict[str, Any]:
+    """API shape of one txn. A person's UPI handle is masked, in `vpa` and inside the narration."""
+    t: Txn = row.Txn
+    vpa, narration = t.vpa, t.narration
+    if vpa and is_person_handle(vpa, t.payee_key):
+        local = vpa.partition("@")[0]
+        if narration and len(local) >= 3:
+            narration = re.sub(re.escape(local), mask_handle(local), narration, flags=re.I)
+        vpa = mask_handle(vpa)
+    return {
+        "id": t.id, "occurred_at": t.occurred_at, "posted_at": t.posted_at, "amount": fmt(t.amount),
+        "currency": t.currency, "direction": t.direction, "kind": t.kind, "merchant": t.merchant_norm,
+        "counterparty": t.counterparty, "vpa": vpa, "payee_key": t.payee_key, "narration": narration,
+        "account": account_ref(t.account_id, row.institution, row.account_name, row.account_kind, row.mask),
+        "category": {"id": t.category_id, "name": row.category_name} if t.category_id is not None else None,
+        "bucket": t.bucket, "classified_by": t.classified_by, "rule_id": t.rule_id,
+        "review_reason": t.review_reason, "status": t.status, "sources": list(t.sources or []),
+        "notes": t.notes, "tags": list(t.tags or []),
+    }
+
+
+def audit(s: Session, ctx: MemberContext, actor: str, action: str, target: str | None,
+          detail: dict[str, Any] | None = None) -> None:
+    s.add(AuditLog(member_id=ctx.member_id, actor=actor, action=action, target=target,
+                   at=datetime.now(UTC), detail_json=detail or {}))
+
+
+def category_by_ref(s: Session, ctx: MemberContext, category_id: int | None, name: str | None) -> Category | None:
+    """A category visible to the member (RLS hides other households), by id or by name."""
+    if category_id is not None:
+        return s.get(Category, category_id)
+    return s.scalars(
+        select(Category).where(Category.household_id == ctx.household_id, Category.name == name)
+        .order_by(Category.member_id.is_(None)).limit(1)
+    ).first()
