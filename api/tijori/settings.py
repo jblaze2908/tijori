@@ -51,8 +51,10 @@ class Settings(BaseSettings):
     @field_validator("master_key", "master_key_old")
     @classmethod
     def _key_shape(cls, v: SecretStr | None) -> SecretStr | None:
-        if v is not None:
-            parse_master_key(v.get_secret_value())  # ValueError names the rule, never the value
+        # Compose passes unset optional keys as "", which means "no key", not a malformed one.
+        if v is None or not v.get_secret_value():
+            return None
+        parse_master_key(v.get_secret_value())  # ValueError names the rule, never the value
         return v
 
     @model_validator(mode="after")
