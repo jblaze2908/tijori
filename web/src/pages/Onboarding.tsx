@@ -3,7 +3,7 @@ import { BrandMark } from "../components/Icons";
 import { Loading } from "../components/ui";
 import { dataOf, read } from "../lib/api";
 import { navigate } from "../lib/router";
-import { finishOnboarding, MAIL_ERROR, saveStep, setup, STEP_LABEL, STEPS, type Onboarding as OnboardingState, type Step } from "../lib/setup";
+import { finishOnboarding, mailErrorText, saveStep, setup, STEP_LABEL, STEPS, type Onboarding as OnboardingState, type Step } from "../lib/setup";
 import { useStore } from "../lib/useStore";
 import { LabelSetup, MailConnect } from "./setup/mail";
 import { AccountsSettings, ProfileForm } from "./setup/profile";
@@ -142,7 +142,7 @@ function MailStep({ onContinue }: { onContinue: () => void }) {
           </div>
         ) : (
           <div className="result bad" role="status" key={s.id}>
-            {s.email} is added but {s.status === "untested" ? "not tested yet" : `failing: ${s.last_error_code ? MAIL_ERROR[s.last_error_code] : "the last test didn't pass"}`} Test or replace its password in Settings → Mail sources.
+            {s.email} is added but {s.status === "untested" ? "not tested yet" : `failing: ${mailErrorText(s.last_error_code)}`} Test or replace its password in Settings → Mail sources.
           </div>
         ),
       )}

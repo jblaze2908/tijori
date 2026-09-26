@@ -59,7 +59,11 @@ export type MailError =
   | "timeout"
   | "connect_refused"
   | "connect_failed"
-  | "protocol_error";
+  | "protocol_error"
+  | "app_password_required"
+  | "imap_disabled"
+  | "web_login_required"
+  | "rate_limited";
 export interface MailTest {
   ok: boolean;
   message_count: number | null;
@@ -90,7 +94,11 @@ export const PROVIDERS: Record<Provider, { name: string; host: string; port: num
 
 /** docs/api.md error codes; the server never echoes banners or exception text, and neither does the UI. */
 export const MAIL_ERROR: Record<MailError, string> = {
-  auth_failed: "The email or app password was rejected. Create a new app password and paste it again.",
+  auth_failed: "The email or app password was rejected. Check the full email address and paste a freshly created app password.",
+  app_password_required: "This account needs an app password, not your normal password. For Gmail, create one at myaccount.google.com/apppasswords.",
+  imap_disabled: "IMAP is off for this account. In Gmail, open Settings → Forwarding and POP/IMAP, enable IMAP, then test again.",
+  web_login_required: "Your mail provider blocked this sign-in. Open your mail in a browser, approve any security prompt, then test again.",
+  rate_limited: "Your mail provider saw too many attempts. Wait a few minutes, then test again.",
   mailbox_not_found: "Signed in, but there's no label with that name yet. Create it (next step), then check again.",
   dns_failed: "That server name couldn't be found. Check the IMAP server.",
   host_not_public: "That server isn't on the public internet, so Tijori won't connect to it.",
@@ -100,6 +108,10 @@ export const MAIL_ERROR: Record<MailError, string> = {
   connect_failed: "Couldn't connect to the server.",
   protocol_error: "The server answered in a way Tijori didn't expect.",
 };
+
+/** A code from a newer server falls back to a generic line; server text is never shown. */
+export const mailErrorText = (code: string | null) =>
+  (code && Object.hasOwn(MAIL_ERROR, code) && MAIL_ERROR[code as MailError]) || "The test didn't pass. Try again.";
 
 /** docs/api.md auth_error values, from /?auth_error=<reason> after a failed Google sign-in. */
 export const AUTH_ERROR: Record<string, string> = {

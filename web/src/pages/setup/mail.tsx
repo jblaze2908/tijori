@@ -6,7 +6,7 @@ import { dataOf, read } from "../../lib/api";
 import { dayIST, dayShort, plural, timeIST } from "../../lib/format";
 import {
   addMailSource,
-  MAIL_ERROR,
+  mailErrorText,
   preTestMail,
   PROVIDERS,
   removeMailSource,
@@ -23,7 +23,7 @@ const APP_PASSWORD_URL = "https://myaccount.google.com/apppasswords";
 const LABEL = "tijori";
 
 export const testText = (t: MailTest, label: string) =>
-  t.ok ? `Connected. Tijori can see ${plural(t.message_count ?? 0, "message")} in the ${label} label.` : t.error_code ? MAIL_ERROR[t.error_code] : "The test didn't pass. Try again.";
+  t.ok ? `Connected. Tijori can see ${plural(t.message_count ?? 0, "message")} in the ${label} label.` : mailErrorText(t.error_code);
 
 /**
  * Step 2: an IMAP source with an app password. The server tests only saved sources, so this saves, then tests;
@@ -209,7 +209,7 @@ export function MailSources() {
               </div>
               <div className="sub">
                 {s.last_tested_at ? `Last tested ${dayShort(dayIST(s.last_tested_at))}, ${timeIST(s.last_tested_at)}` : "Not tested yet"}
-                {s.last_error_code && <span className="bad"> · {MAIL_ERROR[s.last_error_code]}</span>}
+                {s.last_error_code && <span className="bad"> · {mailErrorText(s.last_error_code)}</span>}
               </div>
               {tests[s.id] && (
                 <div className={`result ${tests[s.id]!.ok ? "ok" : "bad"}`} role="status">
