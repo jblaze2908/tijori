@@ -10,7 +10,7 @@ import urllib.request
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 
@@ -31,7 +31,7 @@ def _held(engine: Engine, members: list[MemberContext]) -> set[str]:
     return isins
 
 
-def parse_navall(text: str, wanted: set[str]) -> list[tuple[str, date, Decimal]]:
+def parse_navall(text: str, wanted: set[str]) -> list[tuple[str, date, Decimal, str]]:
     out = []
     for line in text.splitlines():
         parts = line.split(";")
@@ -43,7 +43,7 @@ def parse_navall(text: str, wanted: set[str]) -> list[tuple[str, date, Decimal]]
             continue
         for isin in (parts[1].strip(), parts[2].strip()):
             if isin in wanted:
-                out.append((isin, day, nav))
+                out.append((isin, day, nav, parts[3].strip()))
     return out
 
 
@@ -61,8 +61,16 @@ def refresh_navs(engine: Engine, members: list[MemberContext], today: date | Non
         text = r.read(8_000_000).decode("utf-8", errors="replace")
     rows = parse_navall(text, wanted)
     with member_session(engine, members[0]) as s:
-        for isin, day, nav in rows:
+        for isin, day, nav, _ in rows:
             s.execute(pg_insert(Price).values(isin_or_symbol=isin, date=day, close=nav, source="amfi").on_conflict_do_nothing())
         s.commit()
+    # Statements wrap scheme names across lines; AMFI's full name replaces the fragment.
+    names = {isin: name for isin, _, _, name in rows if name}
+    for ctx in members:
+        with member_session(engine, ctx) as s:
+            for isin, name in names.items():
+                s.execute(update(Holding).where(Holding.member_id == ctx.member_id, Holding.isin == isin)
+                          .values(name=name[:160]))
+            s.commit()
     log.info("NAVs stored: %s of %s held schemes", len(rows), len(wanted))
     return len(rows)

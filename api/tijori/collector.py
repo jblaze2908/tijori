@@ -35,8 +35,9 @@ from tijori.blobs import store_blob
 from tijori.db import MemberContext, make_engine, member_session
 from tijori.imap_check import TIMEOUT_S, _public_only, normalize_password, quote_mailbox
 from tijori.mailtext import body_text
-from tijori.models import Holding, MailSource, Price, RawAttachment, RawMessage
+from tijori.models import ComponentValue, Holding, MailSource, Price, RawAttachment, RawMessage
 from tijori.parsers.cams_statement import CamsStatementParser
+from tijori.parsers.cdsl_cas import CdslCasParser
 from tijori.parsers import Message, ParseError, route
 from tijori.parsers.alerts import AlertParser
 from tijori.pdf import PdfError, is_pdf, pdf_to_text
@@ -51,10 +52,11 @@ BATCH = 25
 ACTOR = "collector"
 ALERTS = AlertParser()
 CAMS = CamsStatementParser()
+CAS = CdslCasParser()
 # Which vault password opens a sender's PDFs (the scheme each bank states in its mail).
 SCHEMES: tuple[tuple[str, str], ...] = (
-    ("hdfcbank", "hdfc"), ("icici", "icici_card"), ("sbi", "sbi"), ("camsonline", "pan"), ("groww", "pan"),
-    ("kfintech", "pan"),
+    ("hdfcbank", "hdfc"), ("hdfcbank", "hdfc_custid"), ("icici", "icici_card"), ("sbi", "sbi"), ("camsonline", "pan"), ("groww", "pan"),
+    ("kfintech", "pan"), ("cdsl", "pan"),
 )
 
 
@@ -126,23 +128,64 @@ def process(s: Session, ctx: MemberContext, settings: Settings, source_id: int, 
                     mail_source_id=source_id, mail_uid=uid)
     s.add(rm)
     s.flush()
+    atts = []
+    for name, data in _pdfs(msg):
+        digest, bref = store_blob(settings.blob_dir, ctx.member_id, data)
+        att = RawAttachment(member_id=ctx.member_id, raw_message_id=rm.id, filename=name[:300], sha256=digest, blob_ref=bref)
+        s.add(att)
+        atts.append((att, data))
+    s.flush()
+    rm.parse_status = _route(s, ctx, settings, rm, msg, atts)
+    return rm.parse_status
+
+
+def _route(s: Session, ctx: MemberContext, settings: Settings, rm: RawMessage, msg: EmailMessage,
+           atts: list[tuple[RawAttachment, bytes]]) -> str:
     status = "ignored"
-    body = body_text(msg)
-    m = Message(text=body, sender=sender, subject=subject)
+    m = Message(text=body_text(msg), sender=rm.sender, subject=rm.subject)
     if ALERTS.match(m):
         clf = load_classifier(s, ctx)
         for obs in ALERTS.parse(m):
             ingest_alert(s, ctx, clf, obs, rm, ALERTS.name, ALERTS.version)
         cards.link_card_payments(s, ctx.member_id)
         status = "parsed"
-    for name, data in _pdfs(msg):
-        digest, bref = store_blob(settings.blob_dir, ctx.member_id, data)
-        att = RawAttachment(member_id=ctx.member_id, raw_message_id=rm.id, filename=name[:300], sha256=digest, blob_ref=bref)
-        s.add(att)
-        s.flush()
-        status = _statement(s, ctx, settings, sender, rm, att, data) or status
-    rm.parse_status = status
+    for att, data in atts:
+        status = _statement(s, ctx, settings, rm.sender or "", rm, att, data) or status
     return status
+
+
+RETRY_S = 3600
+RETRY = ("failed", "parser_needed", "needs_password")
+_last_retry: dict[int, float] = {}
+
+
+def retry_stored(engine: Engine, ctx: MemberContext, settings: Settings) -> dict[str, int]:
+    """Hourly: re-route stored messages a parser or password was missing for. Reads blobs only, no IMAP."""
+    if time.monotonic() - _last_retry.get(ctx.member_id, -RETRY_S) < RETRY_S:
+        return {}
+    _last_retry[ctx.member_id] = time.monotonic()
+    with member_session(engine, ctx) as s:
+        ids = list(s.scalars(select(RawMessage.id).where(RawMessage.member_id == ctx.member_id,
+                                                         RawMessage.mail_source_id.is_not(None),
+                                                         RawMessage.parse_status.in_(RETRY))))
+    counts: dict[str, int] = {}
+    for rid in ids:
+        with member_session(engine, ctx) as s:
+            try:
+                rm = s.get(RawMessage, rid)
+                msg = email.message_from_bytes((settings.blob_dir / rm.blob_ref).read_bytes(), policy=policy.default)
+                atts = [(a, (settings.blob_dir / a.blob_ref).read_bytes()) for a in s.scalars(
+                    select(RawAttachment).where(RawAttachment.member_id == ctx.member_id, RawAttachment.raw_message_id == rid))]
+                st = _route(s, ctx, settings, rm, msg, atts)  # type: ignore[arg-type]
+                if st != rm.parse_status:
+                    rm.parse_status = st
+                s.commit()
+            except Exception:
+                s.rollback()
+                log.exception("retry failed: raw_message=%s", rid)
+                st = "failed"
+        counts[st] = counts.get(st, 0) + 1
+    return counts
 
 
 def _statement(s: Session, ctx: MemberContext, settings: Settings, sender: str, rm: RawMessage, att: RawAttachment,
@@ -156,6 +199,10 @@ def _statement(s: Session, ctx: MemberContext, settings: Settings, sender: str, 
             continue
     if text_ is None:
         return "needs_password"
+    if CAS.match(Message(text=text_)):
+        cas = CAS.parse(Message(text=text_))
+        _components(s, ctx, cas.components, cas.as_of)
+        return _holdings(s, ctx, cas.lines, "cdsl_cas")
     if CAMS.match(Message(text=text_)):
         return _holdings(s, ctx, CAMS.parse_holdings(Message(text=text_)))
     parser = route(Message(text=text_, sender=sender, filename=att.filename))
@@ -189,15 +236,21 @@ def _store_failed(engine: Engine, ctx: MemberContext, settings: Settings, source
         s.commit()
 
 
-def _holdings(s: Session, ctx: MemberContext, lines: list[Any]) -> str:
+def _components(s: Session, ctx: MemberContext, values: tuple[tuple[str, Any], ...], as_of: Any) -> None:
+    for key, amount in values:
+        cv = pg_insert(ComponentValue).values(member_id=ctx.member_id, key=key, amount=amount, as_of=as_of, source="statement")
+        s.execute(cv.on_conflict_do_update(constraint="uq_component_value_member_id_key_as_of", set_={"amount": cv.excluded.amount}))
+
+
+def _holdings(s: Session, ctx: MemberContext, lines: list[Any], source: str = "cams") -> str:
     """Units per scheme as of the statement's NAV date, and that NAV as a price point. Idempotent."""
     for h in lines:
         seen = s.scalar(select(Holding.id).where(Holding.member_id == ctx.member_id, Holding.isin == h.isin,
                                                  Holding.as_of == h.as_of, Holding.name == h.name))
         if seen is None:
-            s.add(Holding(member_id=ctx.member_id, isin=h.isin, name=h.name, units=h.units, as_of=h.as_of, source="cams"))
+            s.add(Holding(member_id=ctx.member_id, isin=h.isin, name=h.name, units=h.units, as_of=h.as_of, source=source))
         if h.isin:
-            s.execute(pg_insert(Price).values(isin_or_symbol=h.isin, date=h.as_of, close=h.nav, source="cams")
+            s.execute(pg_insert(Price).values(isin_or_symbol=h.isin, date=h.as_of, close=h.nav, source=source[:16])
                       .on_conflict_do_nothing())
     return "parsed"
 
@@ -268,6 +321,9 @@ def run_once(engine: Engine, settings: Settings) -> None:
             counts = poll_box(engine, ctx, settings, b)
             if counts:
                 log.info("member=%s source=%s %s", ctx.member_id, b.id, counts)
+        again = retry_stored(engine, ctx, settings)
+        if again:
+            log.info("member=%s retried %s", ctx.member_id, again)
 
 
 def main() -> None:

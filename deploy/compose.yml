@@ -85,6 +85,8 @@ services:
     image: tijori-api:local
     command: ["python", "-m", "tijori.collector"]
     restart: unless-stopped
+    healthcheck:
+      disable: true  # the image's check probes the api's HTTP port; the worker serves none
     environment:
       TIJORI_ENV: prod
       TIJORI_DATABASE_URL: postgresql+psycopg://tijori_app:${TIJORI_APP_DB_PASSWORD}@db:5432/tijori

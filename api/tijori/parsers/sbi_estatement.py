@@ -11,9 +11,9 @@ from datetime import datetime
 from tijori.money import parse_amount
 from tijori.parsers.base import Message, Observation, ParseError, Statement, StatementSummary
 
-_N = r"(?:[\d,]+\.\d\d|-)"
+_N = r"(?:[\d,]+\.\d\d|-|0)"  # older layouts print "-" for an empty cell, newer ones "0"
 _ROW = re.compile(rf"^\s*(?P<date>\d\d-\d\d-\d\d)\s+(?P<ref>.+?)\s{{2,}}(?P<chq>\S+)\s+(?P<cr>{_N})\s+(?P<dr>{_N})\s+(?P<bal>[\d,]+\.\d\d)\s*$")
-_PRIMARY = re.compile(r"^\s*P\s+X+(\d{4})\s+OPEN", re.M)
+_PRIMARY = re.compile(r"^\s*P\s+(?:[A-Z ]+?\s+)?X+(\d{4})\s+OPEN", re.M)  # newer layouts add "SINGLE"
 _SECTION = re.compile(r"^\s*X+(\d{4})\s*$", re.M)
 _OPEN = re.compile(r"Balance on (\d\d-\d\d-\d\d):\s+([\d,]+\.\d\d)")
 _UPI_REF = re.compile(r"UPI/(?:DR|CR)/(\d{9,})/")  # the netbanking parser keys UPI lines by this
@@ -47,16 +47,18 @@ class SbiEstatementParser:
             mask = sec[1]
             if mask not in primary:
                 continue
-            op = _OPEN.search(t, sec.end()); cl = _CLOSE.search(t, sec.end())
+            nxt = _SECTION.search(t, sec.end())
+            end = nxt.start() if nxt else len(t)
+            op = _OPEN.search(t, sec.end(), end); cl = _CLOSE.search(t, sec.end(), end)
             if not (op and cl):
-                raise ParseError("SBI e-statement: opening or closing balance not found")
+                continue  # no transactions this month: SBI prints no balance lines for the account
             lines: list[Observation] = []
             for raw in t[op.end():cl.start()].splitlines():
                 m = _ROW.match(raw)
                 if not m:
                     continue
-                cr = parse_amount(m["cr"]) if m["cr"] != "-" else None
-                dr = parse_amount(m["dr"]) if m["dr"] != "-" else None
+                cr = parse_amount(m["cr"]) if m["cr"] not in ("-", "0") else None
+                dr = parse_amount(m["dr"]) if m["dr"] not in ("-", "0") else None
                 narr = re.sub(r"\s+", " ", m["ref"]).strip()
                 upi = _UPI_REF.search(narr)
                 lines.append(Observation(occurred_at=_d(m["date"]), amount=dr or cr, direction="debit" if dr else "credit",

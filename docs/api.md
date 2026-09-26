@@ -791,7 +791,8 @@ The `worker` service (`python -m tijori.collector`) polls each connected mailbox
   - Statement PDFs go to the statement parsers: HDFC card, ICICI card, HDFC combined email statement, SBI e-statement, plus the two netbanking formats.
   - CAMS account statements set holdings (units as of the NAV date).
 - **Matching.** An alert becomes a `pending` txn, unless a txn on the same account with the same amount and direction exists within ±3 days, in which case it's attached as a sighting. A statement line matches first on its key. Otherwise it matches the same line from another statement format (same date, amount and direction), or an alert-only txn within ±3 days, which takes the statement's date, narration and key.
-- **Passwords.** Statement PDFs open with vault entries named `statement_password:scheme:<hdfc|icici_card|sbi|pan>` (the scheme each bank states in its mail), or any `statement_password:account:<id>`.
+- **Passwords.** Statement PDFs open with vault entries named `statement_password:scheme:<hdfc|hdfc_custid|icici_card|sbi|pan>` (the scheme each bank states in its mail), or any `statement_password:account:<id>`. Stored messages that were `failed`, `parser_needed` or `needs_password` are re-read hourly, so a new parser or password picks them up.
+- **CDSL e-CAS** (monthly) sets holdings for every demat ISIN and MF folio, and the `stocks` and `mf` net-worth components; AMFI's scheme names replace the wrapped names from the statement.
 - **Net worth.** SBI e-statements print the PPF balance and HDFC statements the FD total. Both are stored as `component_value` with `source: "statement"`.
 - **Prices.** Once a day the worker fetches AMFI's NAVAll.txt and stores NAVs for the ISINs you hold.
 
