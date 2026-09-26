@@ -35,7 +35,14 @@ def _public_only(host: str, port: int) -> None:
             raise PermissionError("host_not_public")
 
 
+def normalize_password(host: str, password: str) -> str:
+    """Gmail shows App Passwords as 'abcd efgh ijkl mnop' but they never contain spaces; a pasted
+    copy with the spaces fails LOGIN."""
+    return "".join(password.split()) if host == PRESETS["gmail"][0] else password
+
+
 def check(host: str, port: int, username: str, password: str, label: str) -> ImapResult:
+    password = normalize_password(host, password)
     try:
         _public_only(host, port)
         with imaplib.IMAP4_SSL(host, port, ssl_context=ssl.create_default_context(), timeout=TIMEOUT_S) as conn:
