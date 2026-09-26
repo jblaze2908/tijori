@@ -3,31 +3,36 @@ import { CardHead } from "../components/ui";
 import { Link, navigate } from "../lib/router";
 import { signOut } from "../lib/setup";
 import { MailSources } from "./setup/mail";
-import { AccountsSettings, ProfileForm } from "./setup/profile";
-import { FirstUpload, HouseholdPanel, StatementPasswords } from "./setup/secrets";
+import { ProfileForm } from "./setup/profile";
+import { HouseholdPanel, StatementPasswords } from "./setup/secrets";
+import { Rules, Sources } from "./Sources";
 
 export const SECTIONS = [
   ["general", "General"],
-  ["mail", "Mail sources"],
-  ["accounts", "Accounts"],
+  ["mail", "Mail"],
+  ["sources", "Accounts & sources"],
   ["passwords", "Statement passwords"],
-  ["upload", "Upload a statement"],
   ["household", "Household"],
+  ["rules", "Categories & rules"],
 ] as const;
-export type Section = (typeof SECTIONS)[number][0];
+export type Section = (typeof SECTIONS)[number][0] | "accounts" | "upload";
 
 export function Settings({ section }: { section: Section }) {
   const out = useAction();
+  const current = section === "accounts" || section === "upload" ? "sources" : section;
   return (
-    <>
-      <nav className="subnav" aria-label="Settings">
+    <div className="settings-wrap">
+      <nav className="subnav2" aria-label="Settings">
         {SECTIONS.map(([k, l]) => (
-          <Link key={k} href={`/settings/${k}`} className={k === section ? "on" : ""} aria-current={k === section ? "page" : undefined}>
+          <Link key={k} href={`/settings/${k}`} className={k === current ? "on" : ""} aria-current={k === current ? "page" : undefined}>
             {l}
           </Link>
         ))}
       </nav>
-      <div className="card settings-card">
+      <div className="content">
+      {current === "sources" && <Sources />}
+      {current === "rules" && <Rules />}
+      {!["sources", "rules"].includes(current) && <div className="card settings-card">
         {section === "general" && (
           <>
             <CardHead title="Profile" />
@@ -61,31 +66,22 @@ export function Settings({ section }: { section: Section }) {
             <MailSources />
           </>
         )}
-        {section === "accounts" && (
-          <>
-            <CardHead title="Accounts" />
-            <AccountsSettings />
-          </>
-        )}
+
         {section === "passwords" && (
           <>
             <CardHead title="Statement passwords" x="write-only" />
             <StatementPasswords />
           </>
         )}
-        {section === "upload" && (
-          <>
-            <CardHead title="Upload a statement" x="PDF or text export" />
-            <FirstUpload />
-          </>
-        )}
+
         {section === "household" && (
           <>
             <CardHead title="Household" />
             <HouseholdPanel />
           </>
         )}
+      </div>}
       </div>
-    </>
+    </div>
   );
 }

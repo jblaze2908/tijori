@@ -164,16 +164,21 @@ export interface ApiTransactionDetail {
 export interface ApiRecurring {
   id: string;
   merchant: string;
-  cadence: string;
+  cadence: "weekly" | "monthly" | "quarterly" | "yearly";
   amount_expected: Decimal;
   next_due: ISODate;
+  last_at: ISODate;
+  count: number;
+  category: string | null;
+  account: string | null;
 }
 export interface ServerAlert {
   id: string;
-  kind: string;
+  kind: "duplicate" | "bounce_risk" | "price_increase" | string;
   severity: Health;
   title: string;
   detail: string;
+  txn_ids?: number[];
 }
 
 // ---------- wire: docs/api.md, continued ----------
@@ -190,6 +195,8 @@ export interface Account {
   last_txn_at: ISODate | null;
   last_statement: { period_start: ISODate; period_end: ISODate; reconciled: boolean; diff: Decimal } | null;
   has_statement_password: boolean;
+  /** Balance printed after the newest statement line. */
+  balance: { amount: Decimal; as_of: ISODate } | null;
   /** Last live alert; null until the collectors land (M1). */
   last_seen_at: string | null;
   coverage_pct: number | null;
@@ -199,6 +206,7 @@ export interface Me {
   email: string;
   role: string;
   household: { id: number; name: string } | null;
+  settings?: { month_start_day: number; local_shop_cap: Decimal };
 }
 export interface ApiTrends {
   granularity: Granularity;
@@ -229,6 +237,12 @@ export interface Transaction {
   rule_id: string | null;
   payee_key: string | null;
   sources: TxnSource[];
+  vpa: string | null;
+  narration: string | null;
+  counterparty: string | null;
+  review_reason: string | null;
+  notes: string | null;
+  tags: string[];
 }
 
 export interface Totals {
@@ -258,6 +272,7 @@ export interface InboxPayee {
   key: string;
   payeeKey: string | null;
   payee: string;
+  vpa: string | null;
   direction: Direction;
   account: string;
   reason: string | null;
@@ -310,4 +325,120 @@ export interface TrendPoint {
   key: string | null;
   amount: Paise;
   count: number;
+}
+
+// ---------- wire + models: transactions page, net worth live, inbox stats, rules, sources ----------
+
+export type Sort = "date_desc" | "date_asc" | "amount_desc" | "amount_asc";
+export type TotalKey = "spend" | "income" | "invest" | "excluded" | "card";
+export interface ApiTxnPage extends ApiPage<ApiTxn> {
+  totals: Record<TotalKey, { amount: Decimal; count: number }>;
+}
+export interface TxnQuery {
+  from?: ISODate;
+  to?: ISODate;
+  q?: string;
+  min?: string;
+  max?: string;
+  accounts?: number[];
+  categories?: string[];
+  kind?: TxnKind;
+  direction?: Direction;
+  sort?: Sort;
+}
+export interface TxnPage {
+  items: Transaction[];
+  total: number;
+  totals: Record<TotalKey, { amount: Paise; count: number }>;
+}
+
+export interface ApiTxnDetail {
+  transaction: ApiTxn;
+  observations: (ApiObservation & { filename: string | null; raw_message_id: number | null })[];
+  links: { kind: string; txn_id: number }[];
+  payee: {
+    payee_key: string;
+    count: number;
+    total: Decimal;
+    history: PayeeHistory[];
+    recent: { id: number; occurred_at: ISODate; amount: Decimal; category: string | null }[];
+  } | null;
+}
+
+export interface LiveComponent {
+  key: string;
+  label: string;
+  asset_class: string;
+  amount: Decimal;
+  share_pct: number;
+  source: "sheet" | "statement" | "manual";
+  as_of: ISODate;
+  stale: boolean;
+  editable: boolean;
+  change_since: Decimal | null;
+}
+export interface LiveNetWorth {
+  as_of: ISODate;
+  net_worth: Decimal | null;
+  liquid: Decimal | null;
+  components: LiveComponent[];
+  by_asset_class: Record<string, Decimal>;
+  changes: { period: "month" | "year" | "fy"; since: ISODate; amount: Decimal | null; pct: number | null }[];
+  history: { date: ISODate; net_worth: Decimal; kind: "snapshot" | "live" }[];
+  months: {
+    start: ISODate;
+    end: ISODate;
+    start_value: Decimal;
+    end_value: Decimal;
+    change: Decimal;
+    cash_change: Decimal | null;
+    contributions: Decimal;
+    market: Decimal | null;
+    live: boolean;
+  }[];
+  projection: { monthly_change: Decimal; basis_months: number; points: { date: ISODate; net_worth: Decimal }[] } | null;
+}
+export interface Holding {
+  name: string;
+  isin: string | null;
+  units: string;
+  units_as_of: ISODate;
+  source: string;
+  price: string | null;
+  price_date: ISODate | null;
+  value: Decimal | null;
+}
+
+export interface InboxStats {
+  month: MonthKey;
+  total: number;
+  automatic: number;
+  by: Record<"rules" | "payee_memory" | "dictionary" | "structural" | "user" | "waiting", number>;
+  rules: number;
+}
+export interface Rule {
+  id: string;
+  scope: "member" | "household";
+  match: Record<string, string | number>;
+  category: string;
+  enabled: boolean;
+  created_by: string;
+  created_at: string;
+  hits: number;
+  last_hit_at: string | null;
+  editable: boolean;
+}
+export interface ParseQueue {
+  unparsed: { sender: string | null; subject: string | null; status: string; count: number; first_seen: string; last_seen: string }[];
+  uploads: {
+    id: number;
+    filename: string | null;
+    received_at: string;
+    status: string;
+    account: string | null;
+    period_start: ISODate | null;
+    period_end: ISODate | null;
+    diff: Decimal | null;
+    reconciled: boolean;
+  }[];
 }

@@ -1,0 +1,368 @@
+/* Tijori UI v1 (Paper file "Tijori — UI v1"): the shell and every main screen. styles.css stays for the setup
+   and settings forms; this file overrides its shell and adds the screen components. Tokens mirror the Paper file. */
+:root {
+  --t3: #8a8a8a; /* lifted from #696969: 12–13px labels must read at a glance */
+  --track: #2a2a2a;
+  --accent-bg: #1d2947;
+  --in-bg: #1c3025;
+  --warn-bg: #332a1b;
+  --bad-bg: #382323;
+  --brass: #e3b04b;
+}
+body { font-size: 14px; line-height: 20px }
+.mono-n { font-family: var(--mono); font-variant-numeric: tabular-nums }
+.faint { color: var(--t3) }
+.muted { color: var(--t2) }
+.good-t { color: var(--in) }
+.bad-t { color: var(--bad) }
+.warn-t { color: var(--warn) }
+.acc-t { color: var(--accent) }
+
+/* shell */
+.app { grid-template-columns: 232px 1fr }
+.side { background: var(--bg); padding: 28px 16px 24px; gap: 32px; border-right: 1px solid var(--line) }
+.side .brand { padding: 0 8px; gap: 10px }
+.side .brand b { font-size: 18px; font-weight: 600; letter-spacing: -.02em }
+.nav a { height: 36px; gap: 12px; color: var(--t2); font-size: 14px; border-radius: 6px }
+.nav a svg { width: 16px; height: 16px }
+.nav a:hover { background: #1b1b1b; color: var(--t1) }
+.nav a.on { background: var(--s2); color: var(--t1); font-weight: 500 }
+.nav a.on svg { color: var(--accent) }
+.nav .badge { background: var(--s4); color: var(--t1); font: 500 12px/16px var(--mono); padding: 2px 7px; border-radius: 10px }
+.sync { display: flex; flex-direction: column; gap: 4px; padding: 12px; border: 1px solid var(--line); border-radius: 6px }
+.sync .l { display: flex; align-items: center; gap: 8px; font-size: 13px; line-height: 16px }
+.sync .l i { width: 6px; height: 6px; border-radius: 3px; background: var(--t3); flex: none }
+.sync .l i.ok { background: var(--in) }
+.sync .l i.err { background: var(--bad) }
+.sync small { font-size: 12px; line-height: 16px; color: var(--t3); padding-left: 14px }
+.who { border: 0; background: none; padding: 0 8px; gap: 10px }
+.who .avatar { background: #3b5b8c; color: #fff }
+.who .grow { flex: 1; min-width: 0 }
+.who b { font-size: 13px; font-weight: 500; line-height: 16px; display: block }
+.who .gear { color: var(--t2); display: grid; place-items: center; width: 28px; height: 28px; border-radius: 6px }
+.who .gear:hover, .who .gear.on { background: var(--s2); color: var(--t1) }
+.who .gear svg { width: 16px; height: 16px }
+
+main { padding: 24px 40px 56px; display: flex; flex-direction: column; gap: 24px }
+.ph { display: flex; align-items: center; gap: 12px; min-height: 40px }
+.ph h1 { margin: 0; font-size: 20px; line-height: 28px; font-weight: 600; letter-spacing: -.01em }
+.ph .sp { flex: 1 }
+.monthpick { display: flex; align-items: center; gap: 4px; padding: 4px; border-radius: 8px; border: 1px solid var(--line-2) }
+.monthpick button { width: 28px; height: 28px; border-radius: 6px; border: 0; background: none; color: var(--t2); cursor: pointer; display: grid; place-items: center }
+.monthpick button:hover:not(:disabled) { background: var(--s2); color: var(--t1) }
+.monthpick button:disabled { color: var(--line-2); cursor: default }
+.monthpick span { font-weight: 500; padding: 0 8px; min-width: 120px; text-align: center }
+.view { padding: 0; max-width: 1360px; display: flex; flex-direction: column; gap: 24px }
+.notice { display: flex; align-items: center; gap: 16px; padding: 12px 16px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--s1) }
+.notice span { flex: 1 }
+
+/* building blocks */
+.panel { background: var(--s1); border-radius: 12px; padding: 20px 24px; min-width: 0; display: flex; flex-direction: column; gap: 16px }
+.panel-h { display: flex; align-items: center; gap: 16px; min-height: 28px }
+.panel-h h2 { margin: 0; font-size: 14px; line-height: 20px; font-weight: 600 }
+.panel-h .x { margin-left: auto; font-size: 12px; line-height: 16px; color: var(--t3) }
+.panel-h a.x, .linkx { color: var(--accent); font-size: 13px; font-weight: 500; white-space: nowrap }
+.lbl { font-size: 12px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; line-height: 16px; color: var(--t2) }
+.foot { font-size: 12px; line-height: 16px; color: var(--t3) }
+.row2 { display: flex; gap: 24px; align-items: stretch }
+.row2 > .grow { flex: 1.7 }
+.row2 > .side2 { flex: 1 }
+.seg { display: inline-flex; padding: 2px; border-radius: 7px; background: var(--bg) }
+.seg button { border: 0; background: none; color: var(--t2); font-size: 13px; line-height: 20px; padding: 2px 10px; border-radius: 5px; cursor: pointer }
+.seg button.on { background: var(--s2); color: var(--t1); font-weight: 500 }
+.seg.lg { padding: 3px; border-radius: 9px; background: var(--s1); border: 1px solid var(--line) }
+.seg.lg button { padding: 5px 12px; border-radius: 6px }
+.chip2 { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px 0 12px; border-radius: 8px; border: 1px solid var(--line-2); background: none; color: var(--t2); font-size: 13px; cursor: pointer; white-space: nowrap }
+.chip2:hover { color: var(--t1) }
+.chip2.on { border-color: var(--accent); background: var(--accent-bg); color: var(--t1) }
+.chip2 .v { font-family: var(--mono); font-weight: 500; color: var(--t1) }
+.chip2 svg { width: 10px; height: 10px; flex: none }
+.pill2 { display: inline-flex; align-items: center; gap: 8px; padding: 4px 10px; border-radius: 14px; background: var(--s2); font-size: 13px; color: var(--t1); border: 0; cursor: pointer }
+.pill2 i { width: 6px; height: 6px; border-radius: 3px; background: var(--accent); flex: none }
+.pill2.bad { background: var(--bad-bg) }
+.pill2.bad i { background: var(--bad) }
+.pill2.warn { background: var(--warn-bg) }
+.pill2.warn i { background: var(--warn) }
+.kindtag { font-size: 11px; font-weight: 500; letter-spacing: .04em; text-transform: uppercase; line-height: 16px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--line-2); color: var(--t2); white-space: nowrap }
+.kindtag.invest { color: var(--c2); border-color: rgba(217, 89, 38, .45) }
+.kindtag.income { color: var(--in); border-color: rgba(133, 200, 154, .45) }
+.kindtag.person { color: var(--t2) }
+.kindtag.mixed { color: var(--warn); border-color: rgba(230, 184, 106, .45) }
+.sq { width: 8px; height: 8px; border-radius: 2px; flex: none; display: inline-block }
+.mg { width: 28px; height: 28px; border-radius: 14px; display: grid; place-items: center; font-size: 12px; font-weight: 600; color: #fff; flex: none }
+.mg.acct { border-radius: 6px; font-size: 11px }
+.mg.unknown { background: none !important; border: 1px dashed #707070; color: var(--t2) }
+.btn2 { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--line-2); background: none; color: var(--t1); font-size: 14px; font-weight: 500; cursor: pointer }
+.btn2:hover { background: var(--s2) }
+.btn2.primary { background: var(--t1); color: var(--bg); border-color: var(--t1) }
+.btn2.primary:hover { background: #fff }
+.btn2:disabled { opacity: .5; cursor: default }
+.btn2.sm { height: 32px; padding: 0 12px; font-size: 13px }
+.btn2 svg { width: 14px; height: 14px }
+.state { color: var(--t3); font-size: 13px; padding: 16px 0 }
+.state button { margin-left: 8px }
+
+/* needs you */
+.needs { display: flex; align-items: center; gap: 20px; padding: 12px 16px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--s1) }
+.needs .items { display: flex; flex-wrap: wrap; gap: 8px; flex: 1 }
+
+/* progress */
+.progress { flex-direction: row; gap: 40px; padding: 24px }
+.progress .stats { width: 300px; flex: none; display: flex; flex-direction: column; gap: 24px }
+.figs { display: flex; flex-direction: column; border-top: 1px solid var(--line) }
+.figs .r { text-align: left; display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line) }
+.figs .r .k { flex: 1; color: var(--t2) }
+.figs .r b { font: 500 16px/24px var(--mono); font-variant-numeric: tabular-nums }
+.figs .r .ln { width: 16px; flex: none; display: flex; align-items: center }
+.progress .chart2 { flex: 1; min-width: 0 }
+.chart2 svg { display: block; width: 100%; height: auto; overflow: visible }
+.chart2 .ax { font: 11px var(--mono); fill: var(--t3) }
+.chart2 .ax.now { fill: var(--t1) }
+.chart2 .grid { stroke: var(--line) }
+
+/* category rows */
+.cats2 { display: flex; flex-direction: column }
+.catrow { display: flex; align-items: center; gap: 16px; height: 44px; border-top: 1px solid var(--line); color: inherit }
+.catrow:hover .n span:first-of-type { color: var(--t1); text-decoration: underline; text-underline-offset: 3px }
+.catrow .n { width: 176px; flex: none; display: flex; align-items: center; gap: 10px; min-width: 0 }
+.catrow .n span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.catrow .n small { font-size: 12px; color: var(--t3); white-space: nowrap }
+.track2 { flex: 1; height: 8px; border-radius: 4px; background: var(--track); position: relative }
+.track2 .f { position: absolute; left: 0; top: 0; height: 8px; border-radius: 4px }
+.track2 .m { position: absolute; top: -4px; width: 2px; height: 16px; border-radius: 1px; background: var(--t1) }
+.catrow .a { width: 84px; flex: none; text-align: right; font-family: var(--mono) }
+.catrow .d { width: 88px; flex: none; text-align: right; font: 13px var(--mono); color: var(--t3) }
+.legend { display: flex; align-items: center; gap: 16px; font-size: 12px; color: var(--t3); flex-wrap: wrap }
+.legend span { display: inline-flex; align-items: center; gap: 6px }
+.legend .bar { width: 10px; height: 6px; border-radius: 2px; background: var(--t2) }
+.legend .tick { width: 2px; height: 12px; border-radius: 1px; background: var(--t1) }
+
+/* lists */
+.rows { display: flex; flex-direction: column }
+.lrow { display: flex; align-items: center; gap: 14px; min-height: 52px; border-top: 1px solid var(--line); padding: 6px 0; width: 100%; background: none; border-left: 0; border-right: 0; border-bottom: 0; color: inherit; font: inherit; text-align: left; cursor: pointer }
+.lrow:hover { background: rgba(255, 255, 255, .02) }
+.lrow.static { cursor: default }
+.lrow.static:hover { background: none }
+.lrow .dt { width: 52px; flex: none; font-size: 13px; color: var(--t3) }
+.lrow .mid { flex: 1; min-width: 0; display: flex; flex-direction: column }
+.lrow .mid b { font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.lrow .mid small { font-size: 12px; line-height: 16px; color: var(--t2); display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden }
+.lrow .ac { width: 190px; flex: none; font-size: 13px; color: var(--t3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.lrow .amt { width: 110px; flex: none; text-align: right; font-family: var(--mono) }
+.split { display: flex; gap: 2px; height: 8px; border-radius: 4px; overflow: hidden }
+.split div { height: 8px }
+
+/* net worth card + page */
+.nwfig { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap }
+.nwfig b { font: 500 28px/34px var(--mono); letter-spacing: -.02em }
+.nwfig.lg b { font-size: 36px; line-height: 42px }
+.kvrows { display: flex; flex-direction: column }
+.kvrows .r { text-align: left; display: flex; align-items: center; gap: 10px; min-height: 36px; border-top: 1px solid var(--line); font-size: 13px }
+.kvrows .r span:first-child { flex: 1; color: var(--t2) }
+.kvrows .r b { font: 400 13px var(--mono) }
+.figstrip { display: flex; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line) }
+.figstrip > div { flex: 1; display: flex; flex-direction: column; gap: 2px; padding: 16px 20px; border-left: 1px solid var(--line); min-width: 0 }
+.figstrip > div:first-child { border-left: 0; padding-left: 0 }
+.figstrip .k { font-size: 13px; line-height: 16px; color: var(--t2) }
+.figstrip b { font: 500 16px/24px var(--mono); font-variant-numeric: tabular-nums }
+.figstrip b.lg { font-size: 20px; line-height: 28px }
+.figstrip small { font-size: 12px; color: var(--t3) }
+.stale { font-size: 12px; padding: 1px 6px; border-radius: 4px; background: var(--warn-bg); color: var(--warn); white-space: nowrap }
+
+/* tables */
+.t2 { width: 100%; border-collapse: collapse; font-size: 13px }
+.t2 th { font-size: 12px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--t3); text-align: left; padding: 12px 8px 12px 0; white-space: nowrap; border-bottom: 1px solid var(--line) }
+.t2 td { padding: 12px 8px 12px 0; border-bottom: 1px solid var(--line); vertical-align: middle }
+.t2 .r { text-align: right }
+.t2 td.r { font-family: var(--mono); font-variant-numeric: tabular-nums }
+.t2 tr.total td { font-weight: 600; border-bottom: 0 }
+.t2 tr.click { cursor: pointer }
+.t2 tr.click:hover td { background: rgba(255, 255, 255, .02) }
+.t2 .nm { display: flex; align-items: center; gap: 10px }
+.t2 small { font-size: 12px; color: var(--t3) }
+.t2 th button { background: none; border: 0; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; padding: 0 }
+.t2 th button.on { color: var(--t1) }
+
+/* transactions */
+.filters2 { display: flex; align-items: center; gap: 8px; position: relative; flex-wrap: wrap }
+.search2 { width: 300px; flex: none; display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--bg) }
+.search2 input { flex: 1; min-width: 0; background: none; border: 0; outline: none; color: var(--t1); font: inherit; font-size: 13px }
+.search2 svg { width: 14px; height: 14px; color: var(--t2); flex: none }
+.datefield { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 10px; border-radius: 9px; border: 1px solid var(--line-2); background: var(--bg) }
+.datefield input { background: none; border: 0; color: var(--t1); font: 13px var(--mono); color-scheme: dark; outline: none; width: 120px }
+.pop { position: absolute; z-index: 20; top: 44px; min-width: 280px; display: flex; flex-direction: column; gap: 12px; padding: 14px; border-radius: 12px; background: var(--s2); border: 1px solid var(--line-2); box-shadow: 0 12px 32px rgba(0, 0, 0, .45) }
+.pop .money { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--bg) }
+.pop .money:focus-within { border-color: var(--accent) }
+.pop .money input { flex: 1; min-width: 0; background: none; border: 0; outline: none; color: var(--t1); font: 14px var(--mono) }
+.pop .quick { display: flex; gap: 6px; flex-wrap: wrap }
+.pop .quick button { font: 12px var(--mono); color: var(--t2); padding: 4px 8px; border-radius: 12px; border: 1px solid var(--line-2); background: none; cursor: pointer }
+.pop .quick button.on { color: var(--t1); border-color: var(--accent) }
+.pop .acts { display: flex; justify-content: flex-end; gap: 8px }
+.pop .list { display: flex; flex-direction: column; max-height: 300px; overflow: auto; margin: 0 -6px }
+.pop .list label { display: flex; align-items: center; gap: 10px; padding: 6px; border-radius: 6px; cursor: pointer; font-size: 13px }
+.pop .list label:hover { background: rgba(255, 255, 255, .03) }
+.pop .list input { accent-color: #9bb4ff }
+.seg.full { display: flex }
+.seg.full button { flex: 1 }
+.summary { display: flex; align-items: stretch; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line) }
+.summary > div { flex: 1; display: flex; flex-direction: column; gap: 2px; padding: 16px 20px; border-left: 1px solid var(--line) }
+.summary > div:first-child { width: 220px; flex: none; border-left: 0; padding-left: 0 }
+.summary .k { font-size: 13px; line-height: 16px; color: var(--t2) }
+.summary b { font: 500 16px/24px var(--mono) }
+.summary b.lg { font-size: 20px; line-height: 28px }
+.ttable { padding: 0 24px 8px; gap: 0 }
+.tcols, .trow, .tgroup { display: flex; align-items: center; gap: 16px }
+.tcols { height: 44px }
+.tcols > * { font-size: 12px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--t3) }
+.tcols button { background: none; border: 0; padding: 0; font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; cursor: pointer; display: inline-flex; align-items: center; gap: 4px }
+.tcols button.on { color: var(--t1) }
+.tgroup { height: 40px; border-top: 1px solid var(--line-2); font-size: 13px }
+.tgroup b { flex: 1; font-weight: 600 }
+.trow { height: 52px; border-top: 1px solid var(--line); cursor: pointer; width: 100%; background: none; border-left: 0; border-right: 0; border-bottom: 0; color: inherit; font: inherit; text-align: left; padding: 0 }
+.trow:hover { background: rgba(255, 255, 255, .02) }
+.trow.sel { background: rgba(155, 180, 255, .06); box-shadow: inset 2px 0 var(--accent) }
+.c-date { width: 64px; flex: none; font: 13px var(--mono); color: var(--t2) }
+.c-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px }
+.c-name span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.c-cat { width: 220px; flex: none; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--t2); min-width: 0 }
+.c-cat span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.c-acct { width: 200px; flex: none; font-size: 13px; color: var(--t3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.c-amt { width: 130px; flex: none; text-align: right; font-family: var(--mono) }
+.tfoot { display: flex; align-items: center; justify-content: space-between; height: 52px; border-top: 1px solid var(--line-2) }
+
+/* drawer */
+.scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, .55); z-index: 30; opacity: 0; pointer-events: none; transition: opacity .15s }
+.scrim.open { opacity: 1; pointer-events: auto }
+.drawer2 { position: fixed; top: 0; right: 0; bottom: 0; width: 480px; max-width: 100%; z-index: 31; background: var(--s1); border-left: 1px solid var(--line-2); display: flex; flex-direction: column; transform: translateX(105%); transition: transform .18s ease-out }
+.drawer2.open { transform: none }
+.drawer2 .bar { display: flex; align-items: center; gap: 8px; height: 56px; padding: 0 16px 0 24px; border-bottom: 1px solid var(--line); flex: none }
+.drawer2 .bar .lbl { flex: 1; color: var(--t3) }
+.iconbtn { width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--line-2); background: none; color: var(--t2); display: grid; place-items: center; cursor: pointer }
+.iconbtn.plain { border: 0 }
+.iconbtn:hover { color: var(--t1); background: var(--s2) }
+.iconbtn:disabled { opacity: .35; cursor: default }
+.iconbtn svg { width: 12px; height: 12px }
+.drawer2 .body { flex: 1; overflow: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 20px }
+.drawer2 .hd { display: flex; gap: 12px; align-items: flex-start }
+.drawer2 .hd .mg { width: 40px; height: 40px; border-radius: 20px; font-size: 16px }
+.drawer2 .hd h3 { margin: 0; font-size: 20px; line-height: 28px; font-weight: 600 }
+.drawer2 .hd small { display: block; font-size: 12px; color: var(--t3); text-transform: uppercase; letter-spacing: .04em; overflow-wrap: anywhere }
+.drawer2 .hd .amt { margin-left: auto; font: 500 24px/32px var(--mono); white-space: nowrap }
+.drawer2 .meta { font-size: 13px; color: var(--t2); padding-bottom: 16px; border-bottom: 1px solid var(--line) }
+.dl { display: flex; flex-direction: column }
+.dl .r { text-align: left; display: flex; align-items: center; gap: 12px; min-height: 48px; border-bottom: 1px solid var(--line); font-size: 13px }
+.dl .r > span:first-child { width: 104px; flex: none; color: var(--t2) }
+.dl .r .v { flex: 1; display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
+.dl select, .inp2 { height: 32px; background: var(--bg); border: 1px solid var(--line-2); border-radius: 6px; color: var(--t1); font: inherit; font-size: 13px; padding: 0 8px; color-scheme: dark }
+.stepper { display: flex; align-items: flex-start }
+.stepper .s { flex: 1; display: flex; flex-direction: column; gap: 4px; position: relative; font-size: 13px }
+.stepper .s::before { content: ""; position: absolute; top: 7px; left: 16px; right: 0; height: 2px; background: var(--line-2) }
+.stepper .s:last-child::before { display: none }
+.stepper .s.done::before { background: var(--in) }
+.stepper .s i { width: 16px; height: 16px; border-radius: 8px; border: 2px solid var(--line-2); background: var(--s1); position: relative; z-index: 1; display: grid; place-items: center }
+.stepper .s.done i { border-color: var(--in); background: var(--in) }
+.stepper .s b { font-weight: 500; margin-top: 4px }
+.stepper .s small { font-size: 12px; color: var(--t3) }
+.obs { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 8px; border: 1px solid var(--line); font-size: 13px }
+.obs.expect { border-style: dashed }
+.obs svg { width: 16px; height: 16px; color: var(--t2); flex: none }
+.obs .mid { flex: 1; display: flex; flex-direction: column }
+.obs small { font-size: 12px; color: var(--t3) }
+.drawer2 textarea { width: 100%; min-height: 64px; resize: vertical; background: var(--bg); border: 1px solid var(--line-2); border-radius: 8px; color: var(--t1); font: inherit; font-size: 13px; padding: 10px 12px }
+.tags { display: flex; gap: 6px; flex-wrap: wrap; align-items: center }
+.tags span { font-size: 12px; padding: 2px 8px; border-radius: 10px; background: var(--s2); display: inline-flex; gap: 6px; align-items: center }
+.tags span button { background: none; border: 0; color: var(--t3); cursor: pointer; padding: 0 }
+.tags input { height: 26px; width: 110px; border-radius: 13px; border: 1px dashed var(--line-2); background: none; color: var(--t1); font-size: 12px; padding: 0 10px; outline: none }
+.drawer2 .ft { display: flex; align-items: center; gap: 8px; padding: 12px 24px; border-top: 1px solid var(--line); flex: none }
+.drawer2 .ft .sp { flex: 1 }
+
+/* inbox */
+.ibx2 { display: flex; gap: 24px; align-items: flex-start }
+.ibx2 .col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px }
+.ibx2 .aside { width: 300px; flex: none; position: sticky; top: 24px }
+.done-row { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-radius: 10px; border: 1px solid var(--line); font-size: 13px }
+.done-row .ok { width: 18px; height: 18px; border-radius: 9px; background: var(--in-bg); color: var(--in); display: grid; place-items: center; flex: none }
+.done-row .ok svg { width: 10px; height: 10px }
+.done-row span.grow { flex: 1; color: var(--t2) }
+.icard2 { display: flex; flex-direction: column; gap: 12px; padding: 16px 20px; border-radius: 10px; background: var(--s1); border: 1px solid var(--line-2) }
+.icard2.sel { border-color: rgba(155, 180, 255, .55) }
+.icard2 .ihead { display: flex; align-items: flex-start; gap: 12px }
+.icard2 .ihead input[type=checkbox] { margin: 6px 0 0; accent-color: #9bb4ff; width: 16px; height: 16px }
+.icard2 .who2 { flex: 1; min-width: 0; display: flex; flex-direction: column }
+.icard2 .who2 b { font-weight: 500; display: flex; align-items: center; gap: 8px }
+.icard2 .who2 small { font: 12px var(--mono); color: var(--t3); overflow-wrap: anywhere }
+.icard2 .when { font-size: 13px; color: var(--t3); white-space: nowrap; padding-top: 2px }
+.icard2 .amt { font: 500 16px/24px var(--mono); width: 110px; text-align: right; flex: none }
+.icard2 .ctx { font-size: 13px; color: var(--t2); display: flex; gap: 16px; flex-wrap: wrap; padding-left: 72px }
+.icard2 .ctx .faint { color: var(--t3) }
+.icard2 .acts2 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-left: 72px }
+.catchip { height: 30px; padding: 0 12px; border-radius: 15px; border: 1px solid var(--line-2); background: none; color: var(--t2); font-size: 13px; cursor: pointer }
+.catchip:hover { color: var(--t1) }
+.catchip.on { border-color: var(--accent); background: var(--accent-bg); color: var(--t1) }
+.catchip.more { border-style: dashed }
+.acts2 select.catchip { appearance: none; padding-right: 12px; background: none; color-scheme: dark; width: 96px }
+.acts2 .sp { flex: 1 }
+.bulk { display: flex; align-items: center; gap: 16px; padding: 12px 20px; border-radius: 12px; border: 1px solid var(--line-2); background: var(--s1); position: sticky; bottom: 16px }
+.bulk b { font-weight: 500 }
+.bulk .sp { flex: 1 }
+.statlist .r { text-align: left; display: flex; justify-content: space-between; min-height: 36px; align-items: center; border-top: 1px solid var(--line); font-size: 13px; color: var(--t2) }
+.statlist .r b { font: 400 13px var(--mono); color: var(--t1) }
+
+/* settings: accounts & sources */
+.subnav2 { display: flex; flex-direction: column; gap: 2px; width: 200px; flex: none }
+.subnav2 a { height: 36px; display: flex; align-items: center; padding: 0 12px; border-radius: 6px; color: var(--t2) }
+.subnav2 a:hover { color: var(--t1) }
+.subnav2 a.on { background: var(--s2); color: var(--t1) }
+.settings-wrap { display: flex; gap: 40px; align-items: flex-start }
+.settings-wrap > .content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 24px }
+.settings-wrap .card { background: var(--s1); border: 0; border-radius: 12px; padding: 20px 24px }
+.facts { display: flex; gap: 0; border-top: 1px solid var(--line) }
+.facts > div { flex: 1; display: flex; flex-direction: column; gap: 2px; padding: 14px 0 0 }
+.facts .k { font-size: 12px; color: var(--t3) }
+.okbadge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 8px; border-radius: 10px; background: var(--in-bg); color: var(--in) }
+.okbadge i { width: 6px; height: 6px; border-radius: 3px; background: var(--in) }
+.okbadge.err { background: var(--bad-bg); color: var(--bad) }
+.okbadge.err i { background: var(--bad) }
+.okbadge.idle { background: var(--s2); color: var(--t2) }
+.okbadge.idle i { background: var(--t3) }
+
+@media (max-width: 1180px) {
+  .row2 { flex-direction: column }
+  .progress { flex-direction: column }
+  .progress .stats { width: auto }
+  .ibx2 { flex-direction: column }
+  .ibx2 .aside { width: 100%; position: static }
+  .c-acct { display: none }
+}
+@media (max-width: 820px) {
+  .app { grid-template-columns: 1fr }
+  .side { display: none }
+  main { padding: 16px 16px 96px; min-width: 0 }
+  .ph h1 { white-space: nowrap }
+  .monthpick span { min-width: 0; white-space: nowrap; padding: 0 4px; font-size: 13px }
+  .needs { flex-wrap: wrap; gap: 10px }
+  .needs .items { flex-basis: 100% }
+  .progress { padding: 16px; gap: 16px }
+  .figs .r b { font-size: 15px }
+  .panel { padding: 16px }
+  .ttable { padding: 0 12px 8px }
+  .c-date { width: 52px; font-size: 12px }
+  .tcols .c-cat, .trow .c-cat { display: none }
+  .c-amt { width: 96px }
+  .seg.lg { flex-wrap: wrap }
+  .filters2 .chip2 { height: 32px }
+  .pop { left: 0 !important; right: 0; min-width: 0 }
+  .figstrip > div { flex-basis: 50%; border-left: 0; padding-left: 0 }
+  .t2 { font-size: 12px }
+  .drawer2 { width: 100% }
+  .summary, .figstrip { flex-wrap: wrap }
+  .summary > div:first-child { width: 100% }
+  .search2 { width: 100% }
+  .c-cat { width: 120px }
+  .lrow .ac { display: none }
+  .catrow .n { width: 120px }
+  .catrow .d { width: 64px }
+  .icard2 .ctx, .icard2 .acts2 { padding-left: 0 }
+  .settings-wrap { flex-direction: column }
+  .subnav2 { flex-direction: row; overflow: auto; width: 100% }
+}

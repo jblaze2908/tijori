@@ -1,41 +1,37 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { BrandMark, ICONS, SearchIcon } from "./components/Icons";
+import { G, Keyhole } from "./components/Glyphs";
 import { Empty } from "./components/ui";
 import { AppProvider, buildCtx, type AppCtx } from "./ctx";
 import { api, dataOf, read, retryFailed } from "./lib/api";
-import { initials, monthYear, todayIST } from "./lib/format";
+import { initials, monthYear, plural, todayIST } from "./lib/format";
 import { Link, match, navigate, useLocation } from "./lib/router";
 import { setup } from "./lib/setup";
 import { useStore } from "./lib/useStore";
 import type { MonthKey } from "./lib/types";
-import { Activity, focusActivitySearch } from "./pages/Activity";
 import { Inbox } from "./pages/Inbox";
 import { NetWorth } from "./pages/NetWorth";
 import { Invite } from "./pages/Invite";
 import { Onboarding } from "./pages/Onboarding";
 import { Overview } from "./pages/Overview";
 import { SECTIONS, Settings, type Section } from "./pages/Settings";
-import { Trends } from "./pages/Trends";
+import { Spending } from "./pages/Spending";
+import { Transactions } from "./pages/Transactions";
 import { Welcome } from "./pages/Welcome";
 
-type RouteKey = "overview" | "activity" | "trends" | "inbox" | "networth";
+type RouteKey = "overview" | "spending" | "transactions" | "networth" | "inbox";
 const ROUTES: { path: string; key: RouteKey; title: string }[] = [
   { path: "/", key: "overview", title: "Overview" },
-  { path: "/activity", key: "activity", title: "Activity" },
-  { path: "/trends", key: "trends", title: "Trends" },
-  { path: "/inbox", key: "inbox", title: "Inbox" },
+  { path: "/spending", key: "spending", title: "Spending" },
+  { path: "/transactions", key: "transactions", title: "Transactions" },
   { path: "/networth", key: "networth", title: "Net worth" },
+  { path: "/inbox", key: "inbox", title: "Inbox" },
 ];
-const LATER = [
-  ["budgets", "Budgets"],
-  ["subs", "Subscriptions"],
-] as const;
-const MONTHLESS: ReadonlySet<RouteKey> = new Set(["inbox", "networth"]);
+/** Old paths from before UI v1, kept so bookmarks still land. */
+const MOVED: Record<string, string> = { "/activity": "/transactions", "/trends": "/spending" };
 /** Pages reachable while signed out; everything else sends a 401 on /api/me to /welcome. */
 const PUBLIC = /^\/(welcome|invite\/[^/]+)$/;
 
 const MONTH_KEY = "tj.month";
-const IS_MAC = /Mac|iPhone|iPad/.test(navigator.userAgent);
 
 function readStoredMonth(): MonthKey | null {
   try {
@@ -81,6 +77,7 @@ export function App() {
   useEffect(() => {
     if (path === "/" && setupPending) navigate("/onboarding", { replace: true });
     if (path === "/settings") navigate("/settings/general", { replace: true });
+    if (MOVED[path]) navigate(MOVED[path] + location.search, { replace: true });
   }, [path, setupPending]);
 
   useEffect(() => {
@@ -112,23 +109,39 @@ export function App() {
   let page: ReactNode;
   switch (route?.key) {
     case "overview":
-      page = <Overview app={app} />;
+      page = (
+        <Overview
+          app={app}
+          head={
+            <div className="ph">
+              <h1>Overview</h1>
+              <div className="sp" />
+              <MonthSwitcher app={app} />
+            </div>
+          }
+        />
+      );
       break;
-    case "activity":
-      page = <Activity app={app} />;
+    case "spending":
+      page = <Spending app={app} />;
       break;
-    case "trends":
-      page = <Trends app={app} />;
+    case "transactions":
+      page = <Transactions app={app} />;
       break;
     case "inbox":
-      page = <Inbox />;
+      page = <Inbox app={app} />;
       break;
     case "networth":
       page = <NetWorth />;
       break;
     default:
       page = section ? (
-        <Settings section={section} />
+        <>
+          <div className="ph">
+            <h1>Settings</h1>
+          </div>
+          <Settings section={section} />
+        </>
       ) : (
         <Empty title="Page not found">
           <Link href="/" className="acc">
@@ -143,43 +156,30 @@ export function App() {
       <div className="app">
         <aside className="side">
           <div className="brand">
-            <BrandMark />
+            <Keyhole />
             <b>Tijori</b>
           </div>
-          <Nav current={route?.key} settings={!!section} />
+          <Nav current={route?.key} />
           <div className="grow" />
-          <Who />
+          <Sync />
+          <Who settings={!!section} />
         </aside>
         <main>
-          <div className="top">
-            <h1>{route?.title ?? (section ? "Settings" : "Tijori")}</h1>
-            <div className="sp" />
-            <button type="button" className="search" onClick={openSearch}>
-              <SearchIcon />
-              Search<kbd>{IS_MAC ? "⌘K" : "Ctrl K"}</kbd>
-            </button>
-            <MonthSwitcher app={app} hidden={!route || MONTHLESS.has(route.key) || (route.key === "activity" && params.has("from"))} />
-            <Link href="/settings/general" className={`gear${section ? " on" : ""}`} aria-label="Settings" title="Settings">
-              {ICONS.settings}
-            </Link>
-          </div>
-          <section className="view">
-            {setupPending && !section && (
-              <div className="notice" role="status">
-                <span>Finish setting up Tijori: connect your mail and add a first statement so everything here stays current.</span>
-                <Link href="/onboarding" className="btn ghost">
-                  Resume setup
-                </Link>
-              </div>
-            )}
-            {page}
-          </section>
+          {setupPending && !section && (
+            <div className="notice" role="status">
+              <span>Finish setting up Tijori: connect your mail and add a first statement so everything here stays current.</span>
+              <Link href="/onboarding" className="btn2 sm">
+                Resume setup
+              </Link>
+            </div>
+          )}
+          <section className="view">{page}</section>
         </main>
       </div>
       <nav className="tabbar" aria-label="Main">
         {ROUTES.map((r) => (
           <Link key={r.key} href={r.path} className={route?.key === r.key ? "on" : ""} aria-current={route?.key === r.key ? "page" : undefined}>
-            {ICONS[r.key]}
+            {G[r.key]}
             {r.title}
           </Link>
         ))}
@@ -188,70 +188,90 @@ export function App() {
   );
 }
 
-function Nav({ current, settings }: { current: RouteKey | undefined; settings: boolean }) {
-  const inboxN = dataOf(read(api.inbox()))?.items.length ?? 0;
+function Nav({ current }: { current: RouteKey | undefined }) {
+  const inboxN = dataOf(read(api.inbox()))?.total ?? 0;
   return (
     <nav className="nav" aria-label="Main">
       {ROUTES.map((r) => (
         <Link key={r.key} href={r.path} className={current === r.key ? "on" : ""} aria-current={current === r.key ? "page" : undefined}>
-          {ICONS[r.key]}
+          {G[r.key]}
           {r.title}
           {r.key === "inbox" && inboxN > 0 && (
-            <span className="badge num" aria-label={`${inboxN} to file`}>
+            <span className="badge" aria-label={`${inboxN} to file`}>
               {inboxN}
             </span>
           )}
         </Link>
       ))}
-      <div className="gap" />
-      {LATER.map(([k, label]) => (
-        <a key={k} className="later" aria-disabled="true">
-          {ICONS[k]}
-          {label}
-          <span className="soon">soon</span>
-        </a>
-      ))}
-      <div className="gap" />
-      <Link href="/settings/general" className={settings ? "on" : ""} aria-current={settings ? "page" : undefined}>
-        {ICONS.settings}
-        Settings
-      </Link>
     </nav>
   );
 }
 
-function Who() {
+/** Mail source health: the collector lands in M1, so this reports the last connection test. */
+function Sync() {
+  const sources = dataOf(read(setup.mailSources()));
+  const accounts = dataOf(read(api.accounts())) ?? [];
+  if (!sources) return null;
+  const ok = sources.find((m) => m.status === "ok");
+  const bad = sources.find((m) => m.status === "error");
+  const src = ok ?? bad ?? sources[0];
+  const when = src?.last_tested_at ? relative(src.last_tested_at) : null;
+  return (
+    <Link href="/settings/sources" className="sync">
+      <span className="l">
+        <i className={ok ? "ok" : bad ? "err" : ""} />
+        {!src ? "No mail connected" : ok ? `Mail connected${when ? ` · tested ${when}` : ""}` : bad ? "Mail login refused" : "Mail not tested"}
+      </span>
+      <small>
+        {plural(accounts.length, "account")}
+        {accounts.some((a) => a.last_statement) ? ` · last statement ${accounts.map((a) => a.last_statement?.period_end ?? "").sort().at(-1)!.slice(5).split("-").reverse().join("/")}` : ""}
+      </small>
+    </Link>
+  );
+}
+function relative(ts: string): string {
+  const m = Math.round((Date.now() - Date.parse(ts)) / 60000);
+  if (m < 60) return `${Math.max(1, m)} min ago`;
+  if (m < 1440) return `${Math.round(m / 60)} h ago`;
+  return `${Math.round(m / 1440)} d ago`;
+}
+
+function Who({ settings }: { settings: boolean }) {
   const st = read(api.me());
   const me = dataOf(st);
   return (
     <div className="who">
       <div className="avatar">{me ? initials(me.name) : "·"}</div>
-      <div>
-        <div className="b">{me?.name ?? (st.status === "loading" ? "…" : "You")}</div>
+      <div className="grow">
+        <b>{me?.name ?? (st.status === "loading" ? "…" : "You")}</b>
         <small>{me?.household?.name || "Personal"}</small>
       </div>
+      <Link href="/settings/general" className={`gear${settings ? " on" : ""}`} aria-label="Settings" title="Settings">
+        {G.gear}
+      </Link>
     </div>
   );
 }
 
-function MonthSwitcher({ app, hidden }: { app: AppCtx; hidden: boolean }) {
+function MonthSwitcher({ app }: { app: AppCtx }) {
   const i = app.month ? app.months.indexOf(app.month.key) : -1;
+  if (!app.month) return null;
   return (
-    <div className={`month${hidden || !app.month ? " hidden" : ""}`}>
+    <div className="monthpick">
       <button type="button" aria-label="Previous month" disabled={i <= 0} onClick={() => i > 0 && app.pick(app.months[i - 1]!)}>
-        ‹
+        {G.left}
       </button>
       <span className="num" aria-live="polite">
-        {app.month ? (app.settings.monthStartDay === 1 ? monthYear(app.month.key) : app.month.period.label) : ""}
+        {app.settings.monthStartDay === 1 ? monthYear(app.month.key) : app.month.period.label}
       </span>
       <button type="button" aria-label="Next month" disabled={i < 0 || i >= app.months.length - 1} onClick={() => i >= 0 && i < app.months.length - 1 && app.pick(app.months[i + 1]!)}>
-        ›
+        {G.right}
       </button>
     </div>
   );
 }
 
 function openSearch() {
-  focusActivitySearch();
-  if (location.pathname !== "/activity") navigate("/activity");
+  if (location.pathname !== "/transactions") navigate("/transactions");
+  setTimeout(() => document.querySelector<HTMLInputElement>(".search2 input")?.focus(), 50);
 }

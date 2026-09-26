@@ -13,7 +13,17 @@ import type {
   ApiTransactionDetail,
   ApiTrends,
   ApiTxn,
+  ApiTxnDetail,
+  ApiTxnPage,
   Granularity,
+  Holding,
+  InboxStats,
+  ISODate,
+  LiveNetWorth,
+  ParseQueue,
+  Rule,
+  TxnPage,
+  TxnQuery,
   Budgets,
   Category,
   Component,
@@ -192,6 +202,31 @@ export function optional<W, T>(key: string, map: (w: W) => T): Resource<T | null
 
 const qs = (o: Record<string, string | number>) => new URLSearchParams(Object.entries(o).map(([k, v]) => [k, String(v)])).toString();
 
+/** A filter as a stable query string: repeated keys for multi-selects, empty values dropped. */
+export function txnQueryString(f: TxnQuery, page: number, pageSize: number): string {
+  const p = new URLSearchParams();
+  const put = (k: string, v: string | undefined) => v && p.append(k, v);
+  put("from", f.from);
+  put("to", f.to);
+  put("q", f.q?.trim());
+  put("min", f.min);
+  put("max", f.max);
+  for (const a of f.accounts ?? []) p.append("account", String(a));
+  for (const c of f.categories ?? []) p.append("category", c);
+  put("kind", f.kind);
+  put("direction", f.direction);
+  put("sort", f.sort && f.sort !== "date_desc" ? f.sort : undefined);
+  p.set("page", String(page));
+  p.set("page_size", String(pageSize));
+  return p.toString();
+}
+
+const mapPage = (r: ApiTxnPage): TxnPage => ({
+  items: r.items.map(mapTxn),
+  total: r.total,
+  totals: Object.fromEntries(Object.entries(r.totals).map(([k, v]) => [k, { amount: toPaise(v.amount), count: v.count }])) as TxnPage["totals"],
+});
+
 // ---------- mapping wire → model ----------
 
 function accountLabel(a: ApiTxn["account"]): string {
@@ -217,6 +252,12 @@ const mapTxn = (t: ApiTxn): Transaction => ({
   classified_by: t.classified_by,
   rule_id: t.rule_id,
   payee_key: t.payee_key,
+  vpa: t.vpa,
+  narration: t.narration,
+  counterparty: t.counterparty,
+  review_reason: t.review_reason,
+  notes: t.notes,
+  tags: t.tags ?? [],
 });
 
 const byDate = (a: { date: string }, b: { date: string }) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
@@ -245,6 +286,7 @@ function payee(
     key,
     payeeKey: t.payee_key,
     payee: t.merchant,
+    vpa: t.vpa,
     direction: t.direction,
     account: t.account,
     reason,
@@ -377,7 +419,28 @@ export const api = {
       r.items.map(({ amount_expected, ...x }) => ({ ...x, amountExpected: toPaise(amount_expected) })),
     ),
   alerts: (month: MonthKey) => optional(`/api/alerts?${qs({ month })}`, (r: { items: ServerAlert[] }) => r.items),
+  /** One page of a filtered list, with the whole set's totals. */
+  txnPage: (f: TxnQuery, page: number, pageSize = 50) => resource(`/api/transactions?${txnQueryString(f, page, pageSize)}`, mapPage),
+  txnDetail: (id: string) =>
+    resource(`/api/transactions/${encodeURIComponent(id)}`, (d: ApiTxnDetail) => ({ ...d, txn: mapTxn(d.transaction) })),
+  trendsBy: (group: "category" | "merchant" | "account", granularity: Granularity, periods: number, end: string) =>
+    resource(`/api/trends?${qs({ granularity, periods, end, group_by: group, limit: 50 })}`, flattenTrends),
+  liveNetWorth: () => resource("/api/networth/live", (r: LiveNetWorth) => r),
+  holdings: () => resource("/api/holdings", (r: { items: Holding[] }) => r.items),
+  inboxStats: (month: MonthKey) => resource(`/api/inbox/stats?${qs({ month })}`, (r: InboxStats) => r),
+  rules: () => resource("/api/rules", (r: { items: Rule[] }) => r.items),
+  sourcesQueue: () => resource("/api/sources/queue", (r: ParseQueue) => r),
 };
+
+/** Every page of a filtered list (CSV export), capped like range reads. */
+export async function allTxns(f: TxnQuery): Promise<Transaction[]> {
+  const first = await request<ApiTxnPage>(`/api/transactions?${txnQueryString(f, 1, PAGE_SIZE)}`);
+  const pages = Math.min(MAX_PAGES, Math.ceil(first.total / PAGE_SIZE));
+  const rest = await Promise.all(
+    Array.from({ length: Math.max(0, pages - 1) }, (_, i) => request<ApiTxnPage>(`/api/transactions?${txnQueryString(f, i + 2, PAGE_SIZE)}`)),
+  );
+  return [first, ...rest].flatMap((p) => p.items.map(mapTxn));
+}
 
 function flattenTrends(r: ApiTrends): TrendPoint[] {
   return r.series.flatMap((s) => s.points.map((p) => ({ start: p.period_start, key: s.key, amount: toPaise(p.amount), count: p.count })));
@@ -404,8 +467,8 @@ export async function categorize(id: string, categoryId: number, scope: Scope): 
 }
 
 /** Files an Inbox payee's listed payments; scope "payee" remembers the choice for future payments. */
-export async function fileInboxPayee(p: InboxPayee, categoryId: number, scope: Scope): Promise<{ filed: number }> {
-  const r = await request<{ filed: number }>(`/api/inbox/${encodeURIComponent(p.payeeKey ?? `txn:${p.payments[0]?.id}`)}/file`, "POST", {
+export async function fileInboxPayee(p: InboxPayee, categoryId: number, scope: Scope): Promise<{ filed: number; rule_id: string | null }> {
+  const r = await request<{ filed: number; rule_id: string | null }>(`/api/inbox/${encodeURIComponent(p.payeeKey ?? `txn:${p.payments[0]?.id}`)}/file`, "POST", {
     category_id: categoryId,
     direction: p.direction,
     remember: scope === "payee",
@@ -419,4 +482,26 @@ export async function fileInboxPayee(p: InboxPayee, categoryId: number, scope: S
 export async function saveRemark(date: string, remark: string): Promise<void> {
   await request<unknown>(`/api/networth/snapshots/${encodeURIComponent(date)}`, "PATCH", { remark });
   invalidate(["/api/networth"]);
+}
+
+/** Puts filed txns back in the Inbox; with the rule the filing created, that rule is deleted too. */
+export async function undoFiling(txnIds: number[], ruleId: string | null): Promise<{ restored: number }> {
+  const r = await request<{ restored: number }>("/api/inbox/undo", "POST", { txn_ids: txnIds, ...(ruleId ? { rule_id: ruleId } : {}) });
+  invalidate(AFTER_CLASSIFY);
+  return r;
+}
+
+export async function patchTxn(id: string, body: { notes?: string | null; tags?: string[] }): Promise<void> {
+  await request<unknown>(`/api/transactions/${encodeURIComponent(id)}`, "PATCH", body);
+  invalidate(["/api/transactions"]);
+}
+
+export async function setComponent(key: string, amount: string, asOf?: ISODate): Promise<void> {
+  await request<unknown>(`/api/networth/components/${encodeURIComponent(key)}`, "PUT", { amount, ...(asOf ? { as_of: asOf } : {}) });
+  invalidate(["/api/networth"]);
+}
+
+export async function setRuleEnabled(id: string, enabled: boolean): Promise<void> {
+  await request<unknown>(`/api/rules/${encodeURIComponent(id)}`, "PATCH", { enabled });
+  invalidate(["/api/rules", "/api/inbox"]);
 }

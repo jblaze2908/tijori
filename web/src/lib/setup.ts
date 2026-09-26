@@ -48,6 +48,7 @@ export interface MailSource {
   status: "untested" | "ok" | "error";
   last_tested_at: string | null;
   last_error_code: MailError | null;
+  last_message_count?: number | null;
   created_at: string;
 }
 export type MailError =

@@ -1,352 +1,396 @@
-import { useMemo } from "react";
-import { ChartView } from "../components/ChartView";
-import { CardHead, Delta, Dot, ErrorState, InlineState, Loading, Monogram } from "../components/ui";
-import { MonthGate, monthSummary, prevCycles, txnsFor, type AppCtx, type MonthCtx } from "../ctx";
-import { all, api, dataOf, invalidate, read } from "../lib/api";
-import { categoryColor, FLOW } from "../lib/colors";
-import { addDays, compact, dayName, dayShort, daysBetween, inr, monthLong, monthShort, weekday } from "../lib/format";
-import {
-  committedSplit,
-  deltaRows,
-  leftOver,
-  merchantsBefore,
-  needsAttention,
-  paceValue,
-  periodStats,
-  recent,
-  summarize,
-  upcoming,
-  within,
-  type Alert,
-} from "../lib/insights";
+import { useMemo, useState, type ReactNode } from "react";
+import { NetWorthChart, ProgressChart } from "../components/charts";
+import { ErrorState, Loading } from "../components/ui";
+import { MonthGate, prevCycles, txnsFor, type AppCtx, type MonthCtx } from "../ctx";
+import { api, dataOf, invalidate, read } from "../lib/api";
+import { categoryColor, monogramColor } from "../lib/colors";
+import { compact, dayShort, daysBetween, inr, monthLong, monthShort, monthApos, plural, toPaise } from "../lib/format";
+import { within } from "../lib/insights";
+import { byKey, categoryOf, cumulative, largestCharge, normalByKey, normalCurve, NOTABLE, paidFrom, projection, spendOf } from "../lib/metrics";
 import { Link } from "../lib/router";
-import type { Budgets, MonthSummary, Recurring, Totals, Transaction } from "../lib/types";
-import { paceChart } from "./pace";
+import type { Transaction } from "../lib/types";
 
-const GLYPH: Record<string, string> = { duplicate: "⚠", price_increase: "↑", bounce_risk: "⏱", salary: "₹" };
-const SEVERITY_GLYPH = { bad: "⚠", warn: "!", good: "✓" } as const;
-
-export function Overview({ app }: { app: AppCtx }) {
-  return <MonthGate app={app}>{(m) => <OverviewMonth app={app} m={m} />}</MonthGate>;
+export function Overview({ app, head }: { app: AppCtx; head: ReactNode }) {
+  return (
+    <>
+      {head}
+      <MonthGate app={app}>{(m) => <OverviewMonth app={app} m={m} />}</MonthGate>
+    </>
+  );
 }
 
 function OverviewMonth({ app, m }: { app: AppCtx; m: MonthCtx }) {
-  // This cycle plus the three before it: pace compares against their average, and the unusual-amount check needs history.
   const back = prevCycles(app, m, 3);
-  const txState = txnsFor(app, back.at(-1)!.period.start, m.period.end);
-  const core = all<[Transaction[], MonthSummary]>(txState, monthSummary(m));
-  if (core.status === "loading") return <Loading />;
-  if (core.status === "error")
-    return <ErrorState error={core.error} title="Couldn't load this month" onRetry={() => invalidate(["/api/summary", "/api/transactions"])} />;
-  const [txns, s] = core.data;
-  return <Body app={app} m={m} back={back} txns={txns} s={s} />;
+  const st = txnsFor(app, back.at(-1)!.period.start, m.period.end);
+  if (st.status === "loading") return <Loading />;
+  if (st.status === "error") return <ErrorState error={st.error} title="Couldn't load this month" onRetry={() => invalidate(["/api/transactions"])} />;
+  return <Body m={m} back={back} txns={st.data} />;
 }
 
-/** The comparable window of the previous cycle: the same number of days in, or all of it once this month is over. */
-function prevWindow(m: MonthCtx, prev: MonthCtx) {
-  if (m.complete) return { from: prev.period.start, to: prev.period.end };
-  return { from: prev.period.start, to: addDays(prev.period.start, daysBetween(m.period.start, m.through)) };
-}
+const signedK = (v: number) => (v === 0 ? "±₹0" : `${v > 0 ? "+" : "−"}${compact(Math.abs(v))}`);
 
-function Body({ app, m, back, txns, s }: { app: AppCtx; m: MonthCtx; back: MonthCtx[]; txns: Transaction[]; s: MonthSummary }) {
-  const prev = back[0]!;
-  const partial = !m.complete;
-  const vs = `${monthShort(prev.key)}${partial ? " at this point" : ""}`;
-  const t = s.totals;
-  const budgets = dataOf(read(api.budgets(m.key)));
-  const recurringState = read(api.recurring());
-  const serverAlerts = read(api.alerts(m.key));
-  const server = dataOf(serverAlerts);
-
-  // Recomputed only when the cached transactions or the month change, not on unrelated store updates.
+function Body({ m, back, txns }: { m: MonthCtx; back: MonthCtx[]; txns: Transaction[] }) {
+  const days = daysBetween(m.period.start, m.period.end) + 1;
+  const dayN = m.complete ? days : daysBetween(m.period.start, m.through) + 1;
+  const T = useMemo(() => within(txns, m.period.start, m.through), [txns, m.key, m.through]);
+  const prevPeriods = back.map((b) => b.period);
   const d = useMemo(() => {
-    const T = within(txns, m.period.start, m.through);
-    const win = prevWindow(m, prev);
-    const P = within(txns, win.from, win.to);
-    const weekStart = addDays(m.through, -weekday(m.through));
-    const [curStat] = periodStats(txns, [{ ...m.period, end: m.through }]);
-    const [prevStat] = periodStats(txns, [{ ...prev.period, start: win.from, end: win.to }]);
+    const curve = normalCurve(txns, prevPeriods, days);
+    const big = largestCharge(T);
     return {
-      T,
-      P,
-      pc: paceChart(m, back, txns),
-      wtd: summarize(within(txns, weekStart, m.through)).expense,
-      lastWeek: summarize(within(txns, addDays(weekStart, -7), addDays(m.through, -7))).expense,
-      merchants: deltaRows(curStat?.byMerchant ?? new Map(), prevStat?.byMerchant ?? new Map(), merchantsBefore(txns, win.from))
-        .filter((r) => r.current > 0)
-        .sort((a, b) => b.current - a.current)
-        .slice(0, 6),
-      catPrev: prevStat?.byCategory ?? new Map<string, number>(),
-      recent: recent(T),
+      spent: spendOf(T),
+      actual: cumulative(T, m.period.start, dayN),
+      normal: curve,
+      projected: m.complete ? null : projection(txns, m.period, m.through),
+      big,
+      paid: paidFrom(T),
     };
-    // The month context is rebuilt every render; its value fields are the real deps (back derives from them).
-  }, [txns, m.key, m.through, m.period.start]);
-  const alerts = useMemo(() => needsAttention(d.T, txns, server), [d.T, txns, server]);
-
-  // Figures shown are the server's. A month in progress is compared with the same days last month (a comparison
-  // view over the same transactions); a finished month with the server's previous totals.
-  const prevTotals: Totals = partial ? summarize(d.P) : s.previous;
-  const p = d.pc.pace;
-  const cats = s.categories.filter((c) => c.amount > 0).slice(0, 8);
-  const denom = Math.max(t.income, t.expense + t.invest, 1);
-  const of = (v: number) => Math.round((v / Math.max(t.income, 1)) * 100);
-  const lo = leftOver(t);
-  const flow: [string, number][] = [
-    [FLOW.spend, t.expense],
-    [FLOW.invest, t.invest],
-    [FLOW.saved, lo],
-  ];
+    // Period fields are the real deps; the objects are rebuilt every render.
+  }, [txns, T, m.key, dayN]);
+  const normalMonth = d.normal?.at(-1) ?? null;
+  const normalToday = d.normal ? d.normal[dayN - 1]! : null;
+  const mon = monthShort(m.key);
 
   return (
     <>
-      <div className="grid g-hero">
-        <div className="card hero">
-          <div className="lab">
-            {partial ? "Spent so far in" : "Spent in"} {monthLong(m.key)}
-          </div>
-          <div className="big">{inr(t.expense)}</div>
-          <div className="pair">
-            <span className="pi">
-              <span className="pl">This month</span>
-              <Delta cur={paceValue(p.cur, p.cur.length)} prev={p.last ? paceValue(p.last, p.cur.length) : null} vs={vs} upIsGood={false} />
-            </span>
-            <span className="pi">
-              <span className="pl">This week {compact(d.wtd)}</span>
-              <Delta cur={d.wtd} prev={d.lastWeek} vs="last week" upIsGood={false} />
-            </span>
-          </div>
-          <span className="sub">
-            {partial ? `Month to date · through ${dayShort(m.through)}` : "Full month"}
-            {t.refunds ? ` · ${inr(t.refunds)} refunded, not netted` : ""}
+      <NeedsYou month={m.key} />
+      <section className="panel progress" aria-label="Month progress">
+        <div className="stats">
+          <span className="lbl">
+            {monthLong(m.key)} · {m.complete ? "full month" : `day ${dayN} of ${days}`}
           </span>
-          <div className="kpis" aria-describedby="kpi-vs">
-            <Kpi label="Income" v={t.income} prev={prevTotals.income} vs={vs} upIsGood />
-            <Kpi label="Invested" v={t.invest} prev={prevTotals.invest} vs={vs} upIsGood />
-            <Kpi label="Card spend" v={t.card} prev={prevTotals.card} vs={vs} upIsGood={false} />
-            <Kpi label="Left over" v={lo} prev={leftOver(prevTotals)} vs={vs} upIsGood />
+          <div className="figs">
+            <Fig line={<i style={{ width: 16, height: 2, borderRadius: 1, background: "var(--c1)", display: "block" }} />} k={m.complete ? "Spent" : "Spent so far"} v={inr(d.spent)} />
+            {d.projected != null && <Fig line={<Dash color="#3987E5" />} k={`Projected by ${dayShort(m.period.end)}`} v={inr(d.projected)} />}
+            {normalMonth != null && <Fig line={<Dash color="#8A8A8A" gap />} k="Your normal month" v={inr(normalMonth)} muted />}
+            {normalToday != null && !m.complete && <Fig line={<span />} k={`Normal by day ${dayN}`} v={inr(normalToday)} muted />}
           </div>
-          <div className="sub kpi-vs" id="kpi-vs">
-            Changes vs {vs}
-          </div>
-          <div className="flow">
-            <div className="bar">{t.income > 0 && flow.map(([c, v]) => <div key={c} style={{ width: `${(Math.max(0, v) / denom) * 100}%`, background: c }} />)}</div>
-            <div className="leg">
-              <span>
-                <Dot color={FLOW.spend} />
-                Spent {of(t.expense)}%
-              </span>
-              <span>
-                <Dot color={FLOW.invest} />
-                Invested {of(t.invest)}%
-              </span>
-              <span>
-                <Dot color={FLOW.saved} />
-                Left over {of(lo)}%
-              </span>
-              <span className="t3">of {compact(t.income)} income</span>
-            </div>
-          </div>
+          <span className="foot">
+            Normal = average of {monthShort(back.at(-1)!.key)}–{monthShort(back[0]!.key)}
+            {m.complete ? "" : ` up to day ${dayN}`}.{" "}
+            {d.projected != null && "Projection = last 14 days' daily average × days left, leaving out single charges over ₹5,000."}
+          </span>
         </div>
-        <div className="card">
-          <CardHead title="Spending pace" x="cumulative, by day" />
-          <ChartView id="pace" chart={d.pc.chart}>
-            {d.pc.legend}
-          </ChartView>
+        <div className="chart2">
+          <ProgressChart
+            days={days}
+            actual={d.actual}
+            normal={d.normal}
+            projected={d.projected}
+            mark={d.big ? { day: daysBetween(m.period.start, d.big.date) + 1, label: `${d.big.merchant} · ${inr(d.big.amount)}` } : null}
+            dayLabel={(x) => (x === 1 ? `1 ${mon}` : String(x))}
+          />
         </div>
+      </section>
+      <div className="row2">
+        <WhereItWent m={m} T={T} txns={txns} back={back} dayN={dayN} />
+        <PaidFromPanel rows={d.paid} total={d.spent} />
       </div>
-
-      <div className="grid g-3 mt-g">
-        <div className="card">
-          <CardHead title="Categories" x={budgets?.size ? "tick = budget" : `vs ${vs}`} />
-          {cats.length ? (
-            <CategoryBars cats={cats} budgets={budgets} derivedPrev={d.catPrev} useDerived={partial} vs={vs} />
-          ) : (
-            <InlineState>No spending recorded in {monthLong(m.key)}.</InlineState>
-          )}
-        </div>
-        <div className="card">
-          <CardHead title="Top merchants" x={`vs ${vs}`} />
-          {d.merchants.length ? (
-            <div className="list">
-              {d.merchants.map((r) => (
-                <div className="li" key={r.key}>
-                  <Monogram name={r.key} />
-                  <div className="mid">
-                    <b>
-                      {r.key}
-                      {r.isNew && <span className="tag">new</span>}
-                    </b>
-                    <small>{d.T.find((x) => x.merchant === r.key)?.category ?? "Uncategorized"}</small>
-                  </div>
-                  <div className="amt num">
-                    {inr(r.current)}
-                    <small>
-                      {!r.previous ? (
-                        "first this period"
-                      ) : r.delta === 0 ? (
-                        "no change"
-                      ) : (
-                        <>
-                          {r.delta > 0 ? "+" : "−"}
-                          {compact(Math.abs(r.delta))} <Delta cur={r.current} prev={r.previous} vs={vs} upIsGood={false} compact />
-                        </>
-                      )}
-                    </small>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <InlineState>No merchants yet this month.</InlineState>
-          )}
-        </div>
-        <div className="card">
-          <CardHead title="Needs attention" x={String(alerts.length)} />
-          {alerts.slice(0, 4).map((a) => (
-            <AlertRow key={a.id} a={a} />
-          ))}
-          {!alerts.length && <InlineState>Nothing unusual this month.</InlineState>}
-          {serverAlerts.status === "error" && <InlineState onRetry={() => invalidate(["/api/alerts"])}>Some alerts couldn't load.</InlineState>}
-        </div>
-      </div>
-
-      <div className="grid g-2 mt-g">
-        <div className="card">
-          <CardHead title="Coming up" x="predicted from history" />
-          <CommittedStrip split={committedSplit(d.T, dataOf(recurringState))} />
-          <ComingUp state={recurringState.status === "ready" ? recurringState.data : recurringState.status} asOf={app.asOf} />
-        </div>
-        <div className="card">
-          <CardHead title="Recent" x={<Link href="/activity">See all →</Link>} />
-          {d.recent.length ? (
-            <div className="list">
-              {d.recent.map((t) => (
-                <RecentRow key={t.id} t={t} />
-              ))}
-            </div>
-          ) : (
-            <InlineState>No activity this month yet.</InlineState>
-          )}
-        </div>
+      <div className="row2">
+        <Recent T={T} m={m} />
+        <NetWorthCard />
       </div>
     </>
   );
 }
 
-const Kpi = ({ label, v, prev, vs, upIsGood }: { label: string; v: number; prev: number; vs: string; upIsGood: boolean }) => (
-  <div className="kpi">
-    <div className="l">{label}</div>
-    <div className="v">{compact(v)}</div>
-    <Delta cur={v} prev={prev} vs={vs} upIsGood={upIsGood} compact />
+const Fig = ({ line, k, v, muted }: { line: ReactNode; k: string; v: string; muted?: boolean }) => (
+  <div className="r">
+    <span className="ln">{line}</span>
+    <span className="k">{k}</span>
+    <b className={muted ? "muted" : ""}>{v}</b>
   </div>
 );
+const Dash = ({ color, gap }: { color: string; gap?: boolean }) => (
+  <svg width="16" height="2" viewBox="0 0 16 2" aria-hidden>
+    <path d={gap ? "M0 1h4M7 1h4M14 1h2" : "M0 1h2.5M5 1h2.5M10 1h2.5M15 1h1"} stroke={color} strokeWidth={gap ? 1.5 : 2} />
+  </svg>
+);
 
-function CategoryBars(props: { cats: MonthSummary["categories"]; budgets: Budgets | null; derivedPrev: Map<string, number>; useDerived: boolean; vs: string }) {
-  const { cats, budgets, derivedPrev, useDerived, vs } = props;
-  const mx = Math.max(cats[0]?.amount ?? 0, ...cats.map((c) => budgets?.get(c.category) ?? 0), 1);
+function NeedsYou({ month }: { month: string }) {
+  const inbox = dataOf(read(api.inbox()));
+  const alerts = dataOf(read(api.alerts(month))) ?? [];
+  const waiting = inbox?.total ?? 0;
+  const n = alerts.length + (waiting ? 1 : 0);
+  if (!n) return null;
   return (
-    <div className="bars">
-      {cats.map((c) => {
-        const b = budgets?.get(c.category);
-        const col = categoryColor(c.category === "Uncategorized" ? null : c.category);
-        const prev = useDerived ? (derivedPrev.get(c.category) ?? 0) : c.previous;
-        const q = new URLSearchParams({ category: c.category, kind: "all" });
-        return (
-          <Link key={c.category} href={`/activity?${q}`} className={`brow${b && c.amount > b ? " over" : ""}`}>
-            <div className="n">
-              <Dot color={col} />
-              {c.category}
-            </div>
-            <div className="track">
-              <div className="fill" style={{ width: `${(c.amount / mx) * 100}%`, background: col }} />
-              {b ? <div className="mk" style={{ left: `${(b / mx) * 100}%` }} /> : null}
-            </div>
-            <div className="v num">
-              {compact(c.amount)}
-              <small>{b ? c.amount > b ? <span className="bad">over</span> : `of ${compact(b)}` : <Delta cur={c.amount} prev={prev} vs={vs} upIsGood={false} compact />}</small>
-            </div>
+    <div className="needs" role="region" aria-label="Needs you">
+      <span className="lbl">Needs you · {n}</span>
+      <div className="items">
+        {waiting > 0 && (
+          <Link href="/inbox" className="pill2">
+            <i />
+            {plural(waiting, "new payee")} to categorize
           </Link>
-        );
-      })}
+        )}
+        {alerts.map((a) => (
+          <Link key={a.id} href={a.txn_ids?.length ? `/transactions?txn=${a.txn_ids[0]}` : "/spending"} className={`pill2 ${a.severity === "bad" ? "bad" : "warn"}`} title={a.detail}>
+            <i />
+            {a.title} · {a.detail}
+          </Link>
+        ))}
+      </div>
+      <Link href="/inbox" className="linkx">
+        Review →
+      </Link>
     </div>
   );
 }
 
-const AlertRow = ({ a }: { a: Alert }) => (
-  <div className="alert">
-    <div className={`ic ${a.severity}`} aria-hidden>
-      {GLYPH[a.kind] ?? SEVERITY_GLYPH[a.severity]}
-    </div>
-    <div>
-      <b>{a.title}</b>
-      <small>{a.detail}</small>
-    </div>
-  </div>
-);
-
-function CommittedStrip({ split }: { split: { committed: number; discretionary: number } }) {
-  const total = split.committed + split.discretionary;
-  if (!total) return null;
+function WhereItWent({ m, T, txns, back, dayN }: { m: MonthCtx; T: Transaction[]; txns: Transaction[]; back: MonthCtx[]; dayN: number }) {
+  const [mode, setMode] = useState<"category" | "merchant">("category");
+  const key = mode === "category" ? categoryOf : (t: Transaction) => t.merchant;
+  const cur = byKey(T, key);
+  const normal = normalByKey(txns, back.map((b) => b.period), dayN, key);
+  const ids = new Map(T.filter((t) => t.category_id != null).map((t) => [t.category ?? "", t.category_id!]));
+  const all = [...cur].map(([k, v]) => ({ k, ...v, normal: normal.get(k) ?? 0 })).sort((a, b) => b.amount - a.amount);
+  const rows = all.slice(0, 7);
+  const rest = all.slice(7);
+  if (rest.length) rows.push({ k: "Other", amount: rest.reduce((a, r) => a + r.amount, 0), count: rest.reduce((a, r) => a + r.count, 0), normal: rest.reduce((a, r) => a + r.normal, 0) });
+  const max = Math.max(1, ...rows.map((r) => Math.max(r.amount, r.normal)));
+  const range = `from=${m.period.start}&to=${m.through}`;
   return (
-    <div className="cd">
-      <div className="bar">
-        <div style={{ width: `${(split.committed / total) * 100}%`, background: FLOW.committed }} />
-        <div style={{ width: `${(split.discretionary / total) * 100}%`, background: FLOW.spend }} />
-      </div>
-      <div className="leg">
-        <span>
-          <Dot color={FLOW.committed} />
-          Committed {compact(split.committed)}
-        </span>
-        <span>
-          <Dot color={FLOW.spend} />
-          Discretionary {compact(split.discretionary)}
-        </span>
-        <span className="t3">the part you can cut</span>
-      </div>
-    </div>
-  );
-}
-
-function ComingUp({ state, asOf }: { state: Recurring[] | null | "loading" | "error"; asOf: string }) {
-  if (state === "loading") return <InlineState>Loading…</InlineState>;
-  if (state === "error") return <InlineState onRetry={() => invalidate(["/api/recurring"])}>Predictions couldn't load.</InlineState>;
-  if (!state) return <InlineState>Predictions appear once Tijori has seen a few months of recurring charges.</InlineState>;
-  const next = upcoming(state, asOf);
-  if (!next.length) return <InlineState>Nothing predicted for the coming weeks.</InlineState>;
-  return (
-    <div className="list">
-      {next.map((r) => (
-        <div className="li" key={r.id}>
-          <Monogram name={r.merchant} />
-          <div className="mid">
-            <b>{r.merchant}</b>
-            <small>
-              {dayShort(r.next_due)} · {r.cadence}
-            </small>
-          </div>
-          <div className="amt num">{inr(r.amountExpected)}</div>
+    <section className="panel grow" aria-label="Where it went">
+      <div className="panel-h">
+        <h2>Where it went</h2>
+        <div className="seg" role="tablist">
+          {(["category", "merchant"] as const).map((k) => (
+            <button key={k} type="button" role="tab" aria-selected={mode === k} className={mode === k ? "on" : ""} onClick={() => setMode(k)}>
+              {k === "category" ? "Category" : "Merchant"}
+            </button>
+          ))}
         </div>
-      ))}
-    </div>
+        <div className="legend" style={{ marginLeft: "auto" }}>
+          <span>
+            <i className="bar" />
+            so far
+          </span>
+          <span>
+            <i className="tick" />
+            normal by day {dayN}
+          </span>
+        </div>
+      </div>
+      {rows.length ? (
+        <div className="cats2">
+          {rows.map((r) => {
+            const diff = r.amount - r.normal;
+            const notable = r.normal > 0 ? Math.abs(diff) > r.normal * NOTABLE : r.amount > 0;
+            const color = mode === "category" ? (r.k === "Other" ? "var(--t3)" : categoryColor(r.k === "Uncategorized" ? null : r.k)) : "var(--c1)";
+            const href =
+              r.k === "Other"
+                ? `/transactions?${range}`
+                : mode === "category"
+                  ? `/transactions?${range}&category=${r.k === "Uncategorized" ? "none" : (ids.get(r.k) ?? "")}`
+                  : `/transactions?${range}&q=${encodeURIComponent(r.k)}`;
+            return (
+              <Link key={r.k} href={href} className="catrow">
+                <span className="n">
+                  <i className="sq" style={{ background: color }} />
+                  <span>{r.k}</span>
+                  {r.k === "Other" ? <small>{rest.length} more</small> : r.count === 1 ? <small>1 charge</small> : null}
+                </span>
+                <span className="track2">
+                  <span className="f" style={{ width: `${(r.amount / max) * 100}%`, background: color }} />
+                  {r.normal > 0 && <span className="m" style={{ left: `${(r.normal / max) * 100}%` }} />}
+                </span>
+                <span className="a">{inr(r.amount)}</span>
+                <span className="d" style={notable ? { color: diff > 0 ? "var(--bad)" : "var(--in)", fontWeight: 500 } : undefined}>
+                  {r.normal > 0 ? signedK(diff) : "new"}
+                </span>
+              </Link>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="state">No spending recorded in {monthLong(m.key)} yet.</p>
+      )}
+      <div className="panel-h" style={{ borderTop: "1px solid var(--line)", paddingTop: 12 }}>
+        <span className="foot">Coloured when more than 15% off normal. Card-bill payments count as spend until card statements are itemised.</span>
+        <Link href={`/spending`} className="x linkx">
+          All spending →
+        </Link>
+      </div>
+    </section>
   );
 }
 
-function RecentRow({ t }: { t: Transaction }) {
-  const inflow = t.direction === "credit";
+const KIND_GROUP: Record<string, string> = { card: "Cards", bank: "Bank", wallet: "Wallet" };
+const GROUP_COLOR: Record<string, string> = { Cards: "var(--t1)", Bank: "var(--t2)", Wallet: "var(--t3)", Other: "var(--s4)" };
+
+function PaidFromPanel({ rows, total }: { rows: ReturnType<typeof paidFrom>; total: number }) {
+  const groups = new Map<string, number>();
+  for (const r of rows) groups.set(KIND_GROUP[r.kind ?? ""] ?? "Other", (groups.get(KIND_GROUP[r.kind ?? ""] ?? "Other") ?? 0) + r.amount);
+  const order = ["Cards", "Bank", "Wallet", "Other"].filter((g) => groups.get(g));
+  const cardBills = rows.reduce((a, r) => a + r.cardBills, 0);
   return (
-    <div className="li">
-      <Monogram name={t.merchant} />
-      <div className="mid">
-        <b>{t.merchant}</b>
-        <small>
-          {t.category ?? "Uncategorized"} · {dayName(t.date)}
-        </small>
+    <section className="panel side2" aria-label="Paid from">
+      <div className="panel-h">
+        <h2>Paid from</h2>
+        <span className="x">{inr(total)} this month</span>
       </div>
-      <div className={`amt num${inflow ? " in" : ""}`}>
-        {inflow ? "+" : ""}
-        {inr(t.amount)}
+      {total > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div className="split">
+            {order.map((g) => (
+              <div key={g} style={{ width: `${((groups.get(g) ?? 0) / total) * 100}%`, background: GROUP_COLOR[g] }} />
+            ))}
+          </div>
+          <div className="legend" style={{ color: "var(--t2)", fontSize: 13 }}>
+            {order.map((g) => (
+              <span key={g}>
+                {g} {Math.round(((groups.get(g) ?? 0) / total) * 100)}%
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="rows">
+        {rows.map((r) => (
+          <Link key={r.id} href={`/transactions?account=${r.id}`} className="lrow">
+            <span className="mg acct" style={{ background: monogramColor(r.label) }}>
+              {r.label.replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase()}
+            </span>
+            <span className="mid">
+              <b>{r.label}</b>
+              <small>
+                {KIND_GROUP[r.kind ?? ""] ?? "Other"} · {plural(r.count, "charge")}
+                {r.cardBills > 0 && ` · incl. ${compact(r.cardBills)} card bills`}
+              </small>
+            </span>
+            <span className="amt">{inr(r.amount)}</span>
+          </Link>
+        ))}
+        {!rows.length && <p className="state">Nothing spent yet this month.</p>}
       </div>
-    </div>
+      {cardBills > 0 && (
+        <span className="foot">Card bills paid from a bank account stand in for the card's purchases until card statements are parsed.</span>
+      )}
+    </section>
   );
 }
+
+function Recent({ T, m }: { T: Transaction[]; m: MonthCtx }) {
+  const rows = [...T].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : Number(b.id) - Number(a.id))).slice(0, 7);
+  return (
+    <section className="panel grow" aria-label="Recent transactions">
+      <div className="panel-h">
+        <h2>Recent transactions</h2>
+        <Link href={`/transactions?from=${m.period.start}&to=${m.period.end}`} className="x linkx">
+          All transactions →
+        </Link>
+      </div>
+      <div className="rows">
+        {rows.map((t) => (
+          <TxnLine key={t.id} t={t} today={m.through} />
+        ))}
+        {!rows.length && <p className="state">No activity this month yet.</p>}
+      </div>
+    </section>
+  );
+}
+
+export function TxnLine({ t, today }: { t: Transaction; today: string }) {
+  const credit = t.direction === "credit";
+  const unknown = t.category == null;
+  return (
+    <Link href={`/transactions?txn=${t.id}`} className="lrow">
+      <span className="dt">{t.date === today ? "Today" : dayShort(t.date)}</span>
+      <span className={`mg${unknown ? " unknown" : ""}`} style={{ background: monogramColor(t.merchant) }}>
+        {unknown ? "?" : (t.merchant.replace(/[^A-Za-z0-9]/g, "")[0] ?? "•").toUpperCase()}
+      </span>
+      <span className="mid">
+        <b className={t.vpa && unknown ? "mono-n" : ""} style={t.vpa && unknown ? { fontSize: 13 } : undefined}>
+          {unknown && t.vpa ? t.vpa : t.merchant}
+        </b>
+        <small>
+          {unknown ? (
+            <>
+              <span className="acc-t">Uncategorized</span>
+              <span className="faint">· {t.review_reason === "person" ? "person" : "new payee"}</span>
+            </>
+          ) : (
+            <>
+              <i className="sq" style={{ width: 6, height: 6, background: categoryColor(t.category) }} />
+              {t.category}
+              {t.kind === "refund" && " · refund"}
+            </>
+          )}
+        </small>
+      </span>
+      <span className="ac">{t.account}</span>
+      <span className={`amt${credit ? " good-t" : ""}`}>
+        {credit ? "+" : "−"}
+        {inr(t.amount)}
+      </span>
+    </Link>
+  );
+}
+
+function NetWorthCard() {
+  const st = read(api.liveNetWorth());
+  const nw = dataOf(st);
+  const body = (() => {
+    if (st.status === "loading") return <p className="state">Loading…</p>;
+    if (st.status === "error") return <p className="state">Net worth couldn't load.</p>;
+    if (!nw || nw.net_worth == null) return <p className="state">Import the net-worth sheet or set a value to start.</p>;
+    const month = nw.changes.find((c) => c.period === "month");
+    const history = nw.history.slice(-12).map((h) => ({ date: h.date, value: toPaise(h.net_worth) }));
+    const proj = (nw.projection?.points ?? []).map((p) => ({ date: p.date, value: toPaise(p.net_worth) }));
+    const classes = Object.entries(nw.by_asset_class).sort((a, b) => toPaise(b[1]) - toPaise(a[1]));
+    return (
+      <>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <div className="nwfig">
+            <b>{compact(toPaise(nw.net_worth))}</b>
+            {month?.amount != null && (
+              <span className={`mono-n ${toPaise(month.amount) >= 0 ? "good-t" : "muted"}`} style={{ fontWeight: 500 }}>
+                {signedK(toPaise(month.amount))} since {dayShort(month.since)}
+              </span>
+            )}
+          </div>
+          <span className="foot">Newest known value per component · as of {dayShort(nw.as_of)}</span>
+        </div>
+        {history.length > 1 && (
+          <div className="chart2">
+            <NetWorthChart history={history} projection={proj} label={(x) => monthApos(x)} height={170} width={400} />
+          </div>
+        )}
+        <div className="kvrows">
+          {classes.map(([k, v]) => (
+            <div key={k} className="r">
+              <span>{CLASS_LABEL[k] ?? k}</span>
+              <b>{compact(toPaise(v))}</b>
+            </div>
+          ))}
+        </div>
+        {nw.projection && (
+          <span className="foot">
+            Projection: {signedK(toPaise(nw.projection.monthly_change))} a month, the average monthly change of the last {nw.projection.basis_months} months.
+          </span>
+        )}
+      </>
+    );
+  })();
+  return (
+    <section className="panel side2" aria-label="Net worth">
+      <div className="panel-h">
+        <h2>Net worth</h2>
+        <Link href="/networth" className="x linkx">
+          Details →
+        </Link>
+      </div>
+      {body}
+    </section>
+  );
+}
+
+export const CLASS_LABEL: Record<string, string> = {
+  cash: "Savings accounts",
+  deposits: "Fixed deposits",
+  equity: "Mutual funds + stocks",
+  retirement: "EPF + PPF",
+  gold: "Gold",
+  other: "Other",
+};
+

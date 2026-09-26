@@ -1,415 +1,335 @@
-import { useMemo, useState } from "react";
-import { columnChart, donut, lineChart, tipRow, tipTitle, type Chart } from "../charts";
-import { ChartView } from "../components/ChartView";
+import { useState } from "react";
+import { NetWorthChart } from "../components/charts";
 import { useToast } from "../components/Toast";
-import { CardHead, Delta, Dot, Empty, ErrorState, InlineState, Loading } from "../components/ui";
-import { api, invalidate, read, saveRemark, type ApiError, type ResourceState } from "../lib/api";
-import { DIV_BAD, DIV_GOOD, NW_SHEET_KEYS, slotColor } from "../lib/colors";
-import { html } from "../lib/dom";
-import { compact, dayIST, dayLong, dayShort, inr, monthShortOf, monthShortYear, signed, toPaise } from "../lib/format";
-import { allocation, allocationSlots, idleCash } from "../lib/insights";
-import { useStore } from "../lib/useStore";
-import type { Account, Health, Snapshot } from "../lib/types";
+import { ErrorState, Loading } from "../components/ui";
+import { api, dataOf, invalidate, read, setComponent } from "../lib/api";
+import { dayShort, daysBetween, inr, monthApos, toPaise } from "../lib/format";
+import type { LiveComponent, LiveNetWorth } from "../lib/types";
+import { CLASS_LABEL } from "./Overview";
 
-const HEALTH: Record<Health, string> = { good: "var(--in)", warn: "var(--warn)", bad: "var(--bad)" };
+const COLOR: Record<string, string> = {
+  sbi: "#3987e5",
+  hdfc: "#6da7ec",
+  fd: "#b7d3f6",
+  stocks: "#d95926",
+  mf: "#c98500",
+  ppf: "#199e70",
+  epf: "#5fcf9f",
+  gold: "#e3b04b",
+  other: "#696969",
+};
+const SOURCE: Record<LiveComponent["source"], string> = { sheet: "Sheet", statement: "Statement balance", manual: "Set by you" };
+const RANGES = [
+  ["6m", "6M", 6],
+  ["1y", "1Y", 12],
+  ["all", "All", 0],
+] as const;
 
 export function NetWorth() {
-  useStore();
-  const st = read(api.networth());
-  const accounts = read(api.accounts());
-  if (st.status === "loading") return <Loading />;
-  if (st.status === "error") return <ErrorState error={st.error} title="Couldn't load net worth" onRetry={() => invalidate(["/api/networth"])} />;
-  const S = st.data;
-  const last = S.at(-1);
-  if (!last) return <Empty title="No net-worth snapshots yet">The first snapshot appears once balances and holdings are imported.</Empty>;
-  return <Body S={S} last={last} accounts={accounts} />;
-}
-
-function Body({ S, last, accounts }: { S: Snapshot[]; last: Snapshot; accounts: ResourceState<Account[] | null> }) {
-  const [changeOf, setChangeOf] = useState<"net" | "liquid">("net");
-  const prev = S.at(-2) ?? null;
-  const first = S[0]!;
-  const d = useMemo(() => {
-    const slots = allocationSlots(S);
-    return {
-      slots,
-      slices: allocation(last, slots).filter((s) => s.amount !== 0),
-      prevBy: new Map(prev ? allocation(prev, slots).map((s) => [s.key, s]) : []),
-      nw: history(S, "Net worth", "var(--accent)", (s) => s.netWorth),
-      liquid: history(S, "Liquid cash", slotColor(slots.get("cash")), (s) => s.liquid),
-      allocTime: allocationOverTime(S, slots),
-    };
-  }, [S, last, prev]);
-  const alloc = useMemo(
-    () => donut({ label: `Allocation on ${dayLong(last.date)}`, slices: d.slices.map((s) => ({ key: s.key, label: s.label, value: s.amount, color: slotColor(s.slot) })), center: [compact(last.netWorth), "net worth"] }),
-    [d, last],
-  );
-  const change = useMemo(() => changeChart(S, changeOf), [S, changeOf]);
-  const share = (v: number) => (last.netWorth > 0 ? v / last.netWorth : 0);
-  const idle = idleCash(last);
-  const allocKeys = [...d.slots].filter(([k]) => S.some((s) => allocation(s, d.slots).some((x) => x.key === k && x.amount)));
-
+  const st = read(api.liveNetWorth());
   return (
     <>
-      <div className="grid g-hero">
-        <div className="card hero">
-          <div className="lab">Net worth · {dayLong(last.date)}</div>
-          <div className="big">{compact(last.netWorth)}</div>
-          <div className="pair">
-            {last.netChange != null && (
-              <span className="pi">
-                <span className="pl">{signed(last.netChange)} this month</span>
-                {prev && <Delta cur={last.netWorth} prev={prev.netWorth} vs={monthShortOf(prev.date)} upIsGood />}
-              </span>
-            )}
-            {S.length > 1 && (
-              <span className="pi">
-                <span className="pl">
-                  {signed(last.netWorth - first.netWorth)} since {monthShortYear(first.date)}
-                </span>
-                <Delta cur={last.netWorth} prev={first.netWorth} vs={monthShortYear(first.date)} upIsGood />
-              </span>
-            )}
-          </div>
-          <div className="comp">
-            {d.slices.map((s) => (
-              <div key={s.key} title={s.label} style={{ width: `${Math.max(0, share(s.amount)) * 100}%`, background: slotColor(s.slot) }} />
-            ))}
-          </div>
-          <table className="tbl">
-            <thead>
-              <tr>
-                <th>Asset</th>
-                <th className="r">Value</th>
-                <th className="r">Share</th>
-                <th className="r">vs last month</th>
-              </tr>
-            </thead>
-            <tbody>
-              {d.slices.flatMap((s) => {
-                const before = d.prevBy.get(s.key);
-                const dd = before ? s.amount - before.amount : null;
-                return [
-                  <tr key={s.key}>
-                    <td>
-                      <Dot color={slotColor(s.slot)} />
-                      {s.label}
-                    </td>
-                    <td className="r num">{inr(s.amount)}</td>
-                    <td className="r num t2">{(share(s.amount) * 100).toFixed(1)}%</td>
-                    <td className={`r num ${dd ? (dd > 0 ? "in" : "bad") : "t3"}`}>{dd ? signed(dd) : "—"}</td>
-                  </tr>,
-                  ...(s.parts.length > 1
-                    ? s.parts.map((p) => (
-                        <tr className="sub-row" key={`${s.key}-${p.label}`}>
-                          <td>{p.label}</td>
-                          <td className="r num">{inr(p.amount)}</td>
-                          <td className="r num t3">{(share(p.amount) * 100).toFixed(1)}%</td>
-                          <td />
-                        </tr>
-                      ))
-                    : []),
-                ];
-              })}
-            </tbody>
-          </table>
-        </div>
-        <div className="card">
-          <CardHead title="Current allocation" x="cash grouped like the sheet" />
-          <ChartView id="nw-alloc" chart={alloc}>
-            <div className="dl">
-              {d.slices.map((s) => (
-                <div key={s.key}>
-                  <Dot color={slotColor(s.slot)} />
-                  <span className="dl-n">{s.label}</span>
-                  <b className="num">{Math.round(share(s.amount) * 100)}%</b>
-                  <span className="num t3">{compact(s.amount)}</span>
-                </div>
-              ))}
-            </div>
-          </ChartView>
-          {idle && (
-            <div className="alert mt">
-              <div className="ic warn" aria-hidden>
-                %
-              </div>
-              <div>
-                <b>
-                  {compact(idle.amount)} idle in {idle.label}
-                </b>
-                <small>Savings accounts usually pay well below an FD or a liquid fund. Compare current rates before moving it.</small>
-              </div>
-            </div>
-          )}
-        </div>
+      <div className="ph">
+        <h1>Net worth</h1>
       </div>
-
-      <div className="grid g-2 mt-g">
-        <div className="card">
-          <CardHead title="Net worth over time" x="1st of each month" />
-          <ChartView id="nw-line" chart={d.nw} />
-        </div>
-        <div className="card">
-          <CardHead title="Liquid cash over time" x="savings + fixed deposits" />
-          <ChartView id="nw-liquid" chart={d.liquid} />
-        </div>
-      </div>
-
-      <div className="grid g-2 mt-g">
-        <div className="card">
-          <h3>
-            Monthly change
-            <span className="x">
-              <span className="seg-ctl" role="group" aria-label="Change of">
-                {(["net", "liquid"] as const).map((v) => (
-                  <button type="button" key={v} className={`chip${changeOf === v ? " on" : ""}`} aria-pressed={changeOf === v} onClick={() => setChangeOf(v)}>
-                    {v === "net" ? "Net worth" : "Liquid cash"}
-                  </button>
-                ))}
-              </span>
-            </span>
-          </h3>
-          <ChartView id={`nw-change-${changeOf}`} chart={change}>
-            <div className="leg2">
-              <span>
-                <i className="sq" style={{ background: DIV_GOOD }} />
-                Grew
-              </span>
-              <span>
-                <i className="sq" style={{ background: DIV_BAD }} />
-                Shrank
-              </span>
-              <span className="t3">hover a month for its remark and commentary</span>
-            </div>
-          </ChartView>
-        </div>
-        <div className="card">
-          <CardHead title="Allocation over time" x="share of net worth" />
-          <ChartView id="nw-alloc-time" chart={d.allocTime}>
-            <div className="leg2 wrap">
-              {allocKeys.map(([k, sl]) => (
-                <span key={k}>
-                  <i className="sq" style={{ background: slotColor(sl) }} />
-                  {allocation(last, d.slots).find((x) => x.key === k)?.label ?? k}
-                </span>
-              ))}
-            </div>
-          </ChartView>
-        </div>
-      </div>
-
-      <div className="card mt-g">
-        <CardHead title="Monthly ledger" x="newest first · remarks are editable" />
-        <Ledger S={S} />
-      </div>
-
-      <div className="card mt-g">
-        <CardHead title="Sources" x="how each number stays current" />
-        <Sources state={accounts} />
-      </div>
+      {st.status === "loading" && <Loading />}
+      {st.status === "error" && <ErrorState error={st.error} title="Couldn't load net worth" onRetry={() => invalidate(["/api/networth"])} />}
+      {st.status === "ready" && (st.data.net_worth == null ? <EmptyNw /> : <Body nw={st.data} />)}
     </>
   );
 }
 
-function history(S: Snapshot[], name: string, c: string, v: (s: Snapshot) => number): Chart {
-  return lineChart({
-    label: `${name} on the 1st of each month`,
-    series: [{ id: name, name, color: c, area: true, points: S.map((s, i) => [i, v(s)]) }],
-    height: 220,
-    zero: false,
-    formatX: (i) => (S[i] ? monthShortOf(S[i].date) : ""),
-    tipTitle: (i) => (S[i] ? dayLong(S[i].date) : ""),
-  });
-}
-
-/** Diverging columns on the blue ↔ red pair around a zero baseline; the tooltip carries the month's remark and commentary. */
-function changeChart(S: Snapshot[], of: "net" | "liquid"): Chart {
-  const rows = S.flatMap((s) => {
-    const v = of === "net" ? s.netChange : s.liquidChange;
-    return v == null ? [] : [{ s, v }];
-  });
-  const what = of === "net" ? "Net worth" : "Liquid cash";
-  return columnChart({
-    label: `Monthly change in ${what.toLowerCase()}`,
-    mode: "group",
-    bands: rows.map(({ s, v }) => ({ key: s.date, label: dayLong(s.date), short: monthShortOf(s.date), segments: [{ key: "chg", name: what, color: v >= 0 ? DIV_GOOD : DIV_BAD, value: v }] })),
-    tip: (i) => {
-      const r = rows[i]!;
-      return html`${tipTitle(dayLong(r.s.date))}${tipRow(r.v >= 0 ? DIV_GOOD : DIV_BAD, `${what} change`, signed(r.v))}
-        ${r.s.remark ? html`<div class="tnote">${r.s.remark}</div>` : ""}${r.s.commentary ? html`<div class="tnote t3">${r.s.commentary}</div>` : ""}`;
-    },
-    table: () => ({ head: ["Month", `${what} change`, "Remark", "Commentary"], rows: rows.map(({ s, v }) => [dayLong(s.date), signed(v), s.remark ?? "", s.commentary ?? ""]) }),
-  });
-}
-
-function allocationOverTime(S: Snapshot[], slots: Map<string, number | undefined>): Chart {
-  return columnChart({
-    label: "Allocation of net worth by month, as a share of the total",
-    mode: "stack",
-    normalize: true,
-    bands: S.map((s) => ({
-      key: s.date,
-      label: dayLong(s.date),
-      short: monthShortOf(s.date),
-      segments: allocation(s, slots).map((x) => ({ key: x.key, name: x.label, color: slotColor(x.slot), value: Math.max(0, x.amount) })),
-    })),
-    tip: (i, seg) => {
-      const s = S[i]!;
-      const sl = allocation(s, slots).filter((x) => x.amount > 0);
-      const tot = sl.reduce((a, x) => a + x.amount, 0) || 1;
-      return html`${tipTitle(dayLong(s.date))}${[...sl].reverse().map((x) => {
-        const row = tipRow(slotColor(x.slot), x.label, `${Math.round((x.amount / tot) * 100)}%`);
-        return x.key === seg ? html`<div class="hl">${row}</div>` : row;
-      })}`;
-    },
-  });
-}
-
-/** The sheet's ledger, newest first, in the sheet's column order (docs/api.md component keys) with the API's labels. */
-function Ledger({ S }: { S: Snapshot[] }) {
-  const keys = [...new Set(S.flatMap((s) => s.components.map((c) => c.key)))].sort((a, b) => {
-    const ia = NW_SHEET_KEYS.indexOf(a);
-    const ib = NW_SHEET_KEYS.indexOf(b);
-    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
-  });
-  const labels = new Map(S.flatMap((s) => s.components.map((c) => [c.key, c.label] as const)));
-  const neg = (v: number | null) => (v != null && v < 0 ? " bad" : "");
+function EmptyNw() {
   return (
-    <div className="ledger" role="region" aria-label="Monthly ledger" tabIndex={0}>
-      <table className="tbl lg">
+    <section className="panel">
+      <h2 style={{ margin: 0, fontSize: 16 }}>No net worth yet</h2>
+      <p className="muted" style={{ margin: 0 }}>
+        Import the net-worth sheet (Settings → Upload) or set a component's value below once one exists. Statement balances for SBI and HDFC savings fill in automatically.
+      </p>
+    </section>
+  );
+}
+
+const signed = (v: number) => `${v >= 0 ? "+" : "−"}${inr(Math.abs(v))}`;
+
+function Body({ nw }: { nw: LiveNetWorth }) {
+  const [range, setRange] = useState<(typeof RANGES)[number][0]>("1y");
+  const total = toPaise(nw.net_worth!);
+  const n = RANGES.find((r) => r[0] === range)![2];
+  const hist = nw.history.map((h) => ({ date: h.date, value: toPaise(h.net_worth) }));
+  const shown = n ? hist.slice(-(n + 1)) : hist;
+  const proj = (nw.projection?.points ?? []).map((p) => ({ date: p.date, value: toPaise(p.net_worth) }));
+  const label = { month: "Since 1st", year: "Since 1 Jan", fy: "Since 1 Apr (FY)" } as const;
+  return (
+    <>
+      <section className="panel" style={{ flexDirection: "row", gap: 0, padding: 0 }}>
+        <div style={{ flex: 1.4, padding: "20px 24px", display: "flex", flexDirection: "column", gap: 6 }}>
+          <span className="lbl">Net worth · live</span>
+          <div className="nwfig lg">
+            <b>{inr(total)}</b>
+          </div>
+          <span className="foot">Newest known value per component · as of {dayShort(nw.as_of)}</span>
+        </div>
+        {nw.changes.map((c) => (
+          <div key={c.period} style={{ flex: 1, padding: "24px 20px", borderLeft: "1px solid var(--line)", display: "flex", flexDirection: "column", gap: 4 }}>
+            <span className="muted" style={{ fontSize: 13 }}>
+              {c.period === "month" ? `Since ${dayShort(c.since)}` : label[c.period]}
+            </span>
+            {c.amount != null ? (
+              <span className="mono-n" style={{ fontSize: 16, fontWeight: 500, color: toPaise(c.amount) >= 0 ? "var(--in)" : "var(--t2)" }}>
+                {signed(toPaise(c.amount))} <small className="faint" style={{ fontSize: 12 }}>{c.pct != null ? `${c.pct > 0 ? "+" : ""}${c.pct}%` : ""}</small>
+              </span>
+            ) : (
+              <span className="faint">no snapshot then</span>
+            )}
+          </div>
+        ))}
+        <div style={{ flex: 1, padding: "24px 20px", borderLeft: "1px solid var(--line)", display: "flex", flexDirection: "column", gap: 4 }}>
+          <span className="muted" style={{ fontSize: 13 }}>Liquid · SBI + HDFC + FD</span>
+          <span className="mono-n" style={{ fontSize: 16, fontWeight: 500 }}>
+            {nw.liquid ? inr(toPaise(nw.liquid)) : "—"}
+          </span>
+        </div>
+      </section>
+
+      <section className="panel" aria-label="History">
+        <div className="panel-h">
+          <h2>History</h2>
+          <div className="seg">
+            {RANGES.map(([k, l]) => (
+              <button key={k} type="button" className={range === k ? "on" : ""} onClick={() => setRange(k)}>
+                {l}
+              </button>
+            ))}
+          </div>
+          <div className="legend" style={{ marginLeft: "auto" }}>
+            <span>
+              <i className="sq" style={{ background: "var(--in)", height: 2, width: 14 }} />
+              Net worth
+            </span>
+            {proj.length > 0 && <span>··· Projected</span>}
+          </div>
+        </div>
+        <div className="chart2">
+          <NetWorthChart history={shown} projection={proj} label={(d) => monthApos(d)} />
+        </div>
+        {nw.projection && (
+          <span className="foot">
+            Projection: {signed(toPaise(nw.projection.monthly_change))} a month, the average monthly change of the last {nw.projection.basis_months} months, continued.
+          </span>
+        )}
+      </section>
+
+      <Allocation nw={nw} total={total} />
+      <MonthByMonth nw={nw} />
+      <Holdings />
+    </>
+  );
+}
+
+function Allocation({ nw, total }: { nw: LiveNetWorth; total: number }) {
+  const [editing, setEditing] = useState<string | null>(null);
+  const classes = Object.entries(nw.by_asset_class).sort((a, b) => toPaise(b[1]) - toPaise(a[1]));
+  const sinceTotal = nw.components.reduce((a, c) => a + (c.change_since ? toPaise(c.change_since) : 0), 0);
+  return (
+    <section className="panel" aria-label="Allocation">
+      <div className="panel-h">
+        <h2>Allocation</h2>
+        <span className="x">Same rows as your sheet</span>
+      </div>
+      <div className="split" style={{ height: 10 }}>
+        {nw.components.map((c) => (
+          <div key={c.key} style={{ width: `${c.share_pct}%`, background: COLOR[c.key] ?? "var(--t3)", height: 10 }} title={`${c.label} ${c.share_pct}%`} />
+        ))}
+      </div>
+      <div className="legend" style={{ color: "var(--t2)", fontSize: 13 }}>
+        {classes.map(([k, v]) => (
+          <span key={k}>
+            {CLASS_LABEL[k] ?? k} {total ? ((toPaise(v) / total) * 100).toFixed(1) : 0}%
+          </span>
+        ))}
+      </div>
+      <table className="t2">
         <thead>
           <tr>
-            <th className="stick">Month</th>
-            {keys.map((k) => (
-              <th key={k} className="r">
-                {labels.get(k) ?? k}
-              </th>
-            ))}
-            <th className="r">Net worth</th>
-            <th className="r">Net change</th>
-            <th className="r">Liquid cash</th>
-            <th className="r">Liquid change</th>
-            <th>Remarks</th>
-            <th>Commentary</th>
+            <th>Component</th>
+            <th className="r">Value</th>
+            <th className="r">Share</th>
+            <th className="r">Since 1st</th>
+            <th>Source · as of</th>
+            <th />
           </tr>
         </thead>
         <tbody>
-          {[...S].reverse().map((s) => {
-            const by = new Map(s.components.map((c) => [c.key, c.amount]));
-            return (
-              <tr key={s.date}>
-                <th className="stick" scope="row">
-                  {monthShortYear(s.date)}
-                </th>
-                {keys.map((k) => (
-                  <td key={k} className="r num">
-                    {by.has(k) ? inr(by.get(k)!) : "—"}
-                  </td>
-                ))}
-                <td className="r num b">{inr(s.netWorth)}</td>
-                <td className={`r num${neg(s.netChange)}`}>{s.netChange != null ? signed(s.netChange) : "—"}</td>
-                <td className="r num">{inr(s.liquid)}</td>
-                <td className={`r num${neg(s.liquidChange)}`}>{s.liquidChange != null ? signed(s.liquidChange) : "—"}</td>
-                <td>
-                  <RemarkCell key={`${s.date}|${s.remark ?? ""}`} date={s.date} remark={s.remark} />
-                </td>
-                <td className="t2 cm">
-                  {s.commentary ?? ""}
-                  {s.commentary && s.commentarySource === "template" && <span className="tag tag-auto">auto</span>}
-                </td>
-              </tr>
-            );
-          })}
+          {nw.components.map((c) => (
+            <tr key={c.key}>
+              <td>
+                <span className="nm">
+                  <i className="sq" style={{ background: COLOR[c.key] ?? "var(--t3)" }} />
+                  {c.label}
+                </span>
+              </td>
+              <td className="r">{inr(toPaise(c.amount))}</td>
+              <td className="r muted">{c.share_pct.toFixed(1)}%</td>
+              <td className="r" style={{ color: c.change_since && toPaise(c.change_since) > 0 ? "var(--in)" : "var(--t2)" }}>
+                {c.change_since != null ? (toPaise(c.change_since) === 0 ? "₹0" : signed(toPaise(c.change_since))) : "—"}
+              </td>
+              <td>
+                {editing === c.key ? (
+                  <EditValue c={c} done={() => setEditing(null)} />
+                ) : (
+                  <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }} className="muted">
+                    {SOURCE[c.source]} · {dayShort(c.as_of)}
+                    {c.stale && <span className="stale">{daysBetween(c.as_of, nw.as_of)} days old</span>}
+                  </span>
+                )}
+              </td>
+              <td className="r" style={{ fontFamily: "inherit" }}>
+                {editing !== c.key && (
+                  <button type="button" className="linkish" onClick={() => setEditing(c.key)}>
+                    Edit
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+          <tr className="total">
+            <td>Net worth</td>
+            <td className="r">{inr(total)}</td>
+            <td className="r">100%</td>
+            <td className="r" style={{ color: sinceTotal > 0 ? "var(--in)" : undefined }}>
+              {signed(sinceTotal)}
+            </td>
+            <td colSpan={2} className="foot" style={{ fontWeight: 400 }}>
+              Values older than 30 days are flagged. Edit sets today's value by hand.
+            </td>
+          </tr>
         </tbody>
       </table>
-    </div>
+    </section>
   );
 }
 
-/** Saves on Enter or blur, reverts on Escape; PATCH /api/networth/snapshots/{date} {remark}. */
-function RemarkCell({ date, remark }: { date: string; remark: string | null }) {
+const MONEY = /^\d{0,12}(\.\d{0,2})?$/;
+function EditValue({ c, done }: { c: LiveComponent; done: () => void }) {
+  const [v, setV] = useState(String(toPaise(c.amount) / 100));
+  const [busy, setBusy] = useState(false);
   const toast = useToast();
-  const [draft, setDraft] = useState(remark ?? "");
-  const [saving, setSaving] = useState(false);
-  const commit = async () => {
-    const next = draft.trim();
-    if (next === (remark ?? "").trim() || saving) return;
-    setSaving(true);
+  const save = async () => {
+    if (!v || !MONEY.test(v)) return;
+    setBusy(true);
     try {
-      await saveRemark(date, next);
-      toast("Remark saved.");
-    } catch (e) {
-      setDraft(remark ?? "");
-      toast(`Couldn't save the remark. ${(e as ApiError).message}`);
+      await setComponent(c.key, v);
+      toast(`${c.label} set to ${inr(toPaise(v))}`);
+      done();
+    } catch {
+      toast("Couldn't save that value.");
     } finally {
-      setSaving(false);
+      setBusy(false);
     }
   };
   return (
-    <input
-      className="inp inp-sm"
-      value={draft}
-      maxLength={2000}
-      aria-label={`Remark for ${monthShortYear(date)}`}
-      disabled={saving}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") e.currentTarget.blur();
-        if (e.key === "Escape") {
-          setDraft(remark ?? "");
-          // Blur after the revert lands, so commit() sees nothing to save.
-          const el = e.currentTarget;
-          requestAnimationFrame(() => el.blur());
-        }
-      }}
-    />
+    <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+      <span className="mono-n faint">₹</span>
+      <input className="inp2 mono-n" style={{ width: 130 }} inputMode="decimal" autoFocus value={v} onChange={(e) => MONEY.test(e.target.value) && setV(e.target.value)} onKeyDown={(e) => (e.key === "Enter" ? save() : e.key === "Escape" && done())} aria-label={`${c.label} value`} />
+      <button type="button" className="btn2 sm primary" disabled={busy || !v} onClick={save}>
+        Save
+      </button>
+      <button type="button" className="btn2 sm" style={{ border: 0 }} onClick={done}>
+        Cancel
+      </button>
+    </span>
   );
 }
 
-/** Health from what M0 reports: a statement that balanced is good, one that didn't is a warning, none yet is bad. */
-function accountHealth(a: Account): [Health, string] {
-  if (!a.last_statement) return ["bad", "Awaiting a statement"];
-  if (a.last_statement.reconciled) return ["good", "Reconciled"];
-  return ["warn", `Off by ${inr(Math.abs(toPaise(a.last_statement.diff)))}`];
+function MonthByMonth({ nw }: { nw: LiveNetWorth }) {
+  if (!nw.months.length) return null;
+  const m = (v: string | null) => (v == null ? "—" : signed(toPaise(v)));
+  return (
+    <section className="panel" aria-label="Month by month">
+      <div className="panel-h">
+        <h2>Month by month</h2>
+        <span className="x">Change = contributions + market + cash</span>
+      </div>
+      <table className="t2">
+        <thead>
+          <tr>
+            <th>Period</th>
+            <th className="r">Start</th>
+            <th className="r">Contributions</th>
+            <th className="r">Market & other</th>
+            <th className="r">Cash</th>
+            <th className="r">Change</th>
+            <th className="r">End</th>
+          </tr>
+        </thead>
+        <tbody>
+          {nw.months.map((r) => (
+            <tr key={r.start}>
+              <td>
+                {monthApos(r.start)} {r.live && <small>to {dayShort(r.end)}</small>}
+              </td>
+              <td className="r muted">{inr(toPaise(r.start_value))}</td>
+              <td className="r">{m(r.contributions)}</td>
+              <td className="r">{m(r.market)}</td>
+              <td className="r">{m(r.cash_change)}</td>
+              <td className="r" style={{ color: toPaise(r.change) >= 0 ? "var(--in)" : "var(--t2)" }}>
+                {m(r.change)}
+              </td>
+              <td className="r">{inr(toPaise(r.end_value))}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <span className="foot">
+        Contributions = SIP, PPF and other investment debits. Cash = SBI + HDFC + FD. Market & other = change − contributions − cash (includes values set by hand). This month's split waits until every cash balance is newer than the 1st.
+      </span>
+    </section>
+  );
 }
 
-function Sources({ state }: { state: ResourceState<Account[] | null> }) {
-  if (state.status === "loading") return <InlineState>Loading…</InlineState>;
-  if (state.status === "error") return <InlineState onRetry={() => invalidate(["/api/accounts"])}>{state.error.message}</InlineState>;
-  if (!state.data) return <InlineState>Source health appears here once the server reports it.</InlineState>;
-  if (!state.data.length) return <InlineState>No accounts connected yet.</InlineState>;
+function Holdings() {
+  const items = dataOf(read(api.holdings())) ?? [];
   return (
-    <table className="tbl">
-      <thead>
-        <tr>
-          <th>Account</th>
-          <th>Live feed</th>
-          <th>Ground truth</th>
-          <th className="r">Status</th>
-        </tr>
-      </thead>
-      <tbody>
-        {state.data.map((a) => {
-          const [health, status] = accountHealth(a);
-          return (
-            <tr key={a.id}>
-              <td>{a.label}</td>
-              <td className="t2">
-                {a.last_seen_at ? `Last alert ${dayShort(dayIST(a.last_seen_at))}` : "Not connected yet"}
-                {a.coverage_pct != null ? ` · ${Math.round(a.coverage_pct)}% seen live` : ""}
-              </td>
-              <td className="t2">{a.last_statement ? `Statement ${dayShort(a.last_statement.period_start)} – ${dayShort(a.last_statement.period_end)}` : "No statement yet"}</td>
-              <td className="r">
-                <span className="health">
-                  <i style={{ background: HEALTH[health] }} aria-hidden />
-                  {status}
-                </span>
-              </td>
+    <section className="panel" aria-label="Holdings">
+      <div className="panel-h">
+        <h2>Holdings</h2>
+        <span className="x">Units × latest NAV / close</span>
+      </div>
+      {items.length ? (
+        <table className="t2">
+          <thead>
+            <tr>
+              <th>Holding</th>
+              <th className="r">Units</th>
+              <th className="r">Price</th>
+              <th className="r">Value</th>
+              <th>Units as of</th>
             </tr>
-          );
-        })}
-      </tbody>
-    </table>
+          </thead>
+          <tbody>
+            {items.map((h) => (
+              <tr key={h.isin ?? h.name}>
+                <td>
+                  {h.name}
+                  <br />
+                  <small>{h.isin}</small>
+                </td>
+                <td className="r">{Number(h.units).toLocaleString("en-IN", { maximumFractionDigits: 3 })}</td>
+                <td className="r">{h.price ? `₹${Number(h.price).toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "—"}</td>
+                <td className="r">{h.value ? inr(toPaise(h.value)) : "—"}</td>
+                <td className="muted">
+                  {h.source.toUpperCase()} {dayShort(h.units_as_of)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="state" style={{ padding: 0 }}>
+          Fund and stock holdings appear once the CDSL CAS parser lands. Until then, Mutual Funds and Stocks come from the sheet, or from a value you set above.
+        </p>
+      )}
+    </section>
   );
 }

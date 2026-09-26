@@ -93,6 +93,8 @@ export const monthLong = (m: MonthKey) => F.monthLong.format(utc(`${m}-01`));
 export const monthShort = (m: MonthKey) => F.monthShort.format(utc(`${m}-01`));
 export const monthShortOf = (d: ISODate) => F.monthShort.format(utc(d));
 export const monthShortYear = (d: ISODate) => F.monthShortYear.format(utc(d));
+/** "Sep '26": a month with its year, never mistakable for a day. */
+export const monthApos = (d: ISODate) => `${F.monthShort.format(utc(d))} '${d.slice(2, 4)}`;
 export const dayName = (d: ISODate) => F.day.format(utc(d));
 export const dayShort = (d: ISODate) => F.dayShort.format(utc(d));
 export const dayFull = (d: ISODate) => F.dayFull.format(utc(d));

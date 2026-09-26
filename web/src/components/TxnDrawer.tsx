@@ -1,162 +1,283 @@
 import { useEffect, useRef, useState } from "react";
-import { api, categorize, read, SOURCE_LABEL, type ApiError } from "../lib/api";
-import { dayFull, inr, inr2, plural } from "../lib/format";
-import { useStore } from "../lib/useStore";
-import type { Category, ClassifiedBy, Transaction, TxnStatus } from "../lib/types";
+import { api, categorize, patchTxn, read } from "../lib/api";
+import { categoryColor, monogramColor } from "../lib/colors";
+import { dayLong, dayShort, inr, plural, timeIST, toPaise } from "../lib/format";
+import type { ClassifiedBy, Scope } from "../lib/types";
+import { G } from "./Glyphs";
 import { useToast } from "./Toast";
-import { Monogram, Switch } from "./ui";
 
 const FILED_BY: Record<ClassifiedBy, string> = {
   dictionary: "Brand dictionary",
-  payee_memory: "Payee memory (your past choices)",
+  payee_memory: "Payee memory",
   rule: "Rule",
-  heuristic: "Payment-type heuristic",
+  heuristic: "Payment-type rule",
   user: "You",
-  system: "System",
+  system: "Import",
 };
-const STATUS: Record<TxnStatus, [string, string]> = {
-  pending: ["Alert", "Confirmed when the statement arrives"],
-  posted: ["Posted", "Waiting for reconciliation"],
-  reconciled: ["Statement", "Reconciled against the statement"],
-  flagged: ["Flagged", "Needs a look before it counts"],
-};
+const KIND: Record<string, string> = { spend: "Spend", income: "Income", transfer: "Transfer", investment: "Investment", refund: "Refund", fee: "Fee", cash: "Cash" };
 
-export function TxnDrawer({ txn, categories, onClose }: { txn: Transaction | null; categories: Category[]; onClose: () => void }) {
-  // Keeps the last transaction rendered while the drawer slides shut.
-  const [shown, setShown] = useState(txn);
-  if (txn && txn !== shown) setShown(txn);
-  const open = txn != null;
+/** Opens for ?txn=<id>. Every field is read from the transaction and its sightings; nothing is inferred. */
+export function TxnDrawer({ id, onClose, prev, next }: { id: string | null; onClose: () => void; prev?: () => void; next?: () => void }) {
+  const open = id != null;
+  const [shown, setShown] = useState(id);
+  if (id && id !== shown) setShown(id);
   const panel = useRef<HTMLDivElement>(null);
-
-  // Focus moves into the drawer on open and back to the row that opened it on close.
   useEffect(() => {
     if (!open) return;
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    panel.current?.querySelector<HTMLElement>(".x")?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    panel.current?.querySelector<HTMLElement>("[data-close]")?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+      if (e.target instanceof HTMLElement && /input|textarea|select/i.test(e.target.tagName)) return;
+      if (e.key === "ArrowUp" && prev) prev();
+      if (e.key === "ArrowDown" && next) next();
+    };
     addEventListener("keydown", onKey);
     return () => {
       removeEventListener("keydown", onKey);
       opener?.focus();
     };
-  }, [open, onClose]);
-
+  }, [open, prev, next]);
   return (
-    <div
-      ref={panel}
-      className={`drawer${open ? " open" : ""}`}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="drawer-title"
-      aria-hidden={!open}
-      inert={!open}
-    >
-      {shown && <DrawerBody key={shown.id} t={shown} categories={categories} onClose={onClose} />}
-    </div>
+    <>
+      <div className={`scrim${open ? " open" : ""}`} onClick={onClose} aria-hidden />
+      <aside ref={panel} className={`drawer2${open ? " open" : ""}`} role="dialog" aria-modal="true" aria-label="Transaction" aria-hidden={!open}>
+        <div className="bar">
+          <span className="lbl">Transaction</span>
+          <button type="button" className="iconbtn" aria-label="Previous" disabled={!prev} onClick={prev}>
+            {G.up}
+          </button>
+          <button type="button" className="iconbtn" aria-label="Next" disabled={!next} onClick={next}>
+            {G.down}
+          </button>
+          <button type="button" className="iconbtn plain" aria-label="Close" data-close onClick={onClose}>
+            {G.close}
+          </button>
+        </div>
+        {shown && <Body key={shown} id={shown} />}
+      </aside>
+    </>
   );
 }
 
-function DrawerBody({ t, categories, onClose }: { t: Transaction; categories: Category[]; onClose: () => void }) {
-  useStore();
-  const detail = read(api.transaction(t.id));
+function Body({ id }: { id: string }) {
+  const st = read(api.txnDetail(id));
+  const cats = read(api.categories());
   const toast = useToast();
-  const [categoryId, setCategoryId] = useState(t.category_id != null ? String(t.category_id) : "");
-  const [everyPayment, setEveryPayment] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [cat, setCat] = useState<number | null>(null);
+  const [scope, setScope] = useState<Scope>("this");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [tagText, setTagText] = useState("");
+  if (st.status === "loading") return <div className="body"><p className="state">Loading…</p></div>;
+  if (st.status === "error") return <div className="body"><p className="state">This transaction couldn't load.</p></div>;
+  const d = st.data;
+  const t = d.txn;
+  const raw = d.transaction;
+  const categories = cats.status === "ready" ? cats.data : [];
+  const chosen = cat ?? t.category_id;
+  const changed = chosen != null && chosen !== t.category_id;
   const credit = t.direction === "credit";
-  const options = categories.length || t.category_id == null ? categories : null;
-  const chosen = categories.find((c) => String(c.id) === categoryId);
-  const info = detail.status === "ready" ? detail.data : null;
-  const [seenTitle, seenDetail] = STATUS[t.status];
-
-  const save = async () => {
-    if (!chosen) return;
-    setSaving(true);
+  const alertSeen = d.observations.find((o) => o.source === "alert" && o.received_at);
+  const steps: [string, string, boolean][] = [
+    ["Pending", t.sources.includes("alert") ? "alert" : "no live alert", t.status !== "flagged"],
+    ["Posted", raw.posted_at ? `${dayShort(raw.posted_at)} · value date` : "—", t.status === "posted" || t.status === "reconciled"],
+    ["Reconciled", t.status === "reconciled" ? "statement balanced" : "waiting for a statement", t.status === "reconciled"],
+  ];
+  const save = async (categoryId: number, sc: Scope, msg: string) => {
+    setBusy(true);
     try {
-      await categorize(t.id, chosen.id, everyPayment ? "payee" : "this");
-      toast(everyPayment ? `Saved. Future payments to ${t.merchant} file as ${chosen.name}.` : "Saved.");
-      onClose();
-    } catch (e) {
-      toast(`Couldn't save. ${(e as ApiError).message}`);
+      const r = await categorize(id, categoryId, sc);
+      toast(`${msg}${r.updated > 1 ? ` · ${plural(r.updated, "transaction")}` : ""}`);
+      setCat(null);
+    } catch {
+      toast("Couldn't save that. Try again.");
     } finally {
-      setSaving(false);
+      setBusy(false);
     }
   };
-
+  const selfTransfer = categories.find((c) => c.name === "Self transfer");
+  const saveNotes = async (patch: { notes?: string | null; tags?: string[] }) => {
+    try {
+      await patchTxn(id, patch);
+    } catch {
+      toast("Couldn't save the note. Try again.");
+    }
+  };
   return (
     <>
-      <button type="button" className="x" aria-label="Close" onClick={onClose}>
-        ✕
-      </button>
-      <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 4 }}>
-        <Monogram name={t.merchant} />
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 600, fontSize: 16, overflowWrap: "anywhere" }} id="drawer-title">
-            {t.merchant}
+      <div className="body">
+        <div className="hd">
+          <span className="mg" style={{ background: monogramColor(t.merchant) }}>
+            {(t.merchant.replace(/[^A-Za-z0-9]/g, "")[0] ?? "•").toUpperCase()}
+          </span>
+          <div style={{ minWidth: 0 }}>
+            <h3>{t.merchant}</h3>
+            {(t.counterparty || t.vpa) && <small>{[t.counterparty, t.vpa].filter(Boolean).join(" · ")}</small>}
           </div>
-          <div className="sub">{t.account}</div>
+          <span className={`amt${credit ? " good-t" : ""}`}>
+            {credit ? "+" : "−"}
+            {inr(t.amount)}
+          </span>
         </div>
-      </div>
-      <div className={`amtbig num${credit ? " in" : ""}`}>
-        {credit ? "+" : "−"}
-        {inr2(t.amount)}
-      </div>
-      <div className="sub">{dayFull(t.date)}</div>
-      <div className="kv">
-        <span>Category</span>
-        <span>
-          {options ? (
-            <select className="sel" style={{ padding: "5px 8px" }} value={categoryId} aria-label="Category" onChange={(e) => setCategoryId(e.target.value)}>
-              {t.category_id == null && <option value="">Choose a category</option>}
-              {options.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          ) : (
-            (t.category ?? "Uncategorized")
+        <div className="meta">
+          {dayLong(t.date)}
+          {alertSeen?.received_at ? ` · ${timeIST(alertSeen.received_at)}` : ""} · {t.account}
+        </div>
+        <div className="dl">
+          <div className="r">
+            <span>Category</span>
+            <span className="v">
+              <select value={chosen ?? ""} onChange={(e) => setCat(Number(e.target.value))} aria-label="Category">
+                {chosen == null && <option value="">Uncategorized</option>}
+                {categories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              {t.payee_key && (
+                <span className="seg">
+                  <button type="button" className={scope === "this" ? "on" : ""} onClick={() => setScope("this")}>
+                    This one
+                  </button>
+                  <button type="button" className={scope === "payee" ? "on" : ""} onClick={() => setScope("payee")}>
+                    All {t.merchant.length > 14 ? "from payee" : t.merchant}
+                  </button>
+                </span>
+              )}
+            </span>
+          </div>
+          <div className="r">
+            <span>Kind</span>
+            <span className="v">{KIND[t.kind] ?? t.kind}</span>
+          </div>
+          <div className="r">
+            <span>Filed by</span>
+            <span className="v">
+              {t.classified_by ? FILED_BY[t.classified_by] : "Waiting in the Inbox"}
+              {t.rule_id && <span className="mono-n faint" style={{ marginLeft: "auto", fontSize: 12 }}>{t.rule_id}</span>}
+            </span>
+          </div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <span className="lbl">Status</span>
+          <div className="stepper">
+            {steps.map(([name, sub, done]) => (
+              <div key={name} className={`s${done ? " done" : ""}`}>
+                <i />
+                <b>{name}</b>
+                <small>{sub}</small>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <span className="lbl">Seen in · {d.observations.length}</span>
+          {d.observations.map((o) => (
+            <div key={o.id} className="obs">
+              {o.source === "alert" ? G.mail : G.doc}
+              <span className="mid">
+                <span>
+                  {o.source === "alert" ? "Alert email" : "Statement"}
+                  {o.received_at ? ` · ${dayShort(o.received_at.slice(0, 10))}` : ""}
+                </span>
+                <small className="mono-n">
+                  {[o.parser && `${o.parser} v${o.parser_version}`, o.filename, o.balance_after && `balance after ${inr(toPaise(o.balance_after))}`].filter(Boolean).join(" · ")}
+                </small>
+              </span>
+            </div>
+          ))}
+          {!d.observations.length && (
+            <div className="obs expect">
+              {G.doc}
+              <span className="mid">
+                <span>{t.sources.includes("import") ? "Sheet import" : "No sighting stored"}</span>
+                <small>Appears here once its statement is uploaded.</small>
+              </span>
+            </div>
           )}
-        </span>
-        <span>Filed by</span>
-        <span title={t.rule_id ?? undefined}>{t.classified_by ? FILED_BY[t.classified_by] : "Not filed yet"}</span>
-        <span>Kind</span>
-        <span style={{ textTransform: "capitalize" }}>{t.kind}</span>
-        <span>This payee</span>
-        <span>
-          {info?.payee ? `${plural(info.payee.count, "payment")} · ${inr(info.payee.total)} total` : detail.status === "loading" ? "…" : "—"}
-        </span>
-      </div>
-      <Switch on={everyPayment} onChange={setEveryPayment} label={<>Apply to every payment to {t.merchant}</>} />
-      <div className="seen">Seen in</div>
-      <div className="tl">
-        {info?.observations.length ? (
-          info.observations.map((o, i) => (
-            <div key={i}>
-              {o.label}
-              <small>{o.detail}</small>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <span className="lbl">Links · {d.links.length ? d.links.length : "none"}</span>
+          {d.links.map((l) => (
+            <div key={`${l.kind}${l.txn_id}`} className="obs">
+              {G.link}
+              <span className="mid">
+                <span>{l.kind.replace("_", " ")}</span>
+                <small>transaction {l.txn_id}</small>
+              </span>
             </div>
-          ))
-        ) : t.sources.length ? (
-          t.sources.map((s) => (
-            <div key={s}>
-              {SOURCE_LABEL[s] ?? s}
-              <small>{seenDetail}</small>
+          ))}
+        </div>
+        {d.payee && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <div className="panel-h">
+              <span className="lbl">{t.merchant} history</span>
+              <span className="x">
+                {plural(d.payee.count, "charge")}
+                {d.payee.history.length === 1 ? ` · all ${d.payee.history[0]!.category}` : ""}
+              </span>
             </div>
-          ))
-        ) : (
-          <div>
-            {seenTitle}
-            <small>{seenDetail}</small>
+            <div className="kvrows">
+              {d.payee.recent.map((r) => (
+                <div key={r.id} className="r">
+                  <span style={{ flex: "none", width: 64, color: "var(--t3)" }}>{dayShort(r.occurred_at)}</span>
+                  <span style={{ flex: 1 }}>{String(r.id) === id ? "This one" : (r.category ?? "Uncategorized")}</span>
+                  <b>{inr(toPaise(r.amount))}</b>
+                </div>
+              ))}
+              <div className="r">
+                <span>Total</span>
+                <b>{inr(toPaise(d.payee.total))}</b>
+              </div>
+            </div>
           </div>
         )}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <span className="lbl">Notes & tags</span>
+          <textarea
+            placeholder="Add a note"
+            maxLength={2000}
+            value={note ?? t.notes ?? ""}
+            onChange={(e) => setNote(e.target.value)}
+            onBlur={() => note != null && note !== (t.notes ?? "") && saveNotes({ notes: note || null })}
+          />
+          <div className="tags">
+            {t.tags.map((g) => (
+              <span key={g}>
+                {g}
+                <button type="button" aria-label={`Remove ${g}`} onClick={() => saveNotes({ tags: t.tags.filter((x) => x !== g) })}>
+                  ×
+                </button>
+              </span>
+            ))}
+            <input
+              placeholder="+ Tag"
+              value={tagText}
+              maxLength={40}
+              onChange={(e) => setTagText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && tagText.trim()) {
+                  saveNotes({ tags: [...t.tags, tagText.trim()] });
+                  setTagText("");
+                }
+              }}
+            />
+          </div>
+        </div>
       </div>
-      <div style={{ display: "flex", gap: 8, marginTop: 24 }}>
-        <button type="button" className="btn" disabled={!chosen || saving} onClick={save}>
-          {saving ? "Saving…" : "Save"}
-        </button>
-        <button type="button" className="btn ghost" onClick={onClose}>
-          Cancel
+      <div className="ft">
+        {selfTransfer && t.category_id !== selfTransfer.id && (
+          <button type="button" className="btn2 sm" disabled={busy} onClick={() => save(selfTransfer.id, "this", "Marked as transfer")}>
+            {G.transfer}
+            Mark as transfer
+          </button>
+        )}
+        <span className="sp" />
+        <span className="sq" style={{ background: categoryColor(categories.find((c) => c.id === chosen)?.name ?? null), visibility: changed ? "visible" : "hidden" }} />
+        <button type="button" className="btn2 sm primary" disabled={!changed || busy} onClick={() => chosen != null && save(chosen, scope, "Category saved")}>
+          {busy ? "Saving…" : "Save category"}
         </button>
       </div>
     </>

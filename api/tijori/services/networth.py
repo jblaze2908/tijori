@@ -10,9 +10,10 @@ from sqlalchemy.orm import Session
 
 from tijori.db import MemberContext
 from tijori.legacy import SheetRow
-from tijori.models import Snapshot
+from tijori.models import Account, ComponentValue, Holding, Price, Snapshot, Txn
 from tijori.money import ZERO, fmt
 from tijori.services.common import audit
+from tijori.services.recurring import balances
 
 COMPONENT_KEYS = ("sbi", "hdfc", "fd", "stocks", "mf", "ppf", "epf", "gold", "other")
 LIQUID_KEYS = ("sbi", "hdfc", "fd")
@@ -131,9 +132,6 @@ BANK_KEYS = {"SBI": "sbi", "HDFC": "hdfc"}
 
 
 def _bank_balances(s: Session, member_id: int) -> dict[str, tuple[Decimal, date]]:
-    from tijori.models import Account
-    from tijori.services.recurring import balances
-
     kinds = dict(s.execute(select(Account.id, Account.institution).where(
         Account.member_id == member_id, Account.kind == "bank")).all())
     out: dict[str, tuple[Decimal, date]] = {}
@@ -161,8 +159,6 @@ def _add_months(d: date, n: int) -> date:
 
 
 def live(s: Session, member_id: int, today: date) -> dict[str, Any]:
-    from tijori.models import ComponentValue, Txn
-
     snaps = s.scalars(select(Snapshot).where(Snapshot.member_id == member_id).order_by(Snapshot.date)).all()
     picked: dict[str, tuple[Decimal, date, str]] = {}
 
@@ -257,8 +253,6 @@ def live(s: Session, member_id: int, today: date) -> dict[str, Any]:
 
 
 def set_component(s: Session, ctx: MemberContext, actor: str, key: str, amount: Decimal, as_of: date) -> dict[str, Any]:
-    from tijori.models import ComponentValue
-
     stmt = insert(ComponentValue).values(member_id=ctx.member_id, key=key, amount=amount, as_of=as_of)
     s.execute(stmt.on_conflict_do_update(constraint="uq_component_value_member_id_key_as_of",
                                          set_={"amount": stmt.excluded.amount}))
@@ -268,8 +262,6 @@ def set_component(s: Session, ctx: MemberContext, actor: str, key: str, amount: 
 
 def holdings(s: Session, member_id: int) -> dict[str, Any]:
     """Latest units per holding × the newest price on or before today. Empty until the CDSL CAS parser lands."""
-    from tijori.models import Holding, Price
-
     rows = s.scalars(select(Holding).where(Holding.member_id == member_id)
                      .order_by(Holding.isin, Holding.as_of.desc(), Holding.id.desc())).all()
     latest: dict[str, Any] = {}
