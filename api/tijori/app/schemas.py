@@ -29,6 +29,13 @@ class CategoryRef(BaseModel):
     name: str
 
 
+class Settles(BaseModel):
+    txn_id: int  # the other leg
+    date: date
+    card: str | None  # on the bank leg: the card it paid
+    from_account: str | None  # on the card leg: where the money came from
+
+
 class TxnOut(BaseModel):
     id: int
     occurred_at: date
@@ -52,6 +59,7 @@ class TxnOut(BaseModel):
     sources: list[str]
     notes: str | None
     tags: list[str]
+    settles: Settles | None = None  # a bill payment matched to a card's payment line
 
 
 class TotalLine(BaseModel):
@@ -64,7 +72,8 @@ class TxnPage(BaseModel):
     page: int
     page_size: int
     total: int
-    # The whole filtered set, not just this page: spend/income/invest/excluded, and card (part of spend).
+    # The whole filtered set, not just this page: spend/income/invest/excluded; card (bill payments standing
+    # in for card spend) and on_card (spend on card accounts) are both parts of spend.
     totals: dict[str, TotalLine]
 
 
@@ -560,20 +569,118 @@ AccountOut.model_rebuild()
 
 # --- recurring, alerts, filing, rules ----------------------------------------------------------
 
+class PriceChange(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    from_: Money = Field(alias="from")
+    to: Money
+    at: date
+
+
+class RecurringCharge(BaseModel):
+    date: date
+    amount: Money
+    txn_id: int
+
+
+class CardRef(BaseModel):
+    id: int
+    label: str | None
+
+
+class CardStatement(BaseModel):
+    period_start: date
+    period_end: date
+    total: Money
+    due_date: date | None
+    purchases: int
+    paid: Money
+    paid_at: date | None
+    paid_from: str | None
+    state: Literal["paid", "part_paid", "unpaid"]
+
+
+class CardCycle(BaseModel):
+    since: date
+    amount: Money
+    count: int
+    seen_through: date | None
+
+
+class CardOut(BaseModel):
+    account: CardRef
+    statement: CardStatement | None
+    cycle: CardCycle
+
+
+class StandIn(BaseModel):
+    amount: Money
+    count: int
+    first: date | None
+    last: date | None
+
+
+class CardList(BaseModel):
+    items: list[CardOut]
+    stand_in: StandIn
+
+
 class RecurringOut(BaseModel):
     id: str
     merchant: str
+    kind: Literal["subscription", "bill", "invest", "other"]
     cadence: str
+    state: Literal["upcoming", "pending", "late", "stopped", "ended"]
+    variable: bool
     amount_expected: Money
+    amount_min: Money
+    amount_max: Money
+    monthly_cost: Money
+    yearly_cost: Money
     next_due: date
+    first_at: date
     last_at: date
+    seen_through: date
     count: int
     category: str | None
     account: str | None
+    confirmed: bool
+    manual: bool
+    change: PriceChange | None
+    charges: list[RecurringCharge]
+
+
+class RecurringRef(BaseModel):
+    id: str
+    merchant: str
+
+
+class RecurringTotals(BaseModel):
+    monthly: Money
+    yearly: Money
+    invest_monthly: Money
+    active: int
+    next_30_days: Money
+    next_30_days_count: int
 
 
 class RecurringList(BaseModel):
     items: list[RecurringOut]
+    dismissed: list[RecurringRef]
+    totals: RecurringTotals
+
+
+class RecurringIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    decision: Literal["confirmed", "dismissed", "auto"]
+    cadence: Literal["weekly", "monthly", "quarterly", "yearly"] | None = None
+    amount_expected: Annotated[str, Field(pattern=r"^\d{1,12}(\.\d{1,2})?$")] | None = None
+    kind: Literal["subscription", "bill", "invest", "other"] | None = None
+    ended: bool | None = None
+
+
+class RecurringDecision(BaseModel):
+    id: str
+    decision: Literal["confirmed", "dismissed"] | None
 
 
 class AlertOut(BaseModel):

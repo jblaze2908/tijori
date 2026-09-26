@@ -32,6 +32,7 @@ from tijori.money import fmt
 from tijori.parsers import Observation as Line
 from tijori.parsers import Statement as ParsedStatement
 from tijori.parsers import reconcile
+from tijori.services import cards
 from tijori.services.common import account_ref, audit
 
 
@@ -53,18 +54,19 @@ def line_keys(account_id: int, lines: tuple[Line, ...] | list[Line]) -> list[str
     return keys
 
 
-def ensure_account(s: Session, member_id: int, institution: str, mask: str | None) -> Account:
-    """Match on (institution, mask); adopt a mask-less account of the same bank (e.g. from the
-    legacy import) before creating a new one."""
-    q = select(Account).where(Account.member_id == member_id, Account.institution == institution)
+def ensure_account(s: Session, member_id: int, institution: str, mask: str | None, kind: str = "bank") -> Account:
+    """Match on (institution, kind, mask); adopt a mask-less account of the same bank and kind (e.g. from
+    the legacy import or setup) before creating a new one."""
+    q = select(Account).where(Account.member_id == member_id, Account.institution == institution,
+                              Account.kind == kind)
     acct = s.scalars(q.where(Account.mask.is_not_distinct_from(mask)).order_by(Account.id).limit(1)).first()
     if acct is None and mask is not None:
         acct = s.scalars(q.where(Account.mask.is_(None)).order_by(Account.id).limit(1)).first()
         if acct is not None:
             acct.mask = mask
     if acct is None:
-        acct = Account(member_id=member_id, kind="bank", institution=institution, name=f"{institution} savings",
-                       mask=mask)
+        acct = Account(member_id=member_id, kind=kind, institution=institution,
+                       name=f"{institution} {'card' if kind == 'card' else 'savings'}", mask=mask)
         s.add(acct)
     s.flush()
     return acct
@@ -146,16 +148,17 @@ def ingest_statement(s: Session, ctx: MemberContext, actor: str, st: ParsedState
         raise ValueError("statement has no lines")
     rec = reconcile(st)
     msg, att = record_raw(s, ctx, filename=filename, sha256=sha256, blob_ref=blob_ref, parse_status="parsed")
-    account = ensure_account(s, ctx.member_id, st.institution, st.account_mask)
+    account = ensure_account(s, ctx.member_id, st.institution, st.account_mask, st.account_kind)
     values = dict(member_id=ctx.member_id, account_id=account.id, period_start=st.period_start,
                   period_end=st.period_end, opening=st.summary.opening, closing=st.summary.closing,
                   raw_attachment_id=att.id, parser=st.parser, parser_version=st.parser_version,
-                  reconciled_at=datetime.now(UTC) if rec.ok else None, diff=rec.closing_diff)
+                  reconciled_at=datetime.now(UTC) if rec.ok else None, diff=rec.closing_diff,
+                  total_due=st.total_due, due_date=st.due_date)
     stmt = pg_insert(Statement).values(**values)
     statement_id = s.scalar(stmt.on_conflict_do_update(
         constraint="uq_statement_member_id_account_id_period_start_period_end",
         set_={k: stmt.excluded[k] for k in ("raw_attachment_id", "parser", "parser_version", "opening", "closing",
-                                             "reconciled_at", "diff")},
+                                             "reconciled_at", "diff", "total_due", "due_date")},
     ).returning(Statement.id))
 
     # Batched INSERT … RETURNING in input order: one round-trip for all lines.
@@ -210,8 +213,10 @@ def ingest_statement(s: Session, ctx: MemberContext, actor: str, st: ParsedState
     if hits:
         s.execute(pg_insert(RuleHit).on_conflict_do_nothing(), hits)
     created = [decisions[i] for i in txn_ids]
+    linked = cards.link_card_payments(s, ctx.member_id)
     audit(s, ctx, actor, "statement.upload", f"statement:{statement_id}",
-          {"parser": st.parser, "lines": len(st.lines), "created": len(created), "ok": rec.ok})
+          {"parser": st.parser, "lines": len(st.lines), "created": len(created), "ok": rec.ok,
+           "card_payments_linked": linked})
     return {
         "statement_id": statement_id, "raw_message_id": msg.id, "duplicate": False,
         "parser": st.parser, "parser_version": st.parser_version, "institution": st.institution,

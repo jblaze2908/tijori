@@ -164,3 +164,12 @@ BRANDS: tuple[Brand, ...] = (
     _b("playstation", "PlayStation", "Entertainment", r"PLAYSTATION", r"SONY INTERACTIVE"),
     _b("xbox", "Xbox", "Entertainment", r"\bXBOX\b"),
 )
+
+# Brands whose recurring charges are a service you sign up for, as opposed to a utility bill or a
+# premium; services/recurring groups a detected series by this. Only used once a series is steady.
+SUBSCRIPTIONS: frozenset[str] = frozenset({
+    "amazon_prime", "aws", "apple_services", "google_play", "youtube", "google_one", "netflix", "spotify",
+    "hotstar", "zee5", "sonyliv", "tata_play", "hostinger", "openrouter", "anthropic", "openai", "github",
+    "google_cloud", "microsoft", "adobe", "cloudflare", "digitalocean", "godaddy", "namecheap", "cult_fit",
+    "playstation", "xbox", "steam",
+})

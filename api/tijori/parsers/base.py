@@ -59,6 +59,9 @@ class Statement:
     lines: tuple[Observation, ...]
     parser: str
     parser_version: str
+    account_kind: Literal["bank", "card"] = "bank"  # card: purchases are debits, payments to it are credits
+    total_due: Decimal | None = None  # card statements: amount asked for, and by when
+    due_date: date | None = None
 
 
 @runtime_checkable

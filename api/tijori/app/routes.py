@@ -14,6 +14,7 @@ from tijori.app.deps import MemberDep
 from tijori.app.schemas import (
     Accounts,
     Alerts,
+    CardList,
     FilingStats,
     Holdings,
     LiveNetWorth,
@@ -35,7 +36,7 @@ from tijori.app.schemas import (
 )
 from tijori.classify.taxonomy import KINDS
 from tijori.models import Category
-from tijori.services import members, networth, recurring, reports, sources, txns
+from tijori.services import cards, members, networth, recurring, reports, sources, txns
 from tijori.services.common import month_start_day, today_ist
 
 router = APIRouter(prefix="/api")
@@ -84,6 +85,7 @@ def transactions(
     min_amount: Annotated[Decimal | None, Query(alias="min", ge=0, max_digits=14, decimal_places=2)] = None,
     max_amount: Annotated[Decimal | None, Query(alias="max", ge=0, max_digits=14, decimal_places=2)] = None,
     sort: Literal[txns.SORTS] = "date_desc",  # type: ignore[valid-type]
+    paid_with: Literal["bank", "card"] | None = None,
     page: Page = 1,
     page_size: PageSize = 50,
 ) -> dict:
@@ -98,7 +100,8 @@ def transactions(
     msd = month_start_day(db.session, db.ctx.member_id) if month else 1
     f = txns.TxnFilter(month=month, date_from=date_from, date_to=date_to, accounts=tuple(account or ()),
                        categories=tuple(category or ()), kind=kind, direction=direction, q=q,
-                       min_amount=min_amount, max_amount=max_amount, month_start_day=msd, sort=sort)
+                       min_amount=min_amount, max_amount=max_amount, month_start_day=msd, sort=sort,
+                       paid_with=paid_with)
     return txns.list_txns(db.session, db.ctx.member_id, f, page, page_size)
 
 
@@ -159,6 +162,11 @@ def get_budgets(db: MemberDep, month: Annotated[str, Query(pattern=MONTH_PATTERN
 @router.get("/recurring", response_model=RecurringList)
 def get_recurring(db: MemberDep) -> dict:
     return recurring.list_recurring(db.session, db.ctx.member_id)
+
+
+@router.get("/cards", response_model=CardList)
+def get_cards(db: MemberDep) -> dict:
+    return cards.card_status(db.session, db.ctx.member_id)
 
 
 @router.get("/alerts", response_model=Alerts)

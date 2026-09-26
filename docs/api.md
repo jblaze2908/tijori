@@ -165,7 +165,7 @@ These definitions match the 2026-09-26 report exactly. That was checked on the r
 
 | Field | Meaning |
 |---|---|
-| `everyday`, `oneoff`, `card` | Sum of **debits** in that bucket. `card` is CRED/credit-card bill payments, which stand in for card spend until card statements are itemised (M1) |
+| `everyday`, `oneoff`, `card` | Sum of **debits** in that bucket. `card` is bill payments from a bank account (CRED, BillDesk) that still stand in for card spend: the card statement they pay isn't parsed. A payment matched to the card's "payment received" line moves to `excluded` (see [`/api/cards`](#get-apicards)), and the card's purchases count instead |
 | `uncategorized` | Debits with no category yet (the Inbox) |
 | `expense` | `everyday + oneoff + card + uncategorized`: the one spend definition |
 | `invest` | Debits in the `invest` bucket |
@@ -212,6 +212,7 @@ Self transfers, reversal pairs, pass-throughs and investment redemptions are `ex
 | `q` | string, 1–100 chars | Case-insensitive substring match on narration or merchant. `%` and `_` match literally |
 | `min`, `max` | decimal ≥ 0, up to 2 places | Inclusive. `min > max` is a 422 |
 | `sort` | `date_desc` (default), `date_asc`, `amount_desc`, `amount_asc` | Ties fall back to newest first |
+| `paid_with` | `card` \| `bank` | `card`: txns on card accounts only; `bank`: everything else |
 | `page`, `page_size` | int | See paging |
 
 Returns the page plus `totals` for the **whole filtered set**, split on `/api/summary`'s rules:
@@ -220,10 +221,12 @@ Returns the page plus `totals` for the **whole filtered set**, split on `/api/su
 {"items": [Txn], "page": 1, "page_size": 50, "total": 29,
  "totals": {"spend": {"amount": "376605.00", "count": 11}, "income": {"amount": "1890000.00", "count": 9},
             "invest": {"amount": "225000.00", "count": 9}, "excluded": {"amount": "0.00", "count": 0},
-            "card": {"amount": "345315.00", "count": 9}}}
+            "card": {"amount": "345315.00", "count": 9}, "on_card": {"amount": "0.00", "count": 0}}}
 ```
 
-`spend` + `income` + `invest` + `excluded` counts add up to `total`. `card` is the card-bill part of `spend`, not an extra group.
+`spend` + `income` + `invest` + `excluded` counts add up to `total`. `card` (bill payments standing in for card spend) and `on_card` (spend on card accounts) are parts of `spend`, not extra groups.
+
+Each item also carries `settles`: `null`, or for either leg of a matched card bill `{"txn_id", "date", "card", "from_account"}`. The bank leg gets `card` (the card it paid), the card leg gets `from_account`.
 
 ## `GET /api/transactions/{id}`
 
@@ -424,21 +427,67 @@ Multipart, with the header `X-Requested-With: tijori`. Field `sheet` holds the G
 
 ## `GET /api/recurring`
 
-Recurring series, detected from the member's own history on every call. There's no AI and nothing is stored.
+Recurring series (the Subscriptions page), detected from the member's own history on every call. There's no AI. Only your decisions are stored.
 
-- A series is at least 3 debits to one payee (`payee_key`, else the merchant) in the last 400 days.
-- Every gap between charges fits one cadence: `weekly` 5–9 days, `monthly` 25–36, `quarterly` 84–98, `yearly` 350–380.
-- Every amount is within ±10% of the series' median.
-- The next charge is at most half a period overdue.
-- Card-bill payments and `excluded` txns never form a series.
+- A series is debits to one payee (`payee_key`, else the merchant) in the last 800 days: at least 3 (2 for `yearly`).
+- Every gap between charges fits one cadence: `weekly` 5–9 days, `monthly` 25–36, `quarterly` 84–98, `yearly` 350–380. One gap of twice the period (a skipped charge) is allowed once there are 4 charges.
+- Amounts are steady, with at most one price change (>10% between consecutive charges) per six charges. Otherwise they must be bill-like: category `Bills & subscriptions` or `Insurance`, largest charge at most 3× the smallest (`variable: true`, and `amount_expected` is the median of the last 3).
+- Card-bill payments and `excluded` txns never form a series. A payee you confirmed is listed even with fewer charges, on the cadence you gave.
+
+`state` is judged against `seen_through`, the newest txn date on the series' account, so a charge that isn't in a statement yet is not called missed:
+
+| `state` | Rule |
+|---|---|
+| `upcoming` | `next_due` is after today |
+| `pending` | Due, but the account's statements don't reach `next_due` + grace yet (grace: weekly 2, monthly 4, quarterly 10, yearly 20 days) |
+| `late` | Statements reach past `next_due` + grace, by up to half a period, and no charge |
+| `stopped` | Statements reach more than half a period past `next_due` |
+| `ended` | You marked it cancelled |
+
+`kind` groups the page: `invest` (the `invest` bucket), `subscription` (brands in `classify/brands.SUBSCRIPTIONS`), `bill` (`Bills & subscriptions` or `Insurance`), else `other`. You can override it.
 
 ```json
-{"items": [{"id": "brand:groww", "merchant": "Groww", "cadence": "monthly", "amount_expected": "25000.00",
-            "next_due": "2026-10-05", "last_at": "2026-09-05", "count": 12, "category": "Investments",
-            "account": "HDFC savings ••5151"}]}
+{"items": [{"id": "brand:netflix", "merchant": "Netflix", "kind": "subscription", "cadence": "monthly",
+            "state": "upcoming", "variable": false, "amount_expected": "799.00", "amount_min": "649.00",
+            "amount_max": "799.00", "monthly_cost": "799.00", "yearly_cost": "9588.00", "next_due": "2026-10-14",
+            "first_at": "2025-10-14", "last_at": "2026-09-14", "seen_through": "2026-09-26", "count": 12,
+            "category": "Bills & subscriptions", "account": "HDFC Platinum ••4242", "confirmed": false,
+            "manual": false, "change": {"from": "649.00", "to": "799.00", "at": "2026-07-14"},
+            "charges": [{"date": "2026-09-14", "amount": "799.00", "txn_id": 612}]}],
+ "dismissed": [{"id": "vpa:someone@okaxis", "merchant": "Someone"}],
+ "totals": {"monthly": "10888.59", "yearly": "130663.08", "invest_monthly": "25000.00", "active": 8,
+            "next_30_days": "32808.00", "next_30_days_count": 5}}
 ```
 
-`amount_expected` is the latest charge. Items are sorted by `next_due`.
+- `monthly_cost` normalises the charge (weekly × 52/12, quarterly ÷ 3, yearly ÷ 12). `totals.monthly` sums the active non-`invest` series; `yearly` is that × 12.
+- `change` is the latest step of more than 5% between consecutive charges; always `null` for variable series.
+- `charges` are the last 12. Items are sorted by `next_due`; dismissed payees are only in `dismissed`.
+
+## `PUT /api/recurring/{payee_key}`
+
+`{"decision": "confirmed" | "dismissed" | "auto", "cadence"?, "amount_expected"?, "kind"?, "ended"?}`
+
+- `confirmed` keeps the payee listed (or adds it by hand), `dismissed` hides it and keeps it out of committed spend and alerts, `auto` forgets your decision.
+- `ended: true` marks it cancelled; `false` makes it active again. `kind` moves it to another group.
+- `cadence` and `amount_expected` (up to 2 decimals) are used when detection alone wouldn't list the payee.
+- 404 when you have no debits to that payee. Returns `{"id", "decision"}`. Audit-logged.
+
+## `GET /api/cards`
+
+Card accounts and their bill payments. A card purchase is spend on the card. A bank-side bill payment is matched to the card's own "payment received" credit: same amount, within ±4 days. When matched, both legs become `excluded` transfers, linked as `card_payment`. The match only happens if the statement the payment settles is on file: the latest card statement that closed before the payment, and no more than 45 days before it. Otherwise the bank payment stays in the `card` bucket and stands in for the card's purchases. Matching runs after every statement upload.
+
+```json
+{"items": [{"account": {"id": 3, "label": "HDFC Platinum ••4242"},
+            "statement": {"period_start": "2026-08-15", "period_end": "2026-09-14", "total": "40058.00",
+                          "due_date": "2026-10-03", "purchases": 19, "paid": "0.00", "paid_at": null,
+                          "paid_from": null, "state": "unpaid"},
+            "cycle": {"since": "2026-09-15", "amount": "5831.88", "count": 8, "seen_through": "2026-09-26"}}],
+ "stand_in": {"amount": "388454.00", "count": 10, "first": "2025-10-01", "last": "2026-07-01"}}
+```
+
+- `statement` is the newest parsed card statement (`null` before the first one). `total` is its total due, else its closing balance. `paid` sums the matched payments after it closed. `state` is `paid`, `part_paid` or `unpaid`.
+- `cycle` is spend on the card since that statement closed.
+- `stand_in` is every bank bill payment still counted as spend.
 
 ## `GET /api/alerts?month=YYYY-MM`
 
@@ -448,7 +497,8 @@ Rule flags for the month cycle. Every one is computed from data; none is written
 |---|---|---|
 | `duplicate` | `bad` | Two or more debits with the same account, payee, amount and day |
 | `bounce_risk` | `warn` | A recurring series due in the next 7 days, whose account's last known `balance` is below the charge |
-| `price_increase` | `warn` | A series whose latest charge, this month, is more than 5% above the one before |
+| `price_increase` | `warn` | A steady-priced series whose latest charge, this month, is more than 5% above the one before |
+| `missed` | `warn` | A series in state `late` (see [`/api/recurring`](#get-apirecurring)), in the current cycle |
 
 ```json
 {"month": "2026-09", "items": [{"id": "dup:579", "kind": "duplicate", "severity": "bad",

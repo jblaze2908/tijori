@@ -10,8 +10,9 @@ from sqlalchemy.orm import Session
 
 from tijori.classify.merchants import MERCHANT_QR_HANDLES
 from tijori.db import MemberContext
-from tijori.models import Category, Observation, RawMessage, Rule, RuleHit, Txn, TxnLink, TxnObservation
+from tijori.models import Account, Category, Observation, RawMessage, Rule, RuleHit, Txn, TxnLink, TxnObservation
 from tijori.money import ZERO, fmt
+from tijori.services import cards
 from tijori.services.common import audit, category_by_ref, cycle_bounds, txn_out, txn_query
 from tijori.services.errors import Invalid, NotFound
 from tijori.services.reports import is_expense
@@ -31,6 +32,7 @@ class TxnFilter:
     max_amount: Decimal | None = None
     month_start_day: int = 1  # `month` is a cycle starting on this day
     sort: str = "date_desc"
+    paid_with: str | None = None  # "card": card accounts only; "bank": everything else
 
 
 SORTS = ("date_desc", "date_asc", "amount_desc", "amount_asc")
@@ -39,6 +41,10 @@ SORTS = ("date_desc", "date_asc", "amount_desc", "amount_asc")
 def _like(q: str) -> str:
     escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{escaped}%"
+
+
+def _card_ids(member_id: int) -> Any:
+    return select(Account.id).where(Account.member_id == member_id, Account.kind == "card").scalar_subquery()
 
 
 def _conditions(member_id: int, f: TxnFilter) -> ColumnElement[bool]:
@@ -52,6 +58,9 @@ def _conditions(member_id: int, f: TxnFilter) -> ColumnElement[bool]:
         conds.append(Txn.occurred_at <= f.date_to)
     if f.accounts:
         conds.append(Txn.account_id.in_(f.accounts))
+    if f.paid_with:
+        on_card = Txn.account_id.in_(_card_ids(member_id))
+        conds.append(on_card if f.paid_with == "card" else ~on_card)
     if f.categories:
         ids = [int(c) for c in f.categories if c != "none"]
         either = [Txn.category_id.in_(ids)] if ids else []
@@ -95,17 +104,24 @@ def list_txns(s: Session, member_id: int, f: TxnFilter, page: int, page_size: in
     where = _conditions(member_id, f)
     measure = _measure().label("measure")
     card = (Txn.bucket == "card").label("card")
-    groups = s.execute(select(measure, card, func.count().label("n"), func.sum(Txn.amount).label("amount"))
-                       .where(where).group_by(measure, card)).all()
-    totals = {k: {"amount": ZERO, "count": 0} for k in ("spend", "income", "invest", "excluded", "card")}
+    on_card = Txn.account_id.in_(_card_ids(member_id)).label("on_card")
+    groups = s.execute(select(measure, card, on_card, func.count().label("n"), func.sum(Txn.amount).label("amount"))
+                       .where(where).group_by(measure, card, on_card)).all()
+    # card: bill payments standing in for card spend; on_card: spend on card accounts. Both subsets of spend.
+    totals = {k: {"amount": ZERO, "count": 0} for k in ("spend", "income", "invest", "excluded", "card", "on_card")}
     for g in groups:
-        for k in (g.measure, "card") if g.card and g.measure == "spend" else (g.measure,):
+        keys = [g.measure]
+        if g.measure == "spend":
+            keys += ["card"] * bool(g.card) + ["on_card"] * bool(g.on_card)
+        for k in keys:
             totals[k]["amount"] += g.amount
             totals[k]["count"] += g.n
     total = sum(g.n for g in groups)
     rows = s.execute(txn_query().where(where).order_by(*_ORDER[f.sort])
                      .limit(page_size).offset((page - 1) * page_size)).all()
-    return {"items": [txn_out(r) for r in rows], "page": page, "page_size": page_size, "total": total,
+    paid = cards.settles(s, member_id, [r.Txn.id for r in rows if r.Txn.bucket == "excluded"])
+    return {"items": [{**txn_out(r), "settles": paid.get(r.Txn.id)} for r in rows], "page": page,
+            "page_size": page_size, "total": total,
             "totals": {k: {"amount": fmt(v["amount"]), "count": v["count"]} for k, v in totals.items()}}
 
 
@@ -163,7 +179,7 @@ def get_txn(s: Session, member_id: int, txn_id: int) -> dict[str, Any]:
                  "recent": [{"id": r.id, "occurred_at": r.occurred_at, "amount": fmt(r.amount), "category": r.name}
                             for r in recent]}
     return {
-        "transaction": txn_out(row),
+        "transaction": {**txn_out(row), "settles": cards.settles(s, member_id, [txn_id]).get(txn_id)},
         "observations": [
             {"id": o.id, "source": "statement", "parser": o.parser, "parser_version": o.parser_version,
              "occurred_at": o.occurred_at, "amount": fmt(o.amount), "direction": o.direction,

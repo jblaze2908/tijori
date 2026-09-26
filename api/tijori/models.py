@@ -291,6 +291,16 @@ class Recurring(Base):
     amount_expected: Mapped[Decimal] = mapped_column(Money)
     next_due: Mapped[date | None] = mapped_column(Date)
     status: Mapped[str] = mapped_column(_enum("recurring_status", "active", "paused", "ended"), server_default="active")
+    # The series identity (services/recurring.payee_key_expr); decision null = detection decides.
+    payee_key: Mapped[str | None] = mapped_column(String(120))
+    decision: Mapped[str | None] = mapped_column(String(16))
+    kind: Mapped[str | None] = mapped_column(String(16))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (
+        UniqueConstraint("member_id", "payee_key"),
+        CheckConstraint("decision IS NULL OR decision IN ('confirmed', 'dismissed')", name="known_decision"),
+        CheckConstraint("kind IS NULL OR kind IN ('subscription', 'bill', 'invest', 'other')", name="known_kind"),
+    )
 
 
 class Budget(Base):
@@ -320,6 +330,9 @@ class Statement(Base):
     parser_version: Mapped[str | None] = mapped_column(String(32))
     reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     diff: Mapped[Decimal | None] = mapped_column(Money)
+    # Card statements only: what the bank asks you to pay, and by when.
+    total_due: Mapped[Decimal | None] = mapped_column(Money)
+    due_date: Mapped[date | None] = mapped_column(Date)
     __table_args__ = (UniqueConstraint("member_id", "account_id", "period_start", "period_end"),)
 
 

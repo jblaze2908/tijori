@@ -13,6 +13,8 @@ from tijori.app.schemas import (
     CategorizeOut,
     ComponentIn,
     ComponentOut,
+    RecurringDecision,
+    RecurringIn,
     RulePatch,
     RuleState,
     TxnNotes,
@@ -26,7 +28,7 @@ from tijori.app.schemas import (
     SettingsIn,
     SettingsOut,
 )
-from tijori.services import members, networth, txns
+from tijori.services import members, networth, recurring, txns
 from tijori.services.common import today_ist
 from tijori.services.networth import COMPONENT_KEYS
 from tijori.services.errors import NotFound
@@ -76,6 +78,14 @@ def put_component(db: MemberDep, key: str, body: ComponentIn) -> dict:
 
 
 # :path because a payee key may contain "/" (keys built from narration text).
+@router.put("/recurring/{payee_key:path}", response_model=RecurringDecision)
+def put_recurring(db: MemberDep, payee_key: Annotated[str, Path(min_length=1, max_length=120)],
+                  body: RecurringIn) -> dict:
+    amount = Decimal(body.amount_expected) if body.amount_expected is not None else None
+    return recurring.decide(db.session, db.ctx, db.actor, payee_key, body.decision, body.cadence, amount,
+                            body.kind, body.ended)
+
+
 @router.post("/inbox/{payee_key:path}/file", response_model=FileInboxOut)
 def file_inbox(db: MemberDep, payee_key: Annotated[str, Path(min_length=1, max_length=120)],
                body: FileInboxIn) -> dict:
