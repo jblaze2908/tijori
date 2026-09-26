@@ -473,10 +473,13 @@ The landing page sends the invitee to `/auth/login?invite=<token>`. Sign-in must
 ```json
 {"step": "profile", "completed_at": null,
  "steps": ["profile", "mail", "statement_passwords", "first_upload", "done"],
+ "gmail_filter": "from:(hdfcbank OR sbi OR icicibank OR amazonpay OR cred.club OR groww OR camsonline OR kfintech OR cdslindia OR cdslstatement OR pluxee) -subject:(OTP OR \"Instalment due\" OR \"Payment Reminder\" OR \"Daily Margin\" OR \"Portfolio Disclosure\")",
+ "label": "tijori",
  "checklist": {"profile": true, "mail_source": false, "statement_passwords": false, "first_upload": false}}
 ```
 
 - `step` is where the UI left the member.
+- `gmail_filter` is the Gmail search to copy into **Create filter** for the label step, with **Apply the label** set to `label`. Its `from:` tokens are the sender domains of the supported institutions, a starting point the member can widen in Gmail. The `-subject:` part keeps OTPs and non-transaction notices out.
 - `checklist` is derived from the data: own names set, a mail source exists, a statement password saved, a statement parsed.
 - `PATCH` takes `{"step": "<one of steps>"}` and/or `{"completed": true|false}`. `completed: true` sets the step to `done` and stamps `completed_at`.
 
@@ -515,7 +518,10 @@ It applies to statements uploaded after the change.
   - the port is 993 or 1024–65535;
   - the host must resolve to public addresses only, otherwise the test answers `host_not_public`.
 - **Validation:** `label` must be 1–100 printable ASCII chars; `app_password` 1–256 chars without line breaks.
-- **`error_code`:** `auth_failed`, `mailbox_not_found`, `dns_failed`, `host_not_public`, `tls_failed`, `timeout`, `connect_refused`, `connect_failed`, `protocol_error`. Server banners and exception text are never echoed.
+- **`error_code`:** server banners and exception text are never echoed, only these codes:
+  - Login refused: `auth_failed` (wrong email or password), `app_password_required` (Gmail wants an App Password, not the account password), `imap_disabled` (IMAP is off for the account), `web_login_required` (the provider wants a browser sign-in first), `rate_limited` (the provider throttled logins; try later).
+  - Everything else: `mailbox_not_found`, `dns_failed`, `host_not_public`, `tls_failed`, `timeout`, `connect_refused`, `connect_failed`, `protocol_error`.
+- **Gmail App Passwords** are accepted with or without the spaces Gmail shows.
 
 ```json
 {"id": 1, "provider": "gmail", "host": "imap.gmail.com", "port": 993, "email": "asha@example.test",

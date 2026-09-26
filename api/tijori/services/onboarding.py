@@ -14,6 +14,19 @@ from tijori.services.common import audit, sha256_hex
 from tijori.services.errors import Invalid, NotFound
 
 INVITE_TTL = timedelta(days=7)
+
+# Gmail filter for the label step (PLAN §4 sources). Gmail's from: matches whole address tokens,
+# so these are the distinctive tokens of each institution's sender domains, not full addresses.
+GMAIL_SENDERS = ("hdfcbank", "sbi", "icicibank", "amazonpay", "cred.club", "groww", "camsonline", "kfintech",
+                 "cdslindia", "cdslstatement", "pluxee")
+# Mail that looks transactional but carries no transaction, or carries an OTP (never ingested).
+GMAIL_EXCLUDED_SUBJECTS = ("OTP", '"Instalment due"', '"Payment Reminder"', '"Daily Margin"',
+                           '"Portfolio Disclosure"')
+
+
+def gmail_filter() -> str:
+    return (f"from:({' OR '.join(GMAIL_SENDERS)}) "
+            f"-subject:({' OR '.join(GMAIL_EXCLUDED_SUBJECTS)})")
 PROFILE_KEYS = ("own_names", "own_vpas", "own_account_masks", "investment_account_masks", "employer_patterns")
 
 
@@ -63,6 +76,7 @@ def onboarding(s: Session, ctx: MemberContext) -> dict[str, Any]:
     ).where(Member.id == m)).one()
     return {
         "step": row.onboarding_step, "completed_at": row.onboarding_completed_at, "steps": list(ONBOARDING_STEPS),
+        "gmail_filter": gmail_filter(), "label": "tijori",
         "checklist": {"profile": bool((row.classify_config or {}).get("own_names")), "mail_source": row.mail,
                       "statement_passwords": row.passwords, "first_upload": row.upload},
     }

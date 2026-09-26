@@ -418,6 +418,8 @@ class OnboardingOut(BaseModel):
     step: str
     completed_at: datetime | None
     steps: list[str]
+    gmail_filter: str  # paste into Gmail → Create filter, then apply the label below
+    label: str
     checklist: Checklist
 
 
