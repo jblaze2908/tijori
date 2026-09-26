@@ -6,7 +6,11 @@ import type {
   ApiMonths,
   ApiNetWorth,
   ApiPage,
-  ApiRecurring,
+  ApiCards,
+  ApiRecurringList,
+  Cadence,
+  RecurringKind,
+  RecurringList,
   ApiSnapshot,
   ApiSummary,
   ApiTotals,
@@ -216,6 +220,7 @@ export function txnQueryString(f: TxnQuery, page: number, pageSize: number): str
   put("kind", f.kind);
   put("direction", f.direction);
   put("sort", f.sort && f.sort !== "date_desc" ? f.sort : undefined);
+  put("paid_with", f.paidWith);
   p.set("page", String(page));
   p.set("page_size", String(pageSize));
   return p.toString();
@@ -258,6 +263,7 @@ const mapTxn = (t: ApiTxn): Transaction => ({
   review_reason: t.review_reason,
   notes: t.notes,
   tags: t.tags ?? [],
+  settles: t.settles ?? null,
 });
 
 const byDate = (a: { date: string }, b: { date: string }) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
@@ -414,10 +420,10 @@ export const api = {
   /** group_by=total: total, committed, discretionary, income, refunds and invested per period, on the summary's rules. */
   trendTotals: (granularity: Granularity, periods: number, end: string) =>
     optional(`/api/trends?${qs({ granularity, periods, end, group_by: "total" })}`, flattenTrends),
-  recurring: () =>
-    optional("/api/recurring", (r: { items: ApiRecurring[] }): Recurring[] =>
-      r.items.map(({ amount_expected, ...x }) => ({ ...x, amountExpected: toPaise(amount_expected) })),
-    ),
+  /** Active series only: what Spending counts as recurring. */
+  recurring: () => optional("/api/recurring", (r: ApiRecurringList): Recurring[] => mapRecurring(r).items.filter((x) => x.active)),
+  subscriptions: () => resource("/api/recurring", mapRecurring),
+  cards: () => resource("/api/cards", (r: ApiCards) => r),
   alerts: (month: MonthKey) => optional(`/api/alerts?${qs({ month })}`, (r: { items: ServerAlert[] }) => r.items),
   /** One page of a filtered list, with the whole set's totals. */
   txnPage: (f: TxnQuery, page: number, pageSize = 50) => resource(`/api/transactions?${txnQueryString(f, page, pageSize)}`, mapPage),
@@ -440,6 +446,32 @@ export async function allTxns(f: TxnQuery): Promise<Transaction[]> {
     Array.from({ length: Math.max(0, pages - 1) }, (_, i) => request<ApiTxnPage>(`/api/transactions?${txnQueryString(f, i + 2, PAGE_SIZE)}`)),
   );
   return [first, ...rest].flatMap((p) => p.items.map(mapTxn));
+}
+
+const ACTIVE_STATES = new Set(["upcoming", "pending", "late"]);
+function mapRecurring(r: ApiRecurringList): RecurringList {
+  return {
+    items: r.items.map(({ amount_expected, amount_min, amount_max, monthly_cost, yearly_cost, change, charges, ...x }) => ({
+      ...x,
+      amountExpected: toPaise(amount_expected),
+      amountMin: toPaise(amount_min),
+      amountMax: toPaise(amount_max),
+      monthly: toPaise(monthly_cost),
+      yearly: toPaise(yearly_cost),
+      change: change ? { from: toPaise(change.from), to: toPaise(change.to), at: change.at } : null,
+      charges: charges.map((c) => ({ ...c, amount: toPaise(c.amount) })),
+      active: ACTIVE_STATES.has(x.state),
+    })),
+    dismissed: r.dismissed,
+    totals: {
+      monthly: toPaise(r.totals.monthly),
+      yearly: toPaise(r.totals.yearly),
+      investMonthly: toPaise(r.totals.invest_monthly),
+      active: r.totals.active,
+      next30: toPaise(r.totals.next_30_days),
+      next30Count: r.totals.next_30_days_count,
+    },
+  };
 }
 
 function flattenTrends(r: ApiTrends): TrendPoint[] {
@@ -499,6 +531,15 @@ export async function patchTxn(id: string, body: { notes?: string | null; tags?:
 export async function setComponent(key: string, amount: string, asOf?: ISODate): Promise<void> {
   await request<unknown>(`/api/networth/components/${encodeURIComponent(key)}`, "PUT", { amount, ...(asOf ? { as_of: asOf } : {}) });
   invalidate(["/api/networth"]);
+}
+
+/** Your call on a payee's series; "auto" forgets it so detection decides again. */
+export async function decideRecurring(
+  key: string,
+  body: { decision: "confirmed" | "dismissed" | "auto"; cadence?: Cadence; kind?: RecurringKind; ended?: boolean; amount_expected?: string },
+): Promise<void> {
+  await request<unknown>(`/api/recurring/${encodeURIComponent(key)}`, "PUT", body);
+  invalidate(["/api/recurring", "/api/trends", "/api/alerts"]);
 }
 
 export async function setRuleEnabled(id: string, enabled: boolean): Promise<void> {

@@ -79,24 +79,26 @@ export function largestCharge(txns: Transaction[]): Transaction | null {
 }
 
 export interface PaidFrom {
+  /** An account id, or "standin" for bill payments standing in for un-itemised card spend. */
   id: string;
   label: string;
   kind: string | null;
   amount: Paise;
   count: number;
-  /** Card-bill payments inside this account's spend (they stand in for card purchases until those are itemised). */
-  cardBills: Paise;
 }
+
 export function paidFrom(txns: Transaction[]): PaidFrom[] {
   const out = new Map<string, PaidFrom>();
   for (const t of txns) {
     if (!isExpense(t)) continue;
-    const id = t.account_id ?? "none";
-    const e = out.get(id) ?? { id, label: t.account, kind: t.account_kind, amount: 0, count: 0, cardBills: 0 };
+    // A bill payment still in the `card` bucket wasn't matched to a parsed card statement: it gets its own row
+    // so the bank account's direct spend stays separate from card spend it stands in for.
+    const stand = t.bucket === "card";
+    const id = stand ? "standin" : (t.account_id ?? "none");
+    const e = out.get(id) ?? { id, label: stand ? "Card bills, not itemised" : t.account, kind: stand ? "standin" : t.account_kind, amount: 0, count: 0 };
     e.amount += t.amount;
     e.count += 1;
-    if (t.bucket === "card") e.cardBills += t.amount;
     out.set(id, e);
   }
-  return [...out.values()].sort((a, b) => b.amount - a.amount);
+  return [...out.values()].sort((a, b) => (a.id === "standin" ? 1 : b.id === "standin" ? -1 : b.amount - a.amount));
 }

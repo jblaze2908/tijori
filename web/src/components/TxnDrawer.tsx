@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { api, categorize, patchTxn, read } from "../lib/api";
+import { api, categorize, dataOf, decideRecurring, patchTxn, read } from "../lib/api";
 import { categoryColor, monogramColor } from "../lib/colors";
 import { dayLong, dayShort, inr, plural, timeIST, toPaise } from "../lib/format";
-import type { ClassifiedBy, Scope } from "../lib/types";
+import { navigate } from "../lib/router";
+import type { Cadence, ClassifiedBy, Scope, Transaction } from "../lib/types";
 import { G } from "./Glyphs";
 import { useToast } from "./Toast";
 
@@ -198,18 +199,41 @@ function Body({ id }: { id: string }) {
             </div>
           )}
         </div>
+        {t.settles && (
+          <button type="button" className="obs linkrow" onClick={() => openTxn(String(t.settles!.txn_id))}>
+            {G.card}
+            <span className="mid">
+              <span>{t.settles.card ? `Paid ${t.settles.card}` : `Paid from ${t.settles.from_account}`}</span>
+              <small>
+                Card bill, matched to the {t.settles.card ? "card's payment line" : "bank debit"} on {dayShort(t.settles.date)} · a transfer, not spend
+              </small>
+            </span>
+            {G.right}
+          </button>
+        )}
+        {!t.settles && t.bucket === "card" && (
+          <div className="obs">
+            {G.card}
+            <span className="mid">
+              <span>Stands in for card spend</span>
+              <small>No card statement covers the bill this pays, so it counts as spend. It becomes a transfer once that statement is added.</small>
+            </span>
+          </div>
+        )}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <span className="lbl">Links · {d.links.length ? d.links.length : "none"}</span>
           {d.links.map((l) => (
-            <div key={`${l.kind}${l.txn_id}`} className="obs">
+            <button key={`${l.kind}${l.txn_id}`} type="button" className="obs linkrow" onClick={() => openTxn(String(l.txn_id))}>
               {G.link}
               <span className="mid">
-                <span>{l.kind.replace("_", " ")}</span>
+                <span>{l.kind === "card_payment" ? "Card bill payment" : l.kind.replace("_", " ")}</span>
                 <small>transaction {l.txn_id}</small>
               </span>
-            </div>
+              {G.right}
+            </button>
           ))}
         </div>
+        {!credit && <RecurringBlock t={t} />}
         {d.payee && (
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <div className="panel-h">
@@ -268,7 +292,7 @@ function Body({ id }: { id: string }) {
         </div>
       </div>
       <div className="ft">
-        {selfTransfer && t.category_id !== selfTransfer.id && (
+        {selfTransfer && t.category_id !== selfTransfer.id && t.bucket !== "excluded" && (
           <button type="button" className="btn2 sm" disabled={busy} onClick={() => save(selfTransfer.id, "this", "Marked as transfer")}>
             {G.transfer}
             Mark as transfer
@@ -281,5 +305,79 @@ function Body({ id }: { id: string }) {
         </button>
       </div>
     </>
+  );
+}
+
+/** Re-opens the drawer on another transaction, keeping the page's filters. */
+function openTxn(txnId: string) {
+  const p = new URLSearchParams(location.search);
+  p.set("txn", txnId);
+  navigate(`/transactions?${p}`, { replace: location.pathname === "/transactions" });
+}
+
+const CADENCE: [Cadence, string][] = [
+  ["monthly", "Monthly"],
+  ["yearly", "Yearly"],
+  ["quarterly", "Quarterly"],
+  ["weekly", "Weekly"],
+];
+
+/** The payee's series, or a way to mark it recurring by hand (detection needs 3 charges; 2 for yearly). */
+function RecurringBlock({ t }: { t: Transaction }) {
+  const list = dataOf(read(api.subscriptions()));
+  const toast = useToast();
+  const [cadence, setCadence] = useState<Cadence>("monthly");
+  const [busy, setBusy] = useState(false);
+  const key = t.payee_key ?? t.merchant.toLowerCase();
+  if (!list || t.bucket === "excluded" || t.bucket === "card") return null;
+  const x = list.items.find((r) => r.id === key);
+  const hidden = list.dismissed.some((r) => r.id === key);
+  const mark = async () => {
+    setBusy(true);
+    try {
+      await decideRecurring(key, { decision: "confirmed", cadence });
+      toast(`${t.merchant} marked recurring`);
+    } catch {
+      toast("Couldn't save that. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <span className="lbl">Recurring</span>
+      {x ? (
+        <button type="button" className="obs linkrow" onClick={() => navigate("/subscriptions")}>
+          {G.subscriptions}
+          <span className="mid">
+            <span>
+              {CADENCE.find(([c]) => c === x.cadence)?.[1]} · {inr(x.amountExpected)}
+              {x.active ? ` · next ${dayShort(x.next_due)}` : x.state === "ended" ? " · cancelled" : " · stopped"}
+            </span>
+            <small>
+              {plural(x.count, "charge")} since {dayShort(x.first_at)}
+              {x.manual ? " · added by you" : x.confirmed ? " · confirmed" : " · detected"}
+            </small>
+          </span>
+          {G.right}
+        </button>
+      ) : (
+        <div className="markrec">
+          <span className="muted" style={{ fontSize: 13 }}>
+            {hidden ? "You marked this payee as not recurring." : "Not detected as recurring."}
+          </span>
+          <select className="inp2" value={cadence} onChange={(e) => setCadence(e.target.value as Cadence)} aria-label="Cadence">
+            {CADENCE.map(([c, l]) => (
+              <option key={c} value={c}>
+                {l}
+              </option>
+            ))}
+          </select>
+          <button type="button" className="btn2 sm" disabled={busy} onClick={mark}>
+            {busy ? "Saving…" : "Mark as recurring"}
+          </button>
+        </div>
+      )}
+    </div>
   );
 }

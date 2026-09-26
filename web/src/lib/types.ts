@@ -50,6 +50,14 @@ export interface ApiTxn {
   sources: TxnSource[];
   notes: string | null;
   tags: string[];
+  /** A bill payment matched to a card's payment line: the other leg. */
+  settles?: ApiSettles | null;
+}
+export interface ApiSettles {
+  txn_id: number;
+  date: ISODate;
+  card: string | null;
+  from_account: string | null;
 }
 export type TxnSource = "statement" | "alert" | "sms" | "upload" | "expected" | "import";
 
@@ -161,16 +169,55 @@ export interface ApiTransactionDetail {
 
 // ---------- wire: not in M0 (docs/api.md: a 404 means "section unavailable") ----------
 
+export type RecurringKind = "subscription" | "bill" | "invest" | "other";
+export type Cadence = "weekly" | "monthly" | "quarterly" | "yearly";
+export type RecurringState = "upcoming" | "pending" | "late" | "stopped" | "ended";
 export interface ApiRecurring {
   id: string;
   merchant: string;
-  cadence: "weekly" | "monthly" | "quarterly" | "yearly";
+  kind: RecurringKind;
+  cadence: Cadence;
+  state: RecurringState;
+  variable: boolean;
   amount_expected: Decimal;
+  amount_min: Decimal;
+  amount_max: Decimal;
+  monthly_cost: Decimal;
+  yearly_cost: Decimal;
   next_due: ISODate;
+  first_at: ISODate;
   last_at: ISODate;
+  seen_through: ISODate;
   count: number;
   category: string | null;
   account: string | null;
+  confirmed: boolean;
+  manual: boolean;
+  change: { from: Decimal; to: Decimal; at: ISODate } | null;
+  charges: { date: ISODate; amount: Decimal; txn_id: number }[];
+}
+export interface ApiRecurringList {
+  items: ApiRecurring[];
+  dismissed: { id: string; merchant: string }[];
+  totals: { monthly: Decimal; yearly: Decimal; invest_monthly: Decimal; active: number; next_30_days: Decimal; next_30_days_count: number };
+}
+export interface ApiCards {
+  items: {
+    account: { id: number; label: string | null };
+    statement: {
+      period_start: ISODate;
+      period_end: ISODate;
+      total: Decimal;
+      due_date: ISODate | null;
+      purchases: number;
+      paid: Decimal;
+      paid_at: ISODate | null;
+      paid_from: string | null;
+      state: "paid" | "part_paid" | "unpaid";
+    } | null;
+    cycle: { since: ISODate; amount: Decimal; count: number; seen_through: ISODate | null };
+  }[];
+  stand_in: { amount: Decimal; count: number; first: ISODate | null; last: ISODate | null };
 }
 export interface ServerAlert {
   id: string;
@@ -243,6 +290,7 @@ export interface Transaction {
   review_reason: string | null;
   notes: string | null;
   tags: string[];
+  settles: ApiSettles | null;
 }
 
 export interface Totals {
@@ -266,7 +314,21 @@ export interface TransactionDetail {
 }
 
 export type Budgets = Map<string, Paise>;
-export type Recurring = Omit<ApiRecurring, "amount_expected"> & { amountExpected: Paise };
+export type Recurring = Omit<ApiRecurring, "amount_expected" | "amount_min" | "amount_max" | "monthly_cost" | "yearly_cost" | "change" | "charges"> & {
+  amountExpected: Paise;
+  amountMin: Paise;
+  amountMax: Paise;
+  monthly: Paise;
+  yearly: Paise;
+  change: { from: Paise; to: Paise; at: ISODate } | null;
+  charges: { date: ISODate; amount: Paise; txn_id: number }[];
+  active: boolean;
+};
+export interface RecurringList {
+  items: Recurring[];
+  dismissed: { id: string; merchant: string }[];
+  totals: { monthly: Paise; yearly: Paise; investMonthly: Paise; active: number; next30: Paise; next30Count: number };
+}
 
 export interface InboxPayee {
   key: string;
@@ -330,7 +392,7 @@ export interface TrendPoint {
 // ---------- wire + models: transactions page, net worth live, inbox stats, rules, sources ----------
 
 export type Sort = "date_desc" | "date_asc" | "amount_desc" | "amount_asc";
-export type TotalKey = "spend" | "income" | "invest" | "excluded" | "card";
+export type TotalKey = "spend" | "income" | "invest" | "excluded" | "card" | "on_card";
 export interface ApiTxnPage extends ApiPage<ApiTxn> {
   totals: Record<TotalKey, { amount: Decimal; count: number }>;
 }
@@ -345,6 +407,7 @@ export interface TxnQuery {
   kind?: TxnKind;
   direction?: Direction;
   sort?: Sort;
+  paidWith?: "bank" | "card";
 }
 export interface TxnPage {
   items: Transaction[];

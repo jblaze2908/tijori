@@ -1,5 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { NetWorthChart, ProgressChart } from "../components/charts";
+import { G } from "../components/Glyphs";
 import { ErrorState, Loading } from "../components/ui";
 import { MonthGate, prevCycles, txnsFor, type AppCtx, type MonthCtx } from "../ctx";
 import { api, dataOf, invalidate, read } from "../lib/api";
@@ -206,7 +207,7 @@ function WhereItWent({ m, T, txns, back, dayN }: { m: MonthCtx; T: Transaction[]
         <p className="state">No spending recorded in {monthLong(m.key)} yet.</p>
       )}
       <div className="panel-h" style={{ borderTop: "1px solid var(--line)", paddingTop: 12 }}>
-        <span className="foot">Coloured when more than 15% off normal. Card-bill payments count as spend until card statements are itemised.</span>
+        <span className="foot">Coloured when more than 15% off normal. Card purchases count on the card; a card bill counts only while its statement is not parsed.</span>
         <Link href={`/spending`} className="x linkx">
           All spending →
         </Link>
@@ -215,14 +216,15 @@ function WhereItWent({ m, T, txns, back, dayN }: { m: MonthCtx; T: Transaction[]
   );
 }
 
-const KIND_GROUP: Record<string, string> = { card: "Cards", bank: "Bank", wallet: "Wallet" };
-const GROUP_COLOR: Record<string, string> = { Cards: "var(--t1)", Bank: "var(--t2)", Wallet: "var(--t3)", Other: "var(--s4)" };
+const KIND_GROUP: Record<string, string> = { card: "Cards", bank: "Bank", wallet: "Wallet", standin: "Card bills" };
+const GROUP_COLOR: Record<string, string> = { Cards: "var(--t1)", Bank: "var(--t2)", Wallet: "var(--t3)", "Card bills": "var(--warn)", Other: "var(--s4)" };
 
 function PaidFromPanel({ rows, total }: { rows: ReturnType<typeof paidFrom>; total: number }) {
   const groups = new Map<string, number>();
   for (const r of rows) groups.set(KIND_GROUP[r.kind ?? ""] ?? "Other", (groups.get(KIND_GROUP[r.kind ?? ""] ?? "Other") ?? 0) + r.amount);
-  const order = ["Cards", "Bank", "Wallet", "Other"].filter((g) => groups.get(g));
-  const cardBills = rows.reduce((a, r) => a + r.cardBills, 0);
+  const order = ["Cards", "Bank", "Wallet", "Card bills", "Other"].filter((g) => groups.get(g));
+  const cardBills = rows.find((r) => r.id === "standin")?.amount ?? 0;
+  const billCat = (dataOf(read(api.categories())) ?? []).find((c) => c.name === "Card bill payment")?.id;
   return (
     <section className="panel side2" aria-label="Paid from">
       <div className="panel-h">
@@ -247,15 +249,14 @@ function PaidFromPanel({ rows, total }: { rows: ReturnType<typeof paidFrom>; tot
       )}
       <div className="rows">
         {rows.map((r) => (
-          <Link key={r.id} href={`/transactions?account=${r.id}`} className="lrow">
-            <span className="mg acct" style={{ background: monogramColor(r.label) }}>
-              {r.label.replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase()}
+          <Link key={r.id} href={r.id === "standin" ? `/transactions?direction=debit${billCat ? `&category=${billCat}` : ""}` : `/transactions?account=${r.id}`} className="lrow">
+            <span className="mg acct" style={{ background: r.id === "standin" ? "var(--warn-bg)" : monogramColor(r.label), color: r.id === "standin" ? "var(--warn)" : undefined }}>
+              {r.id === "standin" ? G.card : r.label.replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase()}
             </span>
             <span className="mid">
-              <b>{r.label}</b>
+              <b className={r.id === "standin" ? "muted" : ""}>{r.label}</b>
               <small>
-                {KIND_GROUP[r.kind ?? ""] ?? "Other"} · {plural(r.count, "charge")}
-                {r.cardBills > 0 && ` · incl. ${compact(r.cardBills)} card bills`}
+                {r.id === "standin" ? "Paid from the bank; no card statement for them yet" : (KIND_GROUP[r.kind ?? ""] ?? "Other")} · {plural(r.count, "payment")}
               </small>
             </span>
             <span className="amt">{inr(r.amount)}</span>
@@ -264,7 +265,7 @@ function PaidFromPanel({ rows, total }: { rows: ReturnType<typeof paidFrom>; tot
         {!rows.length && <p className="state">Nothing spent yet this month.</p>}
       </div>
       {cardBills > 0 && (
-        <span className="foot">Card bills paid from a bank account stand in for the card's purchases until card statements are parsed.</span>
+        <span className="foot">A card bill counts as spend only until the statement it pays is parsed; then the card's purchases count instead.</span>
       )}
     </section>
   );

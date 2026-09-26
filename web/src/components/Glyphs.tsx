@@ -15,6 +15,17 @@ export const G = {
       <path d="M2 12l4-4 3 3 5-6" />
     </svg>
   ),
+  subscriptions: (
+    <svg {...g}>
+      <path d="M13.5 6.5A5.5 5.5 0 0 0 3.2 5M2.5 9.5A5.5 5.5 0 0 0 12.8 11M3 2.5V5.2h2.7M13 13.5v-2.7h-2.7" />
+    </svg>
+  ),
+  card: (
+    <svg {...g}>
+      <rect x="2" y="4" width="12" height="8.5" rx="1.5" />
+      <path d="M2 7h12" />
+    </svg>
+  ),
   transactions: (
     <svg {...g}>
       <path d="M2 4h12M2 8h12M2 12h8" />

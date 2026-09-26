@@ -3,12 +3,13 @@ import { Sparkline, StackedBars } from "../components/charts";
 import { ErrorState, Loading } from "../components/ui";
 import { prevCycles, txnsFor, type AppCtx } from "../ctx";
 import { all, api, dataOf, invalidate, read } from "../lib/api";
+import { G } from "../components/Glyphs";
 import { categoryColor, slotColor } from "../lib/colors";
-import { addDays, compact, dayShort, daysBetween, inr, monthShort, plural } from "../lib/format";
+import { addDays, compact, dayShort, daysBetween, inr, monthShort, plural, toPaise } from "../lib/format";
 import { isExpense, within } from "../lib/insights";
-import { byKey, categoryOf, NOTABLE, normalByKey, projection, spendOf } from "../lib/metrics";
+import { byKey, categoryOf, NOTABLE, normalByKey, paidFrom, projection, spendOf } from "../lib/metrics";
 import { Link, navigate } from "../lib/router";
-import type { ISODate, Transaction, TrendPoint } from "../lib/types";
+import type { ApiCards, ISODate, Transaction, TrendPoint } from "../lib/types";
 
 type Preset = "month" | "last" | "year" | "fy" | "custom";
 type Group = "category" | "merchant" | "account";
@@ -277,7 +278,7 @@ function Body({ app, preset, r, group, txns, trends, recurringIds }: { app: AppC
           </tbody>
         </table>
         <span className="foot">
-          Normal = {normalSpan} average up to day {dayN}; monthly avg = full months only; "vs normal" coloured when more than 15% off. Hollow dot = month still running. Card-bill payments count as spend until card statements are itemised.
+          Normal = {normalSpan} average up to day {dayN}; monthly avg = full months only; "vs normal" coloured when more than 15% off. Hollow dot = month still running. Card purchases count on the card; a card bill paid from the bank counts only while the statement it pays isn't parsed.
         </span>
       </section>
 
@@ -320,9 +321,108 @@ function Body({ app, preset, r, group, txns, trends, recurringIds }: { app: AppC
             </div>
           </>
         )}
-        <span className="foot">Recurring = the same payee charged at least 3 times on a steady cadence (weekly, monthly, quarterly or yearly), each amount within ±10%. Card bills and investments are left out.</span>
+        <span className="foot">
+          Recurring = a series on the{" "}
+          <Link href="/subscriptions" className="linkx">
+            Subscriptions
+          </Link>{" "}
+          page: 3 or more charges to one payee on a steady cadence (2 for yearly), or one you marked. Card bills and investments are left out.
+        </span>
+      </section>
+
+      <Cards R={R} label={r.label} />
+    </>
+  );
+}
+
+/** Spend by account over the range (a card's purchases on the card), and each card's latest statement. */
+function Cards({ R, label }: { R: Transaction[]; label: string }) {
+  const cards = dataOf(read(api.cards()));
+  const rows = paidFrom(R);
+  const total = rows.reduce((a, r) => a + r.amount, 0);
+  const max = Math.max(1, ...rows.map((r) => r.amount));
+  const si = cards?.stand_in;
+  return (
+    <>
+      {cards && cards.items.length > 0 && (
+        <section className="panel flat" aria-label="Cards">
+          <div className="panel-h">
+            <h2>Cards</h2>
+            <span className="foot">A purchase is spend on the card it was made with. A bill payment moves money between your accounts, so it is not spend.</span>
+          </div>
+          <div className="cardgrid">
+            {cards.items.map((c) => (
+              <CardPanel key={c.account.id} c={c} />
+            ))}
+          </div>
+        </section>
+      )}
+      <section className="panel" aria-label="Paid from">
+        <div className="panel-h">
+          <h2>Paid from</h2>
+          <span className="foot">{label} · spend only</span>
+        </div>
+        <div className="paidrows">
+          {rows.map((r, i) => (
+            <Link key={r.id} href={r.id === "standin" ? "/transactions?direction=debit" : `/transactions?account=${r.id}`} className="paidrow">
+              <span className={`nm${r.id === "standin" ? " muted" : ""}`}>
+                {r.kind === "card" && <span className="faint">{G.card}</span>}
+                {r.label}
+              </span>
+              <span className="bar">
+                <i style={{ width: `${(r.amount / max) * 100}%`, background: r.id === "standin" ? "var(--warn)" : slotColor(i) }} />
+              </span>
+              <span className="mono-n">{inr(r.amount)}</span>
+              <span className="mono-n faint pc">{total ? `${Math.round((r.amount / total) * 100)}%` : "—"}</span>
+            </Link>
+          ))}
+          {!rows.length && <p className="state">Nothing spent in this range.</p>}
+        </div>
+        <span className="foot">
+          Card bills count as spend only when the statement they pay hasn't been parsed
+          {si?.count && si.first && si.last ? ` (${plural(si.count, "payment")}, ${inr(toPaise(si.amount))} in all, ${dayShort(si.first)} '${si.first.slice(2, 4)} – ${dayShort(si.last)} '${si.last.slice(2, 4)})` : ""}. Bill
+          payments matched to a card's "Payment received" line are transfers.
+        </span>
       </section>
     </>
+  );
+}
+
+function CardPanel({ c }: { c: ApiCards["items"][number] }) {
+  const s = c.statement;
+  const total = s ? toPaise(s.total) : 0;
+  const state = !s ? ["No statement yet", "none"] : s.state === "paid" ? ["Paid", "paid"] : s.due_date ? [`Due ${dayShort(s.due_date)}`, "due"] : ["Not paid yet", "due"];
+  return (
+    <div className="cardp">
+      <div className="hd">
+        <span className="chipcard" />
+        <div style={{ minWidth: 0 }}>
+          <b>{c.account.label}</b>
+          <small>{s ? `Statement ${dayShort(s.period_start)} – ${dayShort(s.period_end)}` : "Add a card statement to itemise its purchases"}</small>
+        </div>
+        <span className={`state ${state[1]}`}>{state[0]}</span>
+      </div>
+      <div className="facts3">
+        <div>
+          <span className="k">{s ? `Statement ${dayShort(s.period_end)}` : "Statement"}</span>
+          <b>{s ? inr(total) : "—"}</b>
+          <small>{s ? plural(s.purchases, "purchase") : ""}</small>
+        </div>
+        <div>
+          <span className="k">{s?.paid_at ? `Paid ${dayShort(s.paid_at)}` : s?.due_date ? `Due ${dayShort(s.due_date)}` : "Paid"}</span>
+          <b>{s ? inr(s.paid_at ? toPaise(s.paid) : total) : "—"}</b>
+          <small>{s?.paid_from ? `From ${s.paid_from}` : s ? "No payment seen yet" : ""}</small>
+        </div>
+        <div>
+          <span className="k">This cycle so far</span>
+          <b>{inr(toPaise(c.cycle.amount))}</b>
+          <small>
+            {dayShort(c.cycle.since)}
+            {c.cycle.seen_through ? ` – ${dayShort(c.cycle.seen_through)}` : ""} · {plural(c.cycle.count, "purchase")}
+          </small>
+        </div>
+      </div>
+    </div>
   );
 }
 

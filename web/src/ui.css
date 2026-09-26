@@ -366,3 +366,198 @@ main { padding: 24px 40px 56px; display: flex; flex-direction: column; gap: 24px
   .settings-wrap { flex-direction: column }
   .subnav2 { flex-direction: row; overflow: auto; width: 100% }
 }
+
+/* Subscriptions (Paper artboard 09) */
+.strong { color: var(--t1); font-weight: 500 }
+.dot { width: 8px; height: 8px; border-radius: 4px; display: inline-block; flex: none }
+.panel.flat { background: none; padding: 0 }
+.subgroup { display: flex; flex-direction: column }
+.subhead { display: flex; align-items: baseline; gap: 12px; padding-bottom: 12px }
+.subhead h2 { margin: 0; font-size: 16px; line-height: 24px; font-weight: 600 }
+.subtable { display: flex; flex-direction: column }
+.subrow { display: flex; align-items: center; gap: 16px; min-height: 60px; border-bottom: 1px solid var(--line); position: relative }
+.subrow.head { min-height: 32px; font-size: 12px; line-height: 16px; color: var(--t3) }
+.subrow .r { text-align: right }
+.subrow .c-pay { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px }
+.subrow .c-pay .who2 { min-width: 0; display: flex; flex-direction: column }
+.subrow .c-pay .who2 b { font-weight: 500; display: flex; align-items: center; gap: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.subrow .c-pay .who2 small { font-size: 12px; line-height: 16px; color: var(--t3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.subrow .mg.sq { border-radius: 8px }
+.subrow .c-every { width: 64px; flex: none }
+.subrow .c-amt { width: 96px; flex: none }
+.subrow .c-mo { width: 84px; flex: none }
+.subrow .c-last { width: 96px; flex: none }
+.subrow .c-next { width: 236px; flex: none; display: flex; flex-direction: column }
+.subrow .c-next small { font-size: 12px; line-height: 16px }
+.subrow .c-hist { width: 108px; flex: none }
+.subrow .c-act { width: 28px; flex: none; display: flex; justify-content: center; position: relative }
+.subrow.ended .who2 b, .subrow.ended .c-amt { color: var(--t2); font-weight: 400 }
+.hist { display: flex; align-items: flex-end; gap: 3px; height: 24px }
+.hist i { width: 6px; border-radius: 1px; display: block }
+.hist i.none { height: 0 }
+.hist i.miss { height: 2px; background: var(--line-2) }
+.kebab { width: 28px; height: 28px; border-radius: 6px; border: 0; background: none; color: var(--t3); cursor: pointer; display: grid; place-items: center }
+.kebab:hover, .kebab[aria-expanded="true"] { background: var(--s2); color: var(--t1) }
+.menu2 { position: absolute; right: 0; top: 34px; z-index: 30; width: 240px; display: flex; flex-direction: column; padding: 6px; border-radius: 12px; background: var(--s2); border: 1px solid var(--line-2); box-shadow: 0 12px 32px rgba(0, 0, 0, .45) }
+.menu2 > button { display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 10px; border: 0; border-radius: 6px; background: none; color: var(--t1); font: inherit; font-size: 13px; text-align: left; cursor: pointer }
+.menu2 > button:hover { background: var(--track) }
+.menu2 .ic { width: 14px; display: grid; place-items: center; color: var(--in) }
+.menu2 .sep { height: 1px; background: var(--line-2); margin: 4px 0 }
+.menu2 .lbl2 { padding: 6px 10px 4px; font-size: 12px; color: var(--t3) }
+.menu2 .chips { display: flex; gap: 6px; padding: 4px 10px 8px; flex-wrap: wrap }
+.catchip.sm { height: 26px; padding: 0 10px; font-size: 12px }
+.subfoot { display: flex; gap: 24px; align-items: baseline }
+.subfoot .foot { flex: 1 }
+.lrow2 { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line) }
+.tline { position: relative; height: 168px }
+.tline .axis { position: absolute; left: 0; right: 0; top: 83px; height: 2px; background: var(--line-2) }
+.tline .tl-today, .tline .tl-end { position: absolute; top: 92px; font: 12px/16px var(--mono); color: var(--t3) }
+.tline .tl-today { left: 0; color: var(--t1) }
+.tline .tl-end { right: 0 }
+.tl-m { position: absolute; top: 0; height: 168px; width: 0 }
+.tl-m .dot { position: absolute; left: -5px; top: 79px; width: 10px; height: 10px; border-radius: 5px; border: 2px solid var(--bg) }
+.tl-m .stem { position: absolute; left: 0; width: 1px; height: 14px; background: var(--line-2) }
+.tl-m.tl-up .stem { top: 66px }
+.tl-m.tl-down .stem { top: 89px }
+.tl-m .tl-lbl { position: absolute; display: flex; flex-direction: column; white-space: nowrap; left: -4px }
+.tl-m.right .tl-lbl { left: auto; right: -4px; align-items: flex-end }
+.tl-m.tl-up .tl-lbl { top: 10px }
+.tl-m.tl-down .tl-lbl { top: 104px }
+.tl-m .tl-lbl b { font-size: 13px; line-height: 20px; font-weight: 400 }
+.tl-m .tl-lbl small { font-size: 12px; line-height: 16px; color: var(--t3) }
+.tl-m .tl-lbl b + small { color: var(--t2) }
+.tl-list { display: none; list-style: none; margin: 0; padding: 0 }
+.tl-list li { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px }
+.tl-list li .mono-n.faint { width: 52px }
+
+/* Cards and card rows (Paper artboard 10) */
+.cardgrid { display: flex; gap: 24px }
+.cardp { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 20px; padding: 24px; border-radius: 12px; background: var(--s1); border: 1px solid var(--line) }
+.cardp .hd { display: flex; align-items: center; gap: 12px }
+.cardp .chipcard { width: 36px; height: 24px; border-radius: 4px; background: linear-gradient(135deg, #2b2f3a, #11141a); border: 1px solid var(--line-2); flex: none }
+.cardp .hd b { font-weight: 500; font-size: 15px }
+.cardp .hd small { display: block; font-size: 12px; color: var(--t3) }
+.cardp .state { margin-left: auto; font-size: 12px; line-height: 16px; padding: 3px 8px; border-radius: 6px; white-space: nowrap }
+.cardp .state.paid { background: var(--in-bg); color: var(--in) }
+.cardp .state.due { background: var(--warn-bg); color: var(--warn) }
+.cardp .state.none { background: var(--s2); color: var(--t2) }
+.cardp .facts3 { display: flex; border-top: 1px solid var(--line) }
+.cardp .facts3 > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; padding: 14px 16px 0; border-left: 1px solid var(--line) }
+.cardp .facts3 > div:first-child { border-left: 0; padding-left: 0 }
+.cardp .facts3 .k { font-size: 12px; color: var(--t2) }
+.cardp .facts3 b { font: 500 20px/28px var(--mono); font-variant-numeric: tabular-nums }
+.cardp .facts3 small { font-size: 12px; color: var(--t3) }
+.cardtag { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; line-height: 16px; padding: 0 6px; border-radius: 4px; background: var(--accent-bg); color: var(--accent); white-space: nowrap; flex: none }
+.cardtag svg { width: 12px; height: 12px }
+.xfertag { font-size: 11px; line-height: 16px; padding: 0 6px; border-radius: 4px; background: var(--track); color: var(--t2); white-space: nowrap; flex: none }
+.standtag { font-size: 11px; line-height: 16px; padding: 0 6px; border-radius: 4px; background: var(--warn-bg); color: var(--warn); white-space: nowrap; flex: none }
+
+@media (max-width: 1180px) {
+  .subrow .c-last, .subrow .c-hist { display: none }
+  .subrow .c-next { width: 200px }
+  .cardgrid { flex-direction: column }
+}
+@media (max-width: 820px) {
+  .subrow.head { display: none }
+  .subrow { flex-wrap: wrap; gap: 4px 12px; padding: 12px 0; min-height: 0 }
+  .subrow .c-pay { flex-basis: calc(100% - 140px) }
+  .subrow .c-every, .subrow .c-mo { display: none }
+  .subrow .c-amt { width: auto; margin-left: auto }
+  .subrow .c-next { order: 5; width: 100%; padding-left: 40px; flex-direction: row; gap: 8px; align-items: baseline; flex-wrap: wrap }
+  .subrow .c-act { order: 3 }
+  .subfoot { flex-direction: column; gap: 8px }
+  .tline { display: none }
+  .tl-list { display: block }
+  .cardp { padding: 16px; gap: 14px }
+  .cardp .facts3 { flex-direction: column }
+  .cardp .facts3 > div { border-left: 0; padding: 10px 0 0; flex-direction: row; align-items: baseline; gap: 8px; flex-wrap: wrap }
+  .cardp .facts3 > div .k { width: 100% }
+  .cardp .facts3 b { font-size: 17px; line-height: 24px }
+}
+@media (max-width: 820px) {
+  .tabbar { padding-left: 4px; padding-right: 4px }
+  .tabbar a { flex: 1; min-width: 0; padding: 4px 2px; white-space: nowrap }
+}
+.c-name .cardtag { overflow: visible }
+.c-name .nm { min-width: 0 }
+.c-acct { display: flex; align-items: center; gap: 6px }
+.c-acct svg, .pop .list svg { width: 14px; height: 14px; display: block }
+.pop .list .grp { display: flex; flex-direction: column }
+.pop .list .grp > .foot { padding: 6px 6px 2px }
+.c-cat .standtag + span, .c-cat .kindtag + span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+@media (max-width: 1180px) {
+  .c-acct { display: none }
+}
+.obs.linkrow { width: 100%; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 8px }
+.obs.linkrow:hover { background: rgba(255, 255, 255, .03) }
+.markrec { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
+.markrec .muted { flex-basis: 100% }
+.paidrows { display: flex; flex-direction: column }
+.paidrow { display: flex; align-items: center; gap: 16px; height: 44px; border-bottom: 1px solid var(--line); color: inherit }
+.paidrow:hover { background: rgba(255, 255, 255, .02) }
+.paidrow .nm { width: 220px; flex: none; display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.paidrow .nm svg { width: 14px; height: 14px; display: block }
+.paidrow .bar { flex: 1; height: 8px; border-radius: 4px; background: var(--track); display: flex; min-width: 40px }
+.paidrow .bar i { height: 8px; border-radius: 4px; display: block }
+.paidrow .mono-n { width: 96px; text-align: right; flex: none }
+.paidrow .pc { width: 40px }
+@media (max-width: 820px) {
+  .paidrow { gap: 10px }
+  .paidrow .nm { width: 42% }
+  .paidrow .mono-n { width: auto }
+  .paidrow .pc { display: none }
+}
+@media (min-width: 1181px) {
+  .c-cat { width: 280px }
+  .c-acct { width: 190px }
+}
+.c-cat .kindtag { flex: none }
+.tl-list li .grow { flex: 1; min-width: 0 }
+@media (max-width: 820px) {
+  .panel.flat .panel-h { flex-wrap: wrap; gap: 4px 12px }
+  .panel.flat .panel-h h2 { white-space: nowrap }
+  .panel.flat .panel-h .legend { margin-left: 0 !important; flex-basis: 100% }
+  .subhead { flex-wrap: wrap; gap: 2px 10px }
+  .subhead .mono-n { font-size: 12px }
+}
+.chiprow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
+.summary b { white-space: nowrap }
+@media (max-width: 820px) {
+  .seg.lg { flex-wrap: nowrap; overflow-x: auto; max-width: 100%; scrollbar-width: none }
+  .seg.lg::-webkit-scrollbar, .chiprow::-webkit-scrollbar { display: none }
+  .seg.lg button { white-space: nowrap; flex: none }
+  .rangehint { display: none }
+  .chiprow { flex-wrap: nowrap; overflow-x: auto; width: 100%; scrollbar-width: none; padding-bottom: 2px }
+  .chiprow .chip2 { flex: none }
+  .summary > div { flex-basis: 50%; padding: 12px 12px 12px 0 }
+  .summary > div:first-child { flex-direction: row; align-items: baseline; gap: 8px; padding-bottom: 4px }
+  .summary b { font-size: 15px }
+}
+.nmcol { display: flex; flex-direction: column; min-width: 0 }
+.nmcol > * { white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.msub { display: none }
+@media (max-width: 820px) {
+  .trow { height: auto; min-height: 56px; padding: 8px 0; gap: 10px }
+  .tcols { gap: 10px }
+  .c-date { width: 44px }
+  .c-name { gap: 10px }
+  .c-amt { width: 84px }
+  .msub { display: block; font-size: 12px; line-height: 16px; color: var(--t3) }
+  .cardtag { font-size: 0; gap: 0; padding: 2px 4px }
+}
+@media (max-width: 820px) {
+  .c-date { line-height: 16px; font-size: 12px }
+}
+@media (max-width: 820px) {
+  .panel-h { flex-wrap: wrap; row-gap: 8px }
+  .panel-h h2 { white-space: nowrap }
+  .panel-h .seg { flex: none }
+  .panel-h .seg button { white-space: nowrap }
+  .panel-h .legend { flex-basis: 100%; margin-left: 0 !important }
+}
+@media (max-width: 820px) {
+  /* Spending breakdown: keep name, amount, this month and vs normal */
+  .t2 th:nth-child(3), .t2 td:nth-child(3), .t2 th:nth-child(6), .t2 td:nth-child(6), .t2 th:nth-child(7), .t2 td:nth-child(7), .t2 th:nth-child(8), .t2 td:nth-child(8) { display: none }
+  .t2 th { letter-spacing: .02em }
+  .t2 td:first-child { max-width: 120px; overflow: hidden; text-overflow: ellipsis }
+}

@@ -15,19 +15,22 @@ import { Onboarding } from "./pages/Onboarding";
 import { Overview } from "./pages/Overview";
 import { SECTIONS, Settings, type Section } from "./pages/Settings";
 import { Spending } from "./pages/Spending";
+import { Subscriptions } from "./pages/Subscriptions";
 import { Transactions } from "./pages/Transactions";
 import { Welcome } from "./pages/Welcome";
 
-type RouteKey = "overview" | "spending" | "transactions" | "networth" | "inbox";
-const ROUTES: { path: string; key: RouteKey; title: string }[] = [
-  { path: "/", key: "overview", title: "Overview" },
-  { path: "/spending", key: "spending", title: "Spending" },
-  { path: "/transactions", key: "transactions", title: "Transactions" },
-  { path: "/networth", key: "networth", title: "Net worth" },
-  { path: "/inbox", key: "inbox", title: "Inbox" },
+type RouteKey = "overview" | "spending" | "subscriptions" | "transactions" | "networth" | "inbox";
+/** `tab` is the phone tab-bar label: six tabs share 390px. */
+const ROUTES: { path: string; key: RouteKey; title: string; tab: string }[] = [
+  { path: "/", key: "overview", title: "Overview", tab: "Overview" },
+  { path: "/spending", key: "spending", title: "Spending", tab: "Spending" },
+  { path: "/subscriptions", key: "subscriptions", title: "Subscriptions", tab: "Subs" },
+  { path: "/transactions", key: "transactions", title: "Transactions", tab: "Activity" },
+  { path: "/networth", key: "networth", title: "Net worth", tab: "Worth" },
+  { path: "/inbox", key: "inbox", title: "Inbox", tab: "Inbox" },
 ];
 /** Old paths from before UI v1, kept so bookmarks still land. */
-const MOVED: Record<string, string> = { "/activity": "/transactions", "/trends": "/spending" };
+const MOVED: Record<string, string> = { "/activity": "/transactions", "/trends": "/spending", "/recurring": "/subscriptions" };
 /** Pages reachable while signed out; everything else sends a 401 on /api/me to /welcome. */
 const PUBLIC = /^\/(welcome|invite\/[^/]+)$/;
 
@@ -125,6 +128,9 @@ export function App() {
     case "spending":
       page = <Spending app={app} />;
       break;
+    case "subscriptions":
+      page = <Subscriptions app={app} />;
+      break;
     case "transactions":
       page = <Transactions app={app} />;
       break;
@@ -180,7 +186,7 @@ export function App() {
         {ROUTES.map((r) => (
           <Link key={r.key} href={r.path} className={route?.key === r.key ? "on" : ""} aria-current={route?.key === r.key ? "page" : undefined}>
             {G[r.key]}
-            {r.title}
+            {r.tab}
           </Link>
         ))}
       </nav>
