@@ -441,3 +441,4 @@ details.help a, .steps-list a { color: var(--accent); text-decoration: underline
   .steps { grid-template-columns: repeat(3, 1fr); row-gap: 10px }
   .row-2 { grid-template-columns: 1fr 90px }
 }
+.t1 { color: var(--t1) }

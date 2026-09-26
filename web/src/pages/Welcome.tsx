@@ -1,10 +1,12 @@
 import { BrandMark } from "../components/Icons";
+import { AUTH_ERROR } from "../lib/setup";
 
-/** Only same-origin app paths survive as ?next, so the sign-in round trip can't be turned into an open redirect. */
-const safeNext = (next: string | null) => (next && /^\/(?!\/)[\w\-/?=&%.]*$/.test(next) && !next.startsWith("/auth") ? next : "/");
+/** Only same-origin app paths survive as return_to (the server re-checks), so sign-in can't become an open redirect. */
+const safeReturn = (p: string | null) => (p && /^\/(?!\/)[\w\-/?=&%.]*$/.test(p) && !p.startsWith("/auth") && !p.startsWith("/welcome") ? p : "/");
 
-export function Welcome({ next, invite }: { next: string | null; invite?: string }) {
-  const q = new URLSearchParams({ next: safeNext(next), ...(invite ? { invite } : {}) });
+export function Welcome({ next, error }: { next: string | null; error: string | null }) {
+  const q = new URLSearchParams({ return_to: safeReturn(next) });
+  const message = error ? (AUTH_ERROR[error] ?? "Sign-in didn't complete. Try again.") : null;
   return (
     <div className="solo">
       <div className="card solo-card">
@@ -17,11 +19,16 @@ export function Welcome({ next, invite }: { next: string | null; invite?: string
           Tijori reads bank alerts and statements you choose to share, files them for you, and keeps your net worth current. It runs on your
           family's own server.
         </p>
+        {message && (
+          <div className="result bad mt" role="alert">
+            {message}
+          </div>
+        )}
         {/* A full page load on purpose: /auth/login is a server redirect to Google, not an app route. */}
         <a className="btn btn-lg" href={`/auth/login?${q}`}>
           <GoogleG /> Sign in with Google
         </a>
-        <p className="sub fine">Only emails on the household's allow-list can sign in.</p>
+        <p className="sub fine">Only household members and invited people can sign in.</p>
       </div>
     </div>
   );

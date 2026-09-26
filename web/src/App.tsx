@@ -5,7 +5,7 @@ import { AppProvider, buildCtx, type AppCtx } from "./ctx";
 import { api, dataOf, read, retryFailed } from "./lib/api";
 import { initials, monthYear, todayIST } from "./lib/format";
 import { Link, match, navigate, useLocation } from "./lib/router";
-import { setup, STEP_LABEL, STEPS } from "./lib/setup";
+import { setup } from "./lib/setup";
 import { useStore } from "./lib/useStore";
 import type { MonthKey } from "./lib/types";
 import { Activity, focusActivitySearch } from "./pages/Activity";
@@ -62,19 +62,26 @@ export function App() {
   const me = read(api.me());
   const signedOut = me.status === "error" && me.error.status === 401;
   const onboarding = isPublic ? null : dataOf(read(setup.onboarding()));
-  const setupPending = !!onboarding && onboarding.step !== "done";
+  const setupPending = !!onboarding && !onboarding.completed_at && onboarding.step !== "done";
   const settingsMatch = match("/settings/:section", path);
   const section = SECTIONS.find(([k]) => k === settingsMatch?.section)?.[0] as Section | undefined;
 
+  // A failed Google callback lands on /?auth_error=<reason>; the reason travels to /welcome, which explains it.
   useEffect(() => {
-    if (signedOut && !isPublic) navigate(`/welcome?${new URLSearchParams({ next: location.pathname + location.search })}`, { replace: true });
+    if (!signedOut || isPublic) return;
+    const here = new URLSearchParams(location.search);
+    const authError = here.get("auth_error");
+    here.delete("auth_error");
+    const rest = here.toString();
+    const q = new URLSearchParams({ next: location.pathname + (rest ? `?${rest}` : ""), ...(authError ? { auth_error: authError } : {}) });
+    navigate(`/welcome?${q}`, { replace: true });
   }, [signedOut, isPublic]);
 
   // Landing on the dashboard with setup unfinished resumes the wizard; other pages just show a banner.
   useEffect(() => {
-    if (path === "/" && setupPending && onboarding) navigate(`/onboarding/${onboarding.step}`, { replace: true });
+    if (path === "/" && setupPending) navigate("/onboarding", { replace: true });
     if (path === "/settings") navigate("/settings/general", { replace: true });
-  }, [path, setupPending, onboarding]);
+  }, [path, setupPending]);
 
   useEffect(() => {
     retryFailed();
@@ -94,7 +101,7 @@ export function App() {
     return () => removeEventListener("keydown", onKey);
   }, []);
 
-  if (path === "/welcome") return <Welcome next={params.get("next")} />;
+  if (path === "/welcome") return <Welcome next={params.get("next")} error={params.get("auth_error")} />;
   const invite = match("/invite/:token", path);
   if (invite) return <Invite token={invite.token!} />;
   if (signedOut) return null;
@@ -157,13 +164,11 @@ export function App() {
             </Link>
           </div>
           <section className="view">
-            {setupPending && !section && onboarding && onboarding.step !== "done" && (
+            {setupPending && !section && (
               <div className="notice" role="status">
-                <span>
-                  Finish setting up Tijori: next is <b>{STEP_LABEL[onboarding.step]}</b> (step {STEPS.indexOf(onboarding.step) + 1} of {STEPS.length}).
-                </span>
-                <Link href={`/onboarding/${onboarding.step}`} className="btn ghost">
-                  Resume
+                <span>Finish setting up Tijori: connect your mail and add a first statement so everything here stays current.</span>
+                <Link href="/onboarding" className="btn ghost">
+                  Resume setup
                 </Link>
               </div>
             )}

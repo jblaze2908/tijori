@@ -5,12 +5,18 @@ import { dayShort } from "../lib/format";
 import { setup } from "../lib/setup";
 import { useStore } from "../lib/useStore";
 
-/** /invite/:token: public. Shows whose household it is, then sends sign-in through /auth/login with the token. */
+const STATUS_TEXT = {
+  used: "This invite has already been used. If that wasn't you, ask for a new link.",
+  expired: "This invite has expired. Ask the person who invited you for a new link.",
+} as const;
+
+/** /invite/:token, public: GET /api/invites/{token} needs no sign-in. Sign-in must use exactly the invited email. */
 export function Invite({ token }: { token: string }) {
   useStore();
   const st = read(setup.invite(token));
   const info = st.status === "ready" ? st.data : null;
-  const q = new URLSearchParams({ invite: token, next: "/onboarding/profile" });
+  const household = info ? (typeof info.household === "string" ? info.household : info.household?.name) : null;
+  const q = new URLSearchParams({ invite: token, return_to: "/onboarding" });
   return (
     <div className="solo">
       <div className="card solo-card">
@@ -20,13 +26,12 @@ export function Invite({ token }: { token: string }) {
         </div>
         {st.status === "loading" ? (
           <Loading card={false} />
-        ) : info?.valid ? (
+        ) : info?.status === "valid" ? (
           <>
-            <h1 className="solo-h">Join {info.household_name ?? "a household"} on Tijori</h1>
+            <h1 className="solo-h">Join {household ?? "a household"} on Tijori</h1>
             <p className="sub">
-              {info.inviter_name ? `${info.inviter_name} invited ` : "You're invited "}
-              {info.email ? `${info.email}.` : "to join."} Your money stays yours: other members only see what you choose to share.
-              {info.expires_at ? ` This invite expires ${dayShort(info.expires_at.slice(0, 10))}.` : ""}
+              This invite is for <b className="t1">{info.email}</b>; sign in with that Google account. Your money stays yours: other members only see
+              what you choose to share. It expires {dayShort(info.expires_at.slice(0, 10))}.
             </p>
             {/* A full page load on purpose: /auth/login is a server redirect to Google. */}
             <a className="btn btn-lg" href={`/auth/login?${q}`}>
@@ -37,7 +42,7 @@ export function Invite({ token }: { token: string }) {
           <>
             <h1 className="solo-h">This invite can't be used</h1>
             <p className="sub">
-              {st.status === "error" ? st.error.message : "It may have expired or already been used. Ask the person who invited you for a new link."}
+              {info ? STATUS_TEXT[info.status] : st.status === "error" ? st.error.message : "The link isn't valid. Ask the person who invited you for a new one."}
             </p>
           </>
         )}

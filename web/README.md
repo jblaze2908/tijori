@@ -16,7 +16,7 @@ TIJORI_DEV_MEMBER=you@example.com pnpm run dev   # http://localhost:5173
 
 Vite proxies `/api`, `/auth` and `/health` to the backend. The proxy also adds `X-Tijori-Dev-Member` from `TIJORI_DEV_MEMBER`, which is the header a dev backend uses to identify you. The browser code never sends it. To point the proxy elsewhere, use `TIJORI_API_URL`. Both variables can also go in `web/.env.local`, which is gitignored.
 
-A `401` from `/api/me` sends the app to `/welcome`, where sign-in with Google goes through `/auth/login`. `/invite/:token` is the other public page. Landing on `/` with setup unfinished resumes `/onboarding/:step`. When the backend is down, each page shows an error with a retry button.
+A `401` from `/api/me` sends the app to `/welcome`, where sign-in goes through `/auth/login?return_to=<path>`. A failed Google callback lands on `/?auth_error=<reason>`, and Welcome explains the reason. `/invite/:token` is the other public page; it signs people in via `/auth/login?invite=<token>`. Landing on `/` with setup unfinished (no `completed_at`) resumes `/onboarding`. When the backend is down, each page shows an error with a retry button.
 
 ## Check and build
 
@@ -31,7 +31,10 @@ The api serves `dist/` from the same origin as `TIJORI_WEB_DIST` (docs/api.md, "
 
 ## Contract
 
-`docs/api.md` is the source of truth. `src/lib/types.ts` mirrors it, and `src/lib/api.ts` holds every call and wire-to-model conversion. What the UI calls beyond `docs/api.md` is listed in `API_ASSUMPTIONS.md`.
+`docs/api.md` is the source of truth. `src/lib/types.ts` and `src/lib/setup.ts` mirror it, and `src/lib/api.ts` holds the cache and wire-to-model conversion. Beyond it, the UI only expects:
+
+- **`/api/recurring` and `/api/alerts`.** They're not in M0, so a 404 hides the section. When they arrive, the UI expects `{items:[{id, merchant, cadence, amount_expected, next_due}]}` and `{items:[{id, kind, severity: good|warn|bad, title, detail}]}`.
+- **An optional `gmail_filter` string on `GET /api/onboarding`** (requested). When present, the label step shows it as a copyable filter.
 
 Transactions are fetched per calendar month by explicit dates (`from=`/`to=`, `page_size=200`, pages in parallel) and cached. Every range view, whether a salary cycle, a week or a period from Trends, is assembled from those slices.
 
@@ -47,8 +50,8 @@ Every total shown is the server's: `/api/summary` and `/api/trends` apply `month
 | `src/lib/insights.ts`, `periods.ts`, `format.ts` | pure maths: pace, period stats, movers, alerts, allocation; weeks, cycles, quarters, FY; money and dates |
 | `src/charts.ts` | SVG line, columns, diverging bars, heatmap, donut, sparkline. `html``` escapes all text |
 | `src/pages/` | Overview, Activity, Trends (week/month/quarter/FY, derived from cached month slices or `GET /api/trends`), Inbox, Net worth, Welcome, Invite |
-| `src/pages/Onboarding.tsx`, `setup/` | `/onboarding/:step`, six steps (profile, accounts, mail, Gmail label, statement passwords, first import) that resume where you left off. The same forms back `/settings/:section` (general, mail sources, accounts, statement passwords, household) |
-| `src/lib/setup.ts`, `components/forms.tsx` | onboarding and settings calls; write-only secret inputs (never prefilled or echoed, cleared after every submit) |
+| `src/pages/Onboarding.tsx`, `setup/` | `/onboarding/:step` follows the server's steps: profile, mail (connect, then the label), statement passwords and first upload. The checklist ticks from `GET /api/onboarding`. The same forms back `/settings/:section`: general, mail sources, accounts, statement passwords, upload and household |
+| `src/lib/setup.ts`, `components/forms.tsx` | onboarding, mail-source, secret, invite and upload calls. Secret inputs are write-only: never prefilled or echoed, and cleared after every submit. Error codes (`auth_error`, IMAP `error_code`) map to the UI's own messages, and server text is never shown |
 
 API text reaches the DOM only through React's own escaping, or through `html``` inside charts.
 

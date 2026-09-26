@@ -185,6 +185,7 @@ export interface Account {
   first_txn_at: ISODate | null;
   last_txn_at: ISODate | null;
   last_statement: { period_start: ISODate; period_end: ISODate; reconciled: boolean; diff: Decimal } | null;
+  has_statement_password: boolean;
   /** Last live alert; null until the collectors land (M1). */
   last_seen_at: string | null;
   coverage_pct: number | null;

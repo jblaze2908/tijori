@@ -52,6 +52,7 @@ function messageFor(status: number): string {
   if (status === 403) return "This login isn't a Tijori member.";
   if (status === 404 || status === 405) return "The server doesn't support that yet.";
   if (status === 422) return "The server couldn't accept that. Check the fields and try again.";
+  if (status === 429) return "Too many attempts. Wait a few minutes and try again.";
   if (status >= 500) return `The server hit an error. Try again in a moment.${DEV_HINT}`;
   return `The request failed (${status}).`;
 }

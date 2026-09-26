@@ -4,63 +4,101 @@ import { useToast } from "../../components/Toast";
 import { InlineState, Loading } from "../../components/ui";
 import { dataOf, read } from "../../lib/api";
 import { dayShort, plural } from "../../lib/format";
-import { addMailSource, checkGmail, PROVIDERS, removeMailSource, rotateMailPassword, setup, testMail, type MailSource, type Provider } from "../../lib/setup";
+import {
+  addMailSource,
+  MAIL_ERROR,
+  PROVIDERS,
+  removeMailSource,
+  rotateMailPassword,
+  setup,
+  testMailSource,
+  type MailSource,
+  type MailTest,
+  type Provider,
+} from "../../lib/setup";
 import { useStore } from "../../lib/useStore";
 
 const APP_PASSWORD_URL = "https://myaccount.google.com/apppasswords";
+const LABEL = "tijori";
 
-/** Step 3: an IMAP source with an app password. The password lives only in this form's state and is cleared after saving. */
-export function MailConnect({ onSaved, submitLabel = "Save and continue" }: { onSaved?: (s: MailSource) => void; submitLabel?: string }) {
+export const testText = (t: MailTest, label: string) =>
+  t.ok ? `Connected. Tijori can see ${plural(t.message_count ?? 0, "message")} in the ${label} label.` : t.error_code ? MAIL_ERROR[t.error_code] : "The test didn't pass. Try again.";
+
+/**
+ * Step 2: an IMAP source with an app password. The server tests only saved sources, so this saves, then tests;
+ * a rejected password can be replaced and re-tested in place. The password field is cleared after every submit.
+ */
+export function MailConnect({ onConnected }: { onConnected?: (s: MailSource) => void }) {
   const toast = useToast();
   const [provider, setProvider] = useState<Provider>("gmail");
-  const [host, setHost] = useState(PROVIDERS.gmail.host);
-  const [port, setPort] = useState(PROVIDERS.gmail.port);
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState(993);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
-  const test = useAction();
-  const save = useAction();
-  const draft = () => ({ provider, host: host.trim(), port, email: email.trim(), app_password: password.replace(/\s+/g, "") });
-  const ready = !!(email.trim() && password.trim() && host.trim() && port > 0);
+  const [saved, setSaved] = useState<MailSource | null>(null);
+  const [result, setResult] = useState<MailTest | null>(null);
+  const act = useAction();
+  const custom = provider === "custom";
+  const ready = !!(password.trim() && (saved || (email.trim() && (!custom || (host.trim() && (port === 993 || (port >= 1024 && port <= 65535)))))));
+  const pw = () => password.replace(/\s+/g, "");
 
-  const pick = (p: Provider) => {
-    setProvider(p);
-    setHost(PROVIDERS[p].host);
-    setPort(PROVIDERS[p].port);
-    setResult(null);
+  const connect = async () => {
+    const r = await act.run(async () => {
+      const src = saved ?? (await addMailSource({ provider, host: host.trim(), port, email: email.trim(), app_password: pw(), label: LABEL }));
+      if (saved) await rotateMailPassword(saved.id, pw());
+      setSaved(src);
+      return { src, test: await testMailSource(src.id) };
+    });
+    setPassword("");
+    if (!r.ok) return;
+    setResult(r.value.test);
+    // A missing label still means the credentials work; the next step creates it.
+    if (r.value.test.ok || r.value.test.error_code === "mailbox_not_found") {
+      toast(`Connected ${r.value.src.email}.`);
+      onConnected?.(r.value.src);
+    }
   };
 
   return (
     <form
       className="form"
-      onSubmit={async (e) => {
+      onSubmit={(e) => {
         e.preventDefault();
-        if (!ready) return;
-        const r = await save.run(() => addMailSource(draft()));
-        setPassword("");
-        if (!r.ok) return;
-        toast(`Connected ${r.value.email}.`);
-        onSaved?.(r.value);
+        if (ready) void connect();
       }}
     >
-      <div className="field">
-        <span className="lab-t" id="prov-l">
-          Mail provider
-        </span>
-        <div className="seg prov" role="group" aria-labelledby="prov-l">
-          {(Object.keys(PROVIDERS) as Provider[]).map((p) => (
-            <button type="button" key={p} className={p === provider ? "on" : ""} aria-pressed={p === provider} onClick={() => pick(p)}>
-              {PROVIDERS[p].name}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="row-2">
-        <Field label="IMAP server">{(id) => <input id={id} className="inp" value={host} onChange={(e) => setHost(e.target.value)} spellCheck={false} placeholder="imap.example.com" />}</Field>
-        <Field label="Port">{(id) => <input id={id} className="inp inp-4" inputMode="numeric" value={port} onChange={(e) => setPort(Number(e.target.value.replace(/\D/g, "")) || 0)} />}</Field>
-      </div>
-      <Field label="Email address">{(id) => <input id={id} className="inp" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@gmail.com" />}</Field>
-      <Field label="App password" hint="Not your normal password. It's stored encrypted on your household's server and never shown again.">
+      {!saved && (
+        <>
+          <div className="field">
+            <span className="lab-t" id="prov-l">
+              Mail provider
+            </span>
+            <div className="seg prov" role="group" aria-labelledby="prov-l">
+              {(Object.keys(PROVIDERS) as Provider[]).map((p) => (
+                <button type="button" key={p} className={p === provider ? "on" : ""} aria-pressed={p === provider} onClick={() => setProvider(p)}>
+                  {PROVIDERS[p].name}
+                </button>
+              ))}
+            </div>
+            {!custom && <div className="hint">Connects to {PROVIDERS[provider].host}:{PROVIDERS[provider].port} over TLS, read-only.</div>}
+          </div>
+          {custom && (
+            <div className="row-2">
+              <Field label="IMAP server" hint="A public host name, not an IP address.">
+                {(id) => <input id={id} className="inp" value={host} onChange={(e) => setHost(e.target.value)} spellCheck={false} placeholder="imap.example.com" />}
+              </Field>
+              <Field label="Port" hint="993, or 1024–65535">
+                {(id) => <input id={id} className="inp inp-4" inputMode="numeric" value={port} onChange={(e) => setPort(Number(e.target.value.replace(/\D/g, "")) || 0)} />}
+              </Field>
+            </div>
+          )}
+          <Field label="Email address">{(id) => <input id={id} className="inp" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@gmail.com" />}</Field>
+        </>
+      )}
+      <Field
+        label={saved ? `New app password for ${saved.email}` : "App password"}
+        hint="Not your normal password. It's sealed on your household's server and never shown again."
+      >
         {(id) => <SecretInput id={id} value={password} onChange={setPassword} placeholder="16 characters" />}
       </Field>
       <details className="help">
@@ -79,52 +117,36 @@ export function MailConnect({ onSaved, submitLabel = "Save and continue" }: { on
             <li>Copy the 16-character password into the field above. Spaces don't matter.</li>
           </ol>
         ) : (
-          <p>Open your mail account's security settings and create an app password for IMAP. Paste it above. Some providers call it an "app-specific password".</p>
+          <p>Open your mail account's security settings and create an app password for IMAP (some providers call it an "app-specific password"). Paste it above.</p>
         )}
         <p className="sub">
-          An app password can read all your mail, but Tijori only opens the <b>tijori</b> label, read-only. You can revoke it from your account at any time,
-          and Tijori will simply stop syncing.
+          An app password can read all your mail, but Tijori only ever opens the <b>{LABEL}</b> label, read-only. Revoke it from your account at any
+          time and Tijori simply stops syncing.
         </p>
       </details>
       {result && (
         <div className={`result ${result.ok ? "ok" : "bad"}`} role="status">
-          {result.text}
+          {testText(result, LABEL)}
         </div>
       )}
-      {save.error && (
+      {act.error && (
         <div className="result bad" role="alert">
-          {save.error}
+          {act.error}
         </div>
       )}
       <div className="row mt">
-        <button
-          type="button"
-          className="btn ghost"
-          disabled={!ready || test.busy}
-          onClick={async () => {
-            setResult(null);
-            const r = await test.run(() => testMail(draft()));
-            if (!r.ok) return setResult({ ok: false, text: r.error });
-            setResult(
-              r.value.ok
-                ? { ok: true, text: `Connected. Tijori can see ${plural(r.value.messages ?? 0, "message")} in the tijori label.` }
-                : { ok: false, text: r.value.error || "The server couldn't sign in with these details." },
-            );
-          }}
-        >
-          {test.busy ? "Testing…" : "Test connection"}
-        </button>
-        <button type="submit" className="btn" disabled={!ready || save.busy}>
-          {save.busy ? "Saving…" : submitLabel}
+        <button type="submit" className="btn" disabled={!ready || act.busy}>
+          {act.busy ? "Connecting…" : saved ? "Replace and test again" : "Connect and test"}
         </button>
       </div>
     </form>
   );
 }
 
-const STATUS_COLOR = { active: "var(--in)", paused: "var(--warn)", error: "var(--bad)" } as const;
+const STATUS_COLOR: Record<MailSource["status"], string> = { ok: "var(--in)", untested: "var(--warn)", error: "var(--bad)" };
+const STATUS_TEXT: Record<MailSource["status"], string> = { ok: "Working", untested: "Not tested", error: "Failing" };
 
-/** Settings → Mail sources: status, last sync, rotate the app password, remove. */
+/** Settings → Mail sources: status, last test, test again, rotate the app password, remove. */
 export function MailSources() {
   useStore();
   const toast = useToast();
@@ -132,11 +154,16 @@ export function MailSources() {
   const [adding, setAdding] = useState(false);
   const [rotating, setRotating] = useState<number | null>(null);
   const [confirm, setConfirm] = useState<number | null>(null);
+  const [tests, setTests] = useState<Record<number, MailTest>>({});
   const [secret, setSecret] = useState("");
   const act = useAction();
   if (st.status === "loading") return <Loading card={false} />;
   if (st.status === "error") return <InlineState>{st.error.message}</InlineState>;
   if (!st.data) return <InlineState>Mail sources aren't available on the server yet.</InlineState>;
+  const test = async (s: MailSource) => {
+    const r = await act.run(() => testMailSource(s.id));
+    if (r.ok) setTests({ ...tests, [s.id]: r.value });
+  };
   return (
     <div className="form">
       {st.data.length ? (
@@ -152,13 +179,18 @@ export function MailSources() {
                 </div>
                 <span className="health">
                   <i style={{ background: STATUS_COLOR[s.status] }} aria-hidden />
-                  <span className="cap">{s.status}</span>
+                  {STATUS_TEXT[s.status]}
                 </span>
               </div>
               <div className="sub">
-                {s.last_sync_at ? `Last sync ${dayShort(s.last_sync_at.slice(0, 10))} ${s.last_sync_at.slice(11, 16)}` : "Not synced yet"} · {plural(s.messages_seen, "message")} read
-                {s.last_error && <span className="bad"> · {s.last_error}</span>}
+                {s.last_tested_at ? `Last tested ${dayShort(s.last_tested_at.slice(0, 10))} ${s.last_tested_at.slice(11, 16)} UTC` : "Not tested yet"}
+                {s.last_error_code && <span className="bad"> · {MAIL_ERROR[s.last_error_code]}</span>}
               </div>
+              {tests[s.id] && (
+                <div className={`result ${tests[s.id]!.ok ? "ok" : "bad"}`} role="status">
+                  {testText(tests[s.id]!, s.label)}
+                </div>
+              )}
               {rotating === s.id ? (
                 <form
                   className="row-form"
@@ -169,21 +201,37 @@ export function MailSources() {
                     setSecret("");
                     if (!r.ok) return;
                     setRotating(null);
-                    toast("App password replaced.");
+                    toast("App password replaced. Test it to confirm.");
                   }}
                 >
                   <SecretInput value={secret} onChange={setSecret} placeholder="New app password" label="New app password" />
                   <button type="submit" className="btn" disabled={act.busy || !secret.trim()}>
                     Replace
                   </button>
-                  <button type="button" className="btn ghost" onClick={() => (setRotating(null), setSecret(""))}>
+                  <button
+                    type="button"
+                    className="btn ghost"
+                    onClick={() => {
+                      setRotating(null);
+                      setSecret("");
+                    }}
+                  >
                     Cancel
                   </button>
                 </form>
               ) : confirm === s.id ? (
                 <div className="row">
-                  <span className="sub">Stop syncing {s.email} and delete its stored password?</span>
-                  <button type="button" className="btn ghost danger" onClick={() => act.run(() => removeMailSource(s.id)).then((r) => r.ok && (setConfirm(null), toast("Mail source removed.")))}>
+                  <span className="sub">Stop syncing {s.email} and delete its sealed password?</span>
+                  <button
+                    type="button"
+                    className="btn ghost danger"
+                    onClick={async () => {
+                      if ((await act.run(() => removeMailSource(s.id))).ok) {
+                        setConfirm(null);
+                        toast("Mail source removed.");
+                      }
+                    }}
+                  >
                     Remove
                   </button>
                   <button type="button" className="btn ghost" onClick={() => setConfirm(null)}>
@@ -192,10 +240,27 @@ export function MailSources() {
                 </div>
               ) : (
                 <div className="row">
-                  <button type="button" className="linkish nm" onClick={() => (setRotating(s.id), setConfirm(null))}>
+                  <button type="button" className="linkish nm" disabled={act.busy} onClick={() => test(s)}>
+                    Test now
+                  </button>
+                  <button
+                    type="button"
+                    className="linkish"
+                    onClick={() => {
+                      setRotating(s.id);
+                      setConfirm(null);
+                    }}
+                  >
                     Rotate password
                   </button>
-                  <button type="button" className="linkish" onClick={() => (setConfirm(s.id), setRotating(null))}>
+                  <button
+                    type="button"
+                    className="linkish"
+                    onClick={() => {
+                      setConfirm(s.id);
+                      setRotating(null);
+                    }}
+                  >
                     Remove
                   </button>
                 </div>
@@ -213,7 +278,7 @@ export function MailSources() {
       )}
       {adding ? (
         <div className="card-in">
-          <MailConnect submitLabel="Save" onSaved={() => setAdding(false)} />
+          <MailConnect onConnected={() => setAdding(false)} />
         </div>
       ) : (
         <div className="row mt">
@@ -226,16 +291,17 @@ export function MailSources() {
   );
 }
 
-/** Step 4: the Gmail filter and label, so the app password only ever sees bank mail. */
-export function GmailSetup({ onContinue }: { onContinue?: () => void }) {
+/** Step 3: the label (and a Gmail filter feeding it), so the app password only ever sees bank mail. "Check again" re-runs the IMAP test. */
+export function LabelSetup({ onContinue }: { onContinue?: () => void }) {
   useStore();
-  const st = read(setup.onboarding());
   const sources = dataOf(read(setup.mailSources())) ?? [];
+  const onboarding = dataOf(read(setup.onboarding()));
+  const [result, setResult] = useState<MailTest | null>(null);
   const act = useAction();
-  const o = st.status === "ready" ? st.data : null;
-  const label = o?.label || "tijori";
-  const gmail = !sources.length || sources.some((s) => s.provider === "gmail");
-  const check = o?.gmail_check;
+  const src = sources[0] ?? null;
+  const label = src?.label ?? LABEL;
+  const gmail = !src || src.provider === "gmail";
+  const filter = onboarding?.gmail_filter ?? null;
   return (
     <div className="form">
       {gmail ? (
@@ -244,15 +310,15 @@ export function GmailSetup({ onContinue }: { onContinue?: () => void }) {
             In Gmail, create a label named <b className="mono-t">{label}</b>.
           </li>
           <li>
-            Open <b>Settings → Filters and blocked addresses → Create a new filter</b>. Paste this into <b>Has the words</b>:
-            {o?.gmail_filter ? <CopyField value={o.gmail_filter} label="Gmail filter query" /> : <InlineState>The filter query appears here once the server provides it.</InlineState>}
+            Open <b>Settings → Filters and blocked addresses → Create a new filter</b> and describe your banks' alert and statement emails (their sender
+            addresses). {filter ? "Or paste this into Has the words:" : ""}
+            {filter && <CopyField value={filter} label="Gmail filter query" />}
           </li>
           <li>
             Choose <b>Create filter</b>, tick <b>Apply the label: {label}</b> and <b>Also apply filter to matching conversations</b>.
           </li>
           <li>
-            In <b>Settings → Labels</b>, untick <b>Show in IMAP</b> for every label except <b>{label}</b>. That limits what the app password can see to bank
-            mail.
+            In <b>Settings → Labels</b>, untick <b>Show in IMAP</b> for every label except <b>{label}</b>. The app password can then only see bank mail.
           </li>
         </ol>
       ) : (
@@ -261,19 +327,12 @@ export function GmailSetup({ onContinue }: { onContinue?: () => void }) {
             Create a folder named <b className="mono-t">{label}</b> in your mailbox.
           </li>
           <li>Add a rule that moves emails from your banks and card issuers into it.</li>
-          {o?.gmail_filter && (
-            <li>
-              These are the senders and subjects Tijori reads:
-              <CopyField value={o.gmail_filter} label="Senders and subjects" />
-            </li>
-          )}
         </ol>
       )}
-      {check && (
-        <div className={`result ${check.label_found ? "ok" : "bad"}`} role="status">
-          {check.label_found
-            ? `Found the ${label} label with ${plural(check.messages, "message")}.`
-            : `The ${label} label isn't visible over IMAP yet. Check the label name and its "Show in IMAP" setting.`}
+      {!src && <InlineState>Connect a mail source first; the check signs in with it.</InlineState>}
+      {result && (
+        <div className={`result ${result.ok ? "ok" : "bad"}`} role="status">
+          {testText(result, label)}
         </div>
       )}
       {act.error && (
@@ -282,8 +341,17 @@ export function GmailSetup({ onContinue }: { onContinue?: () => void }) {
         </div>
       )}
       <div className="row mt">
-        <button type="button" className="btn ghost" disabled={act.busy} onClick={() => act.run(checkGmail)}>
-          {act.busy ? "Checking…" : check ? "Check again" : "Check"}
+        <button
+          type="button"
+          className="btn ghost"
+          disabled={!src || act.busy}
+          onClick={async () => {
+            if (!src) return;
+            const r = await act.run(() => testMailSource(src.id));
+            if (r.ok) setResult(r.value);
+          }}
+        >
+          {act.busy ? "Checking…" : result ? "Check again" : "Check"}
         </button>
         {onContinue && (
           <button type="button" className="btn" onClick={onContinue}>
