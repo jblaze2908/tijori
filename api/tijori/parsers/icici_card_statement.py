@@ -15,7 +15,7 @@ from tijori.parsers.layout import mask_of
 
 _AMT = r"[\d,]+\.\d\d"
 _ROW = re.compile(rf"(?P<date>\d\d/\d\d/\d{{4}})\s+(?P<ser>\d{{9,}})\s+(?P<desc>.+?)\s{{2,}}(?P<pts>-?\d+)\s+"
-                  rf"(?:(?P<intl>{_AMT})\s+)?(?P<amt>{_AMT})(?P<cr>\s*CR)?\s*$")
+                  rf"(?:(?P<intl>[\d,]+(?:\.\d+)?(?:\s*[A-Z]{{3}})?)\s+)?(?P<amt>{_AMT})(?P<cr>\s*CR)?\s*$")
 _SUMMARY = re.compile(rf"STATEMENT SUMMARY.*?`(?P<due>{_AMT})\s+`(?P<prev>{_AMT})\s+`(?P<dr>{_AMT})\s+"
                       rf"`(?P<cash>{_AMT})\s+`(?P<cr>{_AMT})", re.S)
 _LONG = r"[A-Z][a-z]+ \d{1,2}, \d{4}"

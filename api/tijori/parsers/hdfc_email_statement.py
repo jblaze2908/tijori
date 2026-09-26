@@ -13,7 +13,7 @@ from tijori.parsers.base import Message, Observation, ParseError, Statement, Sta
 from tijori.parsers.layout import join_wrapped, mask_of
 
 _AMT = r"[\d,]+\.\d\d"
-_ROW = re.compile(rf"^\s*(?P<date>\d\d/\d\d/\d{{4}})\s+(?P<narr>.+?)\s{{2,}}(?P<wd>{_AMT})\s+(?P<dep>{_AMT})\s+(?P<bal>{_AMT})\s*$")
+_ROW = re.compile(rf"^\s*(?P<date>\d\d/\d\d/\d{{4}})\s+(?P<narr>.+?)\s{{2,}}(?P<wd>{_AMT})\s+(?P<dep>{_AMT})\s+(?P<bal>-?{_AMT})\s*$")
 _ACCOUNT = re.compile(r"Account Number\s*:\s*(\d{6,})")
 _PERIOD = re.compile(r"Statement From\s*:\s*(\d\d/\d\d/\d{4})\s+To\s+(\d\d/\d\d/\d{4})")
 _OPENING = re.compile(rf"Opening Balance\s*:\s*({_AMT})")

@@ -263,6 +263,12 @@ def ingest_statement(s: Session, ctx: MemberContext, actor: str, st: ParsedState
     if hits:
         s.execute(pg_insert(RuleHit).on_conflict_do_nothing(), hits)
     created = [decisions[i] for i in txn_ids]
+    # An alert the statement doesn't carry (a card hold, a declined or reversed payment) leaves the totals.
+    # The period's first and last 3 days are left alone: those lines can post into the neighbouring statement.
+    s.execute(update(Txn).where(
+        Txn.member_id == ctx.member_id, Txn.account_id == account.id, Txn.status == "pending", Txn.sources == ["alert"],
+        Txn.occurred_at.between(st.period_start + timedelta(days=ALERT_DAYS), st.period_end - timedelta(days=ALERT_DAYS)),
+    ).values(status="flagged", bucket="excluded", review_reason="not_in_statement"))
     for key, amount in st.components:  # newest value wins in networth.live; an older statement never overrides
         cv = pg_insert(ComponentValue).values(member_id=ctx.member_id, key=key, amount=amount, as_of=st.period_end,
                                               source="statement")

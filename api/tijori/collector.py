@@ -35,7 +35,7 @@ from tijori.blobs import store_blob
 from tijori.db import MemberContext, make_engine, member_session
 from tijori.imap_check import TIMEOUT_S, _public_only, normalize_password, quote_mailbox
 from tijori.mailtext import body_text
-from tijori.models import ComponentValue, Holding, MailSource, Price, RawAttachment, RawMessage
+from tijori.models import ComponentValue, Holding, MailSource, Price, RawAttachment, RawMessage, Statement
 from tijori.parsers.cams_statement import CamsStatementParser
 from tijori.parsers.cdsl_cas import CdslCasParser
 from tijori.parsers import Message, ParseError, route
@@ -160,14 +160,17 @@ _last_retry: dict[int, float] = {}
 
 
 def retry_stored(engine: Engine, ctx: MemberContext, settings: Settings) -> dict[str, int]:
-    """Hourly: re-route stored messages a parser or password was missing for. Reads blobs only, no IMAP."""
+    """Hourly: re-route stored messages a parser or password was missing for, and statements that didn't
+    reconcile (ingest is idempotent, so a fixed parser adds only the missing lines). Reads blobs, no IMAP."""
     if time.monotonic() - _last_retry.get(ctx.member_id, -RETRY_S) < RETRY_S:
         return {}
     _last_retry[ctx.member_id] = time.monotonic()
     with member_session(engine, ctx) as s:
-        ids = list(s.scalars(select(RawMessage.id).where(RawMessage.member_id == ctx.member_id,
-                                                         RawMessage.mail_source_id.is_not(None),
-                                                         RawMessage.parse_status.in_(RETRY))))
+        unreconciled = (select(RawAttachment.raw_message_id).join(Statement, Statement.raw_attachment_id == RawAttachment.id)
+                        .where(Statement.member_id == ctx.member_id, Statement.reconciled_at.is_(None)))
+        ids = list(s.scalars(select(RawMessage.id).where(
+            RawMessage.member_id == ctx.member_id, RawMessage.mail_source_id.is_not(None),
+            RawMessage.parse_status.in_(RETRY) | RawMessage.id.in_(unreconciled))))
     counts: dict[str, int] = {}
     for rid in ids:
         with member_session(engine, ctx) as s:
