@@ -175,8 +175,10 @@ def detect(s: Session, member_id: int, today: date | None = None, *, include_dis
         .outerjoin(Category, Category.id == Txn.category_id)
         .where(Txn.member_id == member_id, Txn.direction == "debit",
                Txn.occurred_at >= today - timedelta(days=LOOKBACK_DAYS),
-               # Card-bill payments repeat monthly but settle purchases; they are not a subscription.
-               Txn.bucket.is_distinct_from("excluded"), Txn.bucket.is_distinct_from("card"), key.is_not(None))
+               # Card-bill payments repeat monthly but settle purchases; they are not a subscription. Nor are
+               # the fee and GST lines a card statement repeats.
+               Txn.bucket.is_distinct_from("excluded"), Txn.bucket.is_distinct_from("card"), key.is_not(None),
+               Category.name.is_distinct_from("Bank charges"))
         .order_by(key, Txn.occurred_at, Txn.id)
     ).all()
     groups: dict[str, list[Any]] = defaultdict(list)
@@ -323,7 +325,8 @@ def candidates(s: Session, member_id: int, listed: set[str], labels: dict[int, s
         .outerjoin(Category, Category.id == Txn.category_id)
         .where(Txn.member_id == member_id, Txn.direction == "debit", key.is_not(None),
                Txn.occurred_at >= today - timedelta(days=CANDIDATE_DAYS),
-               Txn.bucket.is_distinct_from("excluded"), Txn.bucket.is_distinct_from("card"))
+               Txn.bucket.is_distinct_from("excluded"), Txn.bucket.is_distinct_from("card"),
+               Category.name.is_distinct_from("Bank charges"))
         .group_by(key).having(func.count() <= 2)
     ).all()
     out = []
