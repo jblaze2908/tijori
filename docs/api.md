@@ -473,13 +473,16 @@ The landing page sends the invitee to `/auth/login?invite=<token>`. Sign-in must
 ```json
 {"step": "profile", "completed_at": null,
  "steps": ["profile", "mail", "statement_passwords", "first_upload", "done"],
- "gmail_filter": "from:(hdfcbank OR sbi OR icicibank OR amazonpay OR cred.club OR groww OR camsonline OR kfintech OR cdslindia OR cdslstatement OR pluxee) -subject:(OTP OR \"Instalment due\" OR \"Payment Reminder\" OR \"Daily Margin\" OR \"Portfolio Disclosure\")",
+ "gmail_filter": "from:(alerts@hdfcbank.bank.in OR alerts@hdfcbank.net OR … OR ecas@cdslstatement.com) -subject:(OTP OR \"Instalment due\" OR \"Payment Reminder\" OR \"Daily Margin\" OR \"Portfolio Disclosure\")",
  "label": "tijori",
  "checklist": {"profile": true, "mail_source": false, "statement_passwords": false, "first_upload": false}}
 ```
 
 - `step` is where the UI left the member.
-- `gmail_filter` is the Gmail search to copy into **Create filter** for the label step, with **Apply the label** set to `label`. Its `from:` tokens are the sender domains of the supported institutions, a starting point the member can widen in Gmail. The `-subject:` part keeps OTPs and non-transaction notices out.
+- `gmail_filter` is the Gmail search to copy into **Create filter** for the label step, with **Apply the label** set to `label`.
+  - The `from:` list holds exact transactional sender addresses (28 by default: HDFC, SBI, ICICI, Amazon Pay, CRED, Groww, CAMS, KFintech, CDSL). Exact addresses rather than domains keep bank marketing mail out of the label.
+  - The `-subject:` part keeps OTPs and non-transaction notices out.
+  - A member whose banks differ gets their own list from `settings.gmail_senders`. It's stored per member; there's no endpoint to edit it yet.
 - `checklist` is derived from the data: own names set, a mail source exists, a statement password saved, a statement parsed.
 - `PATCH` takes `{"step": "<one of steps>"}` and/or `{"completed": true|false}`. `completed: true` sets the step to `done` and stamps `completed_at`.
 

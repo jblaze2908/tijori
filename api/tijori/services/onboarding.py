@@ -1,5 +1,6 @@
 """Registration by invite, onboarding state, and the classifier profile."""
 
+import re
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -15,17 +16,38 @@ from tijori.services.errors import Invalid, NotFound
 
 INVITE_TTL = timedelta(days=7)
 
-# Gmail filter for the label step (PLAN §4 sources). Gmail's from: matches whole address tokens,
-# so these are the distinctive tokens of each institution's sender domains, not full addresses.
-GMAIL_SENDERS = ("hdfcbank", "sbi", "icicibank", "amazonpay", "cred.club", "groww", "camsonline", "kfintech",
-                 "cdslindia", "cdslstatement", "pluxee")
+# Gmail filter for the label step: exact transactional sender addresses, because domain tokens
+# also pull in bank marketing mail. This is the default; a member's settings["gmail_senders"]
+# replaces it (other members' banks differ).
+GMAIL_SENDERS = (
+    "alerts@hdfcbank.bank.in", "alerts@hdfcbank.net", "hdfcbanksmartstatement@hdfcbank.bank.in",
+    "hdfcbanksmartstatement@hdfcbank.net", "emailstatements.cards@hdfcbank.bank.in",
+    "emailstatements.cards@hdfcbank.net", "fastag@hdfcbank.net", "customerinfo@hdfcbank.net",
+    "cbsalerts.sbi@alerts.sbi.bank.in", "cbsalerts.sbi@alerts.sbi.co.in", "cbssbi.cas@alerts.sbi.bank.in",
+    "cbssbi.cas@alerts.sbi.co.in", "cbssbi.info@alerts.sbi.bank.in", "neftinfo.itps@alerts.sbi.bank.in",
+    "neftinfo.itps@alerts.sbi.co.in", "iphinfo.itps@alerts.sbi.bank.in",
+    "credit_cards@icicibank.com", "credit_cards@icici.bank.in", "cards@icicibank.com",
+    "no-reply@amazonpay.in", "protect@cred.club", "noreply@groww.in",
+    "enq_p@camsonline.com", "enq_pp@camsonline.com", "enq_t@camsonline.com",
+    "nimf.spl.txn@kfintech.com", "mfservice@kfintech.com", "ecas@cdslstatement.com",
+)
 # Mail that looks transactional but carries no transaction, or carries an OTP (never ingested).
 GMAIL_EXCLUDED_SUBJECTS = ("OTP", '"Instalment due"', '"Payment Reminder"', '"Daily Margin"',
                            '"Portfolio Disclosure"')
+_SENDER = re.compile(r"^[a-z0-9._%+-]{1,64}@[a-z0-9.-]{1,253}$")
 
 
-def gmail_filter() -> str:
-    return (f"from:({' OR '.join(GMAIL_SENDERS)}) "
+def gmail_senders(settings: dict[str, Any] | None) -> tuple[str, ...]:
+    custom = (settings or {}).get("gmail_senders")
+    if isinstance(custom, list):
+        valid = tuple(x.lower() for x in custom if isinstance(x, str) and _SENDER.match(x.lower()))
+        if valid:
+            return valid
+    return GMAIL_SENDERS
+
+
+def gmail_filter(senders: tuple[str, ...] = GMAIL_SENDERS) -> str:
+    return (f"from:({' OR '.join(senders)}) "
             f"-subject:({' OR '.join(GMAIL_EXCLUDED_SUBJECTS)})")
 PROFILE_KEYS = ("own_names", "own_vpas", "own_account_masks", "investment_account_masks", "employer_patterns")
 
@@ -69,14 +91,14 @@ def onboarding(s: Session, ctx: MemberContext) -> dict[str, Any]:
     """Stored step plus a checklist derived from the data, in one round-trip."""
     m = ctx.member_id
     row = s.execute(select(
-        Member.onboarding_step, Member.onboarding_completed_at, Member.classify_config,
+        Member.onboarding_step, Member.onboarding_completed_at, Member.classify_config, Member.settings,
         exists().where(MailSource.member_id == m).label("mail"),
         exists().where(Secret.member_id == m, Secret.name.startswith("statement_password:")).label("passwords"),
         exists().where(RawMessage.member_id == m, RawMessage.parse_status == "parsed").label("upload"),
     ).where(Member.id == m)).one()
     return {
         "step": row.onboarding_step, "completed_at": row.onboarding_completed_at, "steps": list(ONBOARDING_STEPS),
-        "gmail_filter": gmail_filter(), "label": "tijori",
+        "gmail_filter": gmail_filter(gmail_senders(row.settings)), "label": "tijori",
         "checklist": {"profile": bool((row.classify_config or {}).get("own_names")), "mail_source": row.mail,
                       "statement_passwords": row.passwords, "first_upload": row.upload},
     }
