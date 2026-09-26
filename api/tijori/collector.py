@@ -158,7 +158,7 @@ def _route(s: Session, ctx: MemberContext, settings: Settings, rm: RawMessage, m
 NOT_TRANSACTIONS = re.compile(r"Contract Note|Statement of Accounts? (?:for|of) (?:Securities|Funds)|Portfolio Disclosure|Ledger|Purchase Confirmation|"
                               r"Processing of (Additional )?Purchase|Year End Statement|Fixed Deposit Advice|Amazon ?Pay|"
                               r"Transaction Confirmation|Transaction request is processed|Holding Statement|"
-                              r"Quarterly settlement|Refund initiated|Add Money", re.I)
+                              r"Quarterly settlement|Refund initiated|Add Money|Margin Statement|AGTS Report|Welcome to", re.I)
 RETRY_S = 3600
 RETRY = ("failed", "parser_needed", "needs_password")
 _last_retry: dict[int, float] = {}
