@@ -96,3 +96,40 @@ def put_profile(s: Session, ctx: MemberContext, actor: str, profile: dict[str, l
               .values(classify_config=Member.classify_config.op("||")(literal(profile, type_=JSONB))))
     audit(s, ctx, actor, "profile.classify", f"member:{ctx.member_id}", {k: len(v) for k, v in profile.items()})
     return get_profile(s, ctx.member_id)
+
+
+# --- household ------------------------------------------------------------------------------
+
+def household(s: Session, ctx: MemberContext) -> dict[str, Any]:
+    """Members and invites of the caller's household (RLS scopes both to it)."""
+    from tijori.models import Household
+
+    h = s.get(Household, ctx.household_id)
+    members = s.scalars(select(Member).where(Member.household_id == ctx.household_id).order_by(Member.id)).all()
+    invites = s.scalars(select(Invite).where(Invite.household_id == ctx.household_id)
+                        .order_by(Invite.created_at.desc())).all()
+    now = datetime.now(UTC)
+    return {
+        "id": ctx.household_id, "name": h.name if h else None,
+        "members": [{"id": m.id, "name": m.name, "email": m.email, "role": m.role, "joined_at": m.created_at}
+                    for m in members],
+        "invites": [{"id": i.id, "email": i.email, "created_at": i.created_at, "expires_at": i.expires_at,
+                     "status": "accepted" if i.used_at else "expired" if i.expires_at <= now else "pending"}
+                    for i in invites],
+    }
+
+
+def revoke_invite(s: Session, ctx: MemberContext, actor: str, invite_id: int) -> None:
+    role = s.scalar(select(Member.role).where(Member.id == ctx.member_id))
+    if role != "admin":
+        raise PermissionError("only the household admin can revoke invites")
+    inv = s.scalars(select(Invite).where(Invite.id == invite_id, Invite.household_id == ctx.household_id)).first()
+    if inv is None or inv.used_at is not None:
+        raise NotFound("no pending invite with that id")
+    s.delete(inv)
+    audit(s, ctx, actor, "invite.revoke", f"invite:{inv.email}", {})
+
+
+def rename_member(s: Session, ctx: MemberContext, actor: str, name: str) -> None:
+    s.execute(update(Member).where(Member.id == ctx.member_id).values(name=name))
+    audit(s, ctx, actor, "member.rename", f"member:{ctx.member_id}", {})

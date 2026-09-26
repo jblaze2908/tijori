@@ -13,6 +13,8 @@ This is the contract the web UI is built against. Examples come from synthetic s
 | Money | A **string** holding a decimal with exactly two places, e.g. `"1234.50"`. Never a float. Transaction amounts are always ≥ 0; `direction` says which way the money moved. Signed aggregates such as `change` or trend points can be negative (`"-250.00"`). |
 | Currency | INR everywhere (`"currency": "INR"`). |
 | Dates and times | Dates are `YYYY-MM-DD`; months are `YYYY-MM`; timestamps are ISO 8601 with an offset. "Today" is taken in Asia/Kolkata. |
+| Months are cycles | Every month parameter and bucket follows the member's `month_start_day` (default 1). This covers `/api/summary`, `/api/months`, `/api/transactions?month=`, `/api/budgets` and `/api/trends`. A month runs from that day to the day before it in the next month. It is **labelled by the calendar month it starts in**: with day 25, `2026-04` is 25 Apr – 24 May. With day 1 it is the calendar month |
+| Spend | **One definition everywhere:** debits in the `everyday`, `oneoff` and `card` buckets, plus uncategorized (Inbox) debits. Refunds are reported separately and never netted. `/api/summary` `expense` and the `/api/trends` totals use exactly this rule, so a headline number always equals its trend bar |
 | Paging | `page` starts at 1. `page_size` runs 1–200 (default 50). Paged responses carry `page`, `page_size` and `total`. |
 | Ordering | Transaction lists are newest first (`occurred_at` desc, then `id` desc). |
 | Nulls | Optional fields are present and set to `null`. They are never omitted. |
@@ -104,6 +106,8 @@ Needs no auth and returns no personal data.
  "settings": {"month_start_day": 1, "local_shop_cap": "500.00"}}
 ```
 
+`PATCH /api/me` `{"name"}` renames the member (1–120 chars) and returns 204.
+
 ## `GET /api/settings` and `PATCH /api/settings`
 
 `GET` returns `{"month_start_day": 1, "local_shop_cap": "500.00"}`.
@@ -112,15 +116,17 @@ Needs no auth and returns no personal data.
 
 | Field | Type | Notes |
 |---|---|---|
-| `month_start_day` | integer 1–28 | The salary-cycle start. Changes how months, quarters and FYs are bucketed in `/api/trends` only. Summary and months stay on calendar months |
+| `month_start_day` | integer 1–28 | The salary-cycle start. It moves every month boundary: summary, months, the transactions `month` filter, budgets, and trend months, quarters and FYs |
 | `local_shop_cap` | money string (`"750.00"`) or integer, 0–1,00,000 | A merchant-QR payment up to this amount auto-files as Local shops. It applies to statements uploaded after the change |
 
 ## `GET /api/months`
 
-Months that contain at least one txn, oldest first. `complete` is true once the calendar month has ended.
+Month cycles that contain at least one txn, oldest first. `start` and `end` are the cycle's first and last day. `through` is the last day with data. `complete` is true once the cycle has ended.
 
 ```json
-{"as_of": "2026-09-26", "items": [{"month": "2026-04", "through": "2026-04-30", "complete": true, "txn_count": 16}]}
+{"as_of": "2026-09-26", "month_start_day": 1,
+ "items": [{"month": "2026-04", "start": "2026-04-01", "end": "2026-04-30", "through": "2026-04-30",
+            "complete": true, "txn_count": 16}]}
 ```
 
 ## `GET /api/accounts`
@@ -135,15 +141,23 @@ Months that contain at least one txn, oldest first. `complete` is true once the 
 
 `last_seen_at` (last live alert) and `coverage_pct` (share of statement lines seen live) stay `null` until the collectors land in M1.
 
+Accounts are created automatically from uploaded statements. They can also be declared up front, for example during onboarding:
+
+| Endpoint | Behaviour |
+|---|---|
+| `POST /api/accounts` `{"institution", "kind", "name"?, "mask"?}` | `kind` is one of `bank`, `card`, `wallet`, `deposit`, `holding`, `cash`; `mask` is 4 digits. 201 with the account. A later statement for the same institution and mask lands on it |
+| `PATCH /api/accounts/{id}` `{"name"?, "mask"?}` | Returns the account; send `null` to clear a field |
+| `DELETE /api/accounts/{id}` | 204. 422 if the account has transactions or statements, since history is never orphaned |
+
 ---
 
 ## `GET /api/summary?month=YYYY-MM`
 
-Dashboard totals for one calendar month and the month before it.
+Dashboard totals for one month cycle and the cycle before it. `period` gives the cycle's first and last day.
 
 | Param | Required | Notes |
 |---|---|---|
-| `month` | yes | `YYYY-MM` |
+| `month` | yes | `YYYY-MM`, a cycle per `month_start_day` |
 
 These definitions match the 2026-09-26 report exactly. That was checked on the real data through the legacy import: every month's totals come out equal.
 
@@ -151,7 +165,7 @@ These definitions match the 2026-09-26 report exactly. That was checked on the r
 |---|---|
 | `everyday`, `oneoff`, `card` | Sum of **debits** in that bucket. `card` is CRED/credit-card bill payments, which stand in for card spend until card statements are itemised (M1) |
 | `uncategorized` | Debits with no category yet (the Inbox) |
-| `expense` | `everyday + oneoff + card + uncategorized` |
+| `expense` | `everyday + oneoff + card + uncategorized`: the one spend definition |
 | `invest` | Debits in the `invest` bucket |
 | `income` | **Credits** in the `income` bucket: salary, interest, dividends, other income and refunds |
 | `refunds` | The refund part of `income`. Refunds are **not** netted against spend here |
@@ -169,7 +183,8 @@ Self transfers, reversal pairs, pass-throughs and investment redemptions are `ex
 
 ```json
 {
-  "month": "2026-04", "previous_month": "2026-03", "currency": "INR",
+  "month": "2026-04", "previous_month": "2026-03", "currency": "INR", "month_start_day": 1,
+  "period": {"start": "2026-04-01", "end": "2026-04-30"},
   "totals": {"expense": "23752.00", "everyday": "2252.00", "card": "20000.00", "oneoff": "0.00",
              "uncategorized": "1500.00", "invest": "5000.00", "income": "150925.50", "refunds": "0.00",
              "salary": "150000.00", "salary_minus_expense": "126248.00", "txn_count": 16},
@@ -186,7 +201,7 @@ Self transfers, reversal pairs, pass-throughs and investment redemptions are `ex
 
 | Param | Type | Notes |
 |---|---|---|
-| `month` | `YYYY-MM` | |
+| `month` | `YYYY-MM` | A cycle per `month_start_day` |
 | `from`, `to` | `YYYY-MM-DD` | Inclusive bounds; can be combined with `month`. `from > to` is a 422 |
 | `account` | int | Account id |
 | `category` | int id, or `none` | `none` returns only Inbox txns |
@@ -302,7 +317,7 @@ Errors: 404 when the group has no Inbox txns, or isn't yours. The call is audit-
                                 "spent": "1372.00", "remaining": "6628.00", "rollover": false}]}
 ```
 
-`items` is empty until budgets can be set (M4).
+`spent` covers the month cycle. `items` is empty until budgets can be set (M4).
 
 ## `GET /api/trends`
 
@@ -318,9 +333,15 @@ Spend over time. Aggregation happens in SQL, bucketed by `date_trunc`.
 
 The member's `month_start_day` shifts month, quarter and FY boundaries. For example, day 25 gives months running 25th to 24th. Weeks ignore it.
 
-- **Spend** is: debits of kind `spend`, `fee` and `cash`, plus card-bill payments (bucket `card`), minus refund credits. Reversal pairs don't count. Transfers and investments are excluded. With `month_start_day` 1, a month's `total` equals `/api/summary` `expense` for that month.
-- **`group_by=kind`** includes every kind, each measured in its natural direction: credits for `income` and `refund`, debits for the rest. The opposite direction subtracts.
-- **`group_by=total`** returns three series: `total`, `committed` and `discretionary`. Committed means the merchant has an active recurring series; that stays 0 until recurring detection lands in M2.
+- **Spend** uses the one definition (see Conventions): debits in `everyday`, `oneoff` and `card` plus uncategorized debits, with refunds not netted. A month's `total` equals `/api/summary` `expense` for the same month cycle, and `income`/`invested` equal its `income`/`invest`.
+- **`group_by=total`** returns six series, all on the summary's rules:
+  - `total`: spend.
+  - `committed` + `discretionary`: spend split by whether the merchant has an active recurring series. `committed` stays 0 until recurring detection lands in M2.
+  - `income`: credits in the `income` bucket.
+  - `refunds`: the refund part of income.
+  - `invested`: debits in the `invest` bucket.
+- **`group_by=category|merchant`** splits `total` (spend) into series.
+- **`group_by=kind`** is a different view. It includes every kind, each measured in its natural direction: credits for `income` and `refund`, debits for the rest. The opposite direction subtracts.
 
 ```json
 {"granularity": "month", "group_by": "total", "month_start_day": 1,
@@ -329,7 +350,10 @@ The member's `month_start_day` shifts month, quarter and FY boundaries. For exam
    {"key": "total", "total": "23752.00", "points": [{"period_start": "2026-03-01", "amount": "0.00", "count": 0},
                                                     {"period_start": "2026-04-01", "amount": "23752.00", "count": 8}]},
    {"key": "committed", "total": "0.00", "points": ["..."]},
-   {"key": "discretionary", "total": "23752.00", "points": ["..."]}]}
+   {"key": "discretionary", "total": "23752.00", "points": ["..."]},
+   {"key": "income", "total": "150925.50", "points": ["..."]},
+   {"key": "refunds", "total": "0.00", "points": ["..."]},
+   {"key": "invested", "total": "5000.00", "points": ["..."]}]}
 ```
 
 - Every series has one point per period, including zeros.
@@ -439,6 +463,11 @@ Uploads one bank statement. The api stores the raw file, then parses → resolve
 
 The landing page sends the invitee to `/auth/login?invite=<token>`. Sign-in must use exactly the invited email.
 
+| Endpoint | Behaviour |
+|---|---|
+| `GET /api/household` | `{"id", "name", "members": [{"id", "name", "email", "role", "joined_at"}], "invites": [{"id", "email", "status": "pending"\|"accepted"\|"expired", "created_at", "expires_at"}]}`. Tokens are never listed |
+| `DELETE /api/invites/{id}` | Admin only. Revokes a pending invite; 204, or 404 when it doesn't exist or was already used |
+
 ### `GET /api/onboarding` and `PATCH /api/onboarding`
 
 ```json
@@ -477,6 +506,7 @@ It applies to statements uploaded after the change.
 | `POST /api/mail-sources` | Body `{"provider": "gmail"\|"outlook"\|"yahoo"\|"custom", "host"?, "port"?, "email", "app_password", "label": "tijori"}`. Returns 201 `MailSource` |
 | `PATCH /api/mail-sources/{id}` | `{"app_password"?, "label"?}`: rotate the password or rename the label. Status goes back to `untested` |
 | `DELETE /api/mail-sources/{id}` | Removes the source and its sealed password. 204 |
+| `POST /api/mail-sources/test` | The same body as `POST /api/mail-sources`, tested **without storing anything**. It returns the same `{"ok", "message_count", "error_code"}` and shares the rate limit |
 | `POST /api/mail-sources/{id}/test` | Connects over IMAP-TLS (10 s timeout), logs in, and `EXAMINE`s (read-only) the label. Returns `{"ok", "message_count", "error_code"}`. Rate-limited to 5 tests per member per 10 minutes (429) |
 
 - **Presets:** `gmail` → `imap.gmail.com:993`, `outlook` → `outlook.office365.com:993`, `yahoo` → `imap.mail.yahoo.com:993`.
@@ -520,7 +550,8 @@ When the image carries a web build (`TIJORI_WEB_DIST`, containing `index.html`):
 
 - The api serves it as static files.
 - Any other `GET` outside `/api`, `/auth`, `/health` and `/mcp` returns `index.html`, for client-side routes such as `/inbox`.
-- Unknown `/api/...` paths still return a JSON 404.
+- Unknown `/api/...` paths, and missing files (any last path segment with a dot), return a JSON 404 rather than the app shell.
+- `/favicon.ico` serves `favicon.svg` from the build.
 
 HTML responses carry a CSP of `default-src 'self'` with no third-party origins (the UI bundles its fonts). API and `/auth` responses carry `Cache-Control: no-store`.
 

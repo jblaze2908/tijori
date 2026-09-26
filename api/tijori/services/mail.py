@@ -116,3 +116,10 @@ def record_test(s: Session, ctx: MemberContext, actor: str, source_id: int, resu
     m.last_error_code = result.error_code
     audit(s, ctx, actor, "mail_source.test", f"mail_source:{m.id}", {"ok": result.ok, "error": result.error_code})
     return {"ok": result.ok, "message_count": result.message_count, "error_code": result.error_code}
+
+
+def check_inputs(provider: str, host: str | None, port: int | None, email: str, app_password: str,
+                 label: str) -> tuple[str, int]:
+    """Validate credentials for a test-before-save; returns the endpoint to connect to."""
+    _check_inputs(email, app_password, label)
+    return _endpoint(provider, host, port)

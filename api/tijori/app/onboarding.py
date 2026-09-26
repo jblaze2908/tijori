@@ -11,7 +11,11 @@ from sqlalchemy.orm import Session
 from tijori.app.deps import AuthDep, MemberDep, require_json, run_as_member
 from tijori.app.ratelimit import RateLimiter
 from tijori.app.schemas import (
+    AccountIn,
+    AccountOut,
+    AccountPatch,
     ClassifyProfile,
+    HouseholdOut,
     InviteCreated,
     InviteIn,
     InviteInfo,
@@ -20,6 +24,7 @@ from tijori.app.schemas import (
     MailSourcePatch,
     MailSources,
     MailTestOut,
+    MeIn,
     OnboardingIn,
     OnboardingOut,
     StatementPasswordIn,
@@ -27,7 +32,7 @@ from tijori.app.schemas import (
 from tijori.db import MemberContext
 from tijori.models import Account
 from tijori.secretbox import SecretBox
-from tijori.services import mail, onboarding
+from tijori.services import mail, members, onboarding
 from tijori.services import secrets as vault
 from tijori.services.common import audit
 from tijori.services.errors import NotFound
@@ -147,4 +152,63 @@ def delete_statement_password(db: MemberDep, account_id: Id) -> Response:
     if not vault.remove(db.session, db.ctx, vault.statement_password_name(account_id)):
         raise NotFound("no statement password for this account")
     audit(db.session, db.ctx, db.actor, "statement_password.delete", f"account:{account_id}", {})
+    return Response(status_code=204)
+
+
+@router.get("/household", response_model=HouseholdOut)
+def get_household(db: MemberDep) -> dict:
+    return onboarding.household(db.session, db.ctx)
+
+
+@router.delete("/invites/{invite_id}", status_code=204)
+def revoke_invite(db: MemberDep, invite_id: Id) -> Response:
+    try:
+        onboarding.revoke_invite(db.session, db.ctx, db.actor, invite_id)
+    except PermissionError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+    return Response(status_code=204)
+
+
+@router.patch("/me", status_code=204, dependencies=JSON)
+def rename_me(db: MemberDep, body: MeIn) -> Response:
+    onboarding.rename_member(db.session, db.ctx, db.actor, body.name.strip())
+    return Response(status_code=204)
+
+
+@router.post("/mail-sources/test", response_model=MailTestOut)
+async def test_new_mail_source(request: Request, identity: AuthDep, body: MailSourceIn) -> dict:
+    """Test credentials before saving them: nothing is stored. Shares the per-member rate limit."""
+    from tijori.services.errors import Invalid
+
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+        raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Content-Type must be application/json")
+
+    def gate(s: Session, ctx: MemberContext, actor: str) -> tuple[str, int]:
+        if not MAIL_TESTS.allow(str(ctx.member_id)):
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many connection tests; try again later")
+        return mail.check_inputs(body.provider, body.host, body.port, body.email, body.app_password, body.label)
+
+    try:
+        host, port = await run_in_threadpool(run_as_member, request.app.state.engine, identity, gate)
+    except Invalid as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    result = await run_in_threadpool(mail.run_test, host, port, body.email, body.app_password, body.label)
+    return {"ok": result.ok, "message_count": result.message_count, "error_code": result.error_code}
+
+
+@router.post("/accounts", response_model=AccountOut, status_code=201, dependencies=JSON)
+def create_account(db: MemberDep, body: AccountIn) -> dict:
+    return members.create_account(db.session, db.ctx, db.actor, institution=body.institution.strip(),
+                                  kind=body.kind, name=body.name, mask=body.mask)
+
+
+@router.patch("/accounts/{account_id}", response_model=AccountOut, dependencies=JSON)
+def patch_account(db: MemberDep, account_id: Id, body: AccountPatch) -> dict:
+    return members.update_account(db.session, db.ctx, db.actor, account_id, name=body.name, mask=body.mask,
+                                  fields=body.model_fields_set)
+
+
+@router.delete("/accounts/{account_id}", status_code=204)
+def delete_account(db: MemberDep, account_id: Id) -> Response:
+    members.delete_account(db.session, db.ctx, db.actor, account_id)
     return Response(status_code=204)

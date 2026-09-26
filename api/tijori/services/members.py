@@ -11,7 +11,8 @@ from tijori.db import MemberContext
 from tijori.models import Account, Household, Member, Statement, Txn
 from tijori.money import fmt
 from tijori.services.common import account_label, audit
-from tijori.services.secrets import names, statement_password_name
+from tijori.services.errors import Invalid, NotFound
+from tijori.services.secrets import names, remove, statement_password_name
 
 DEFAULT_MONTH_START_DAY = 1
 
@@ -77,3 +78,47 @@ def accounts(s: Session, member_id: int) -> dict[str, Any]:
          "has_statement_password": statement_password_name(a.id) in with_password,
          "last_seen_at": None, "coverage_pct": None}
         for a, n, first, last, ps, pe, rat, diff in rows]}
+
+
+ACCOUNT_KINDS = ("bank", "card", "wallet", "deposit", "holding", "cash")
+
+
+def create_account(s: Session, ctx: MemberContext, actor: str, *, institution: str, kind: str, name: str | None,
+                   mask: str | None) -> dict[str, Any]:
+    acct = Account(member_id=ctx.member_id, institution=institution, kind=kind, name=name, mask=mask)
+    s.add(acct)
+    s.flush()
+    audit(s, ctx, actor, "account.create", f"account:{acct.id}", {"kind": kind})
+    return _account_out(s, ctx.member_id, acct.id)
+
+
+def update_account(s: Session, ctx: MemberContext, actor: str, account_id: int, *, name: str | None,
+                   mask: str | None, fields: set[str]) -> dict[str, Any]:
+    acct = s.scalars(select(Account).where(Account.member_id == ctx.member_id, Account.id == account_id)).first()
+    if acct is None:
+        raise NotFound("account not found")
+    if "name" in fields:
+        acct.name = name
+    if "mask" in fields:
+        acct.mask = mask
+    s.flush()
+    audit(s, ctx, actor, "account.update", f"account:{account_id}", {"fields": sorted(fields)})
+    return _account_out(s, ctx.member_id, account_id)
+
+
+def delete_account(s: Session, ctx: MemberContext, actor: str, account_id: int) -> None:
+    """Only an account with no txns and no statements: history is never orphaned by a click."""
+    acct = s.scalars(select(Account).where(Account.member_id == ctx.member_id, Account.id == account_id)).first()
+    if acct is None:
+        raise NotFound("account not found")
+    used = s.scalar(select(func.count()).select_from(Txn).where(Txn.account_id == account_id)) or 0
+    used += s.scalar(select(func.count()).select_from(Statement).where(Statement.account_id == account_id)) or 0
+    if used:
+        raise Invalid("this account has transactions or statements; it can't be deleted")
+    remove(s, ctx, statement_password_name(account_id))
+    s.delete(acct)
+    audit(s, ctx, actor, "account.delete", f"account:{account_id}", {})
+
+
+def _account_out(s: Session, member_id: int, account_id: int) -> dict[str, Any]:
+    return next(a for a in accounts(s, member_id)["items"] if a["id"] == account_id)
