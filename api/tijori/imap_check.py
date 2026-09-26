@@ -2,6 +2,7 @@
 banners, exception text and the password never leave this module."""
 
 import imaplib
+import logging
 import ipaddress
 import socket
 import ssl
@@ -35,6 +36,26 @@ def _public_only(host: str, port: int) -> None:
             raise PermissionError("host_not_public")
 
 
+# Gmail's LOGIN refusals say why; the reply never echoes the password, only the reason.
+_LOGIN_REASONS: tuple[tuple[str, str], ...] = (
+    ("application-specific password required", "app_password_required"),
+    ("not enabled for imap", "imap_disabled"),
+    ("web login required", "web_login_required"),
+    ("webalert", "web_login_required"),
+    ("too many", "rate_limited"),
+    ("invalid credentials", "auth_failed"),
+    ("authenticationfailed", "auth_failed"),
+)
+log = logging.getLogger("tijori.imap")
+
+
+def _login_error_code(reply: str) -> str:
+    low = reply.lower()
+    code = next((c for needle, c in _LOGIN_REASONS if needle in low), "auth_failed")
+    log.info("imap login refused: %s", code)
+    return code
+
+
 def normalize_password(host: str, password: str) -> str:
     """Gmail shows App Passwords as 'abcd efgh ijkl mnop' but they never contain spaces; a pasted
     copy with the spaces fails LOGIN."""
@@ -48,8 +69,8 @@ def check(host: str, port: int, username: str, password: str, label: str) -> Ima
         with imaplib.IMAP4_SSL(host, port, ssl_context=ssl.create_default_context(), timeout=TIMEOUT_S) as conn:
             try:
                 conn.login(username, password)
-            except imaplib.IMAP4.error:
-                return ImapResult(False, None, "auth_failed")
+            except imaplib.IMAP4.error as exc:
+                return ImapResult(False, None, _login_error_code(str(exc)))
             typ, data = conn.select(quote_mailbox(label), readonly=True)  # EXAMINE: never marks mail read
             if typ != "OK":
                 return ImapResult(False, None, "mailbox_not_found")
