@@ -21,7 +21,7 @@ const COLOR: Record<string, string> = {
   loans_given: "#85c89a",
   loans_taken: "#e58d8d",
 };
-const SOURCE: Record<LiveComponent["source"], string> = { sheet: "Sheet", statement: "Statement balance", manual: "Set by you", loans: "Loans" };
+const SOURCE: Record<LiveComponent["source"], string> = { sheet: "Sheet", statement: "Statement", manual: "Set by you", loans: "Loans", prices: "Daily prices", estimate: "Estimated" };
 const RANGES = [
   ["6m", "6M", 6],
   ["1y", "1Y", 12],
@@ -71,7 +71,7 @@ function Body({ nw }: { nw: LiveNetWorth }) {
           <div className="nwfig lg">
             <b>{inr(total)}</b>
           </div>
-          <span className="foot">Newest known value per component · as of {dayShort(nw.as_of)}</span>
+          <span className="foot">Newest value per component from statements, the CAS and daily prices · as of {dayShort(nw.as_of)}</span>
         </div>
         {nw.changes.map((c) => (
           <div key={c.period} style={{ flex: 1, padding: "24px 20px", borderLeft: "1px solid var(--line)", display: "flex", flexDirection: "column", gap: 4 }}>
@@ -139,7 +139,7 @@ function Allocation({ nw, total }: { nw: LiveNetWorth; total: number }) {
     <section className="panel" aria-label="Allocation">
       <div className="panel-h">
         <h2>Allocation</h2>
-        <span className="x">Same rows as your sheet</span>
+        <span className="x">Statements, CAS, daily prices, and values you set</span>
       </div>
       <div className="split" style={{ height: 10 }}>
         {nw.components.filter((c) => toPaise(c.amount) > 0).map((c) => (

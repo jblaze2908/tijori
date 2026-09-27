@@ -341,6 +341,10 @@ def run_once(engine: Engine, settings: Settings) -> None:
         prices.refresh_navs(engine, [c for c in _members(engine)])
     except Exception:  # prices are a nicety; a failed fetch never blocks mail
         log.exception("NAV refresh failed")
+    try:
+        prices.refresh_closes(engine, [c for c in _members(engine)])
+    except Exception:
+        log.exception("NSE close refresh failed")
     for ctx in _members(engine):
         for b in _boxes(engine, ctx, settings):
             counts = poll_box(engine, ctx, settings, b)

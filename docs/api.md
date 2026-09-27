@@ -556,11 +556,14 @@ Body: `{"txn_ids": [int] (1–500), "rule_id"?: "rule:<id>"}`. Puts back txns th
 
 ## `GET /api/networth/live`
 
-The current net worth. It is not tied to a snapshot: each component takes its **newest** known value.
+The current net worth. Each component takes its **newest** dated value. The imported sheet isn't read: its EPF, gold and other rows were imported as values set by hand.
 
-1. The newest sheet snapshot (`source: "sheet"`).
-2. For `sbi` and `hdfc`: the balance after the newest statement line of that bank's savings accounts, summed (`source: "statement"`).
-3. A value the member set (`source: "manual"`, below).
+- **`statement`:** for `sbi` and `hdfc`, each statement's closing balance and the balance after the newest line. For others, a value read from a statement: the CAS month-end `stocks` and `mf`, PPF, FD, or an EPF passbook.
+- **`prices`:** `stocks` and `mf` at the newest daily price on the latest CAS holdings. That's NSE's closing price for shares and ETFs, and AMFI's NAV for funds. It's used only when the price is newer than the CAS.
+- **`manual`:** a value the member set (below).
+- **`estimate`:** EPF after its newest value. The usual monthly credit (the commonest month-on-month rise over the last 6 months) is added on each 1st, for up to 6 months.
+- **Invested since:** money invested into a component after what its value includes is added at cost, until the next statement shows it. Examples: an SIP after the CAS date, or a PPF or FD deposit before the next statement. The component is picked by the payee label: SIP/NACH → `mf`, stocks → `stocks`, PPF → `ppf`, FD → `fd`.
+- **Gold and other** hold their first value before it was set, as a base.
 
 ```json
 {"as_of": "2026-09-27", "net_worth": "4875000.00", "liquid": "752300.00",
@@ -581,10 +584,10 @@ The current net worth. It is not tied to a snapshot: each component takes its **
 | Field | Notes |
 |---|---|
 | `stale` | The value is more than 30 days old |
-| `change_since` | Against the snapshot on or before the 1st of this month |
-| `changes` | Against the snapshot on or before the 1st of the month, 1 Jan, and 1 Apr (FY). `null` without one |
-| `history` | Snapshots oldest first, plus a `live` point only when some component is newer than the last snapshot |
-| `months` | The last 6 intervals between points, newest first: `change = cash_change + contributions + market`. Cash is `sbi + hdfc + fd`. Contributions are `invest`-bucket debits in the interval. Market is the rest, including anything set by hand. On the live interval, `cash_change` and `market` are `null` until every cash balance is newer than the interval's start |
+| `change_since` | Against the month-end before the 1st of this month |
+| `changes` | Against the month-end before the 1st of the month, 1 Jan, and 1 Apr (FY). `null` before history starts |
+| `history` | Month-end points, oldest first, from the first month each core component held (`sbi`, `hdfc`, `stocks`, `mf`, `ppf`, `epf`) has a value; then today as `live`. Each point is every component's value on that date, computed the same way |
+| `months` | The last 6 intervals between points, newest first: `change = cash_change + contributions + market`. Cash is `sbi + hdfc + fd`. Contributions are `invest`-bucket debits in the interval. Market is the rest, including anything set by hand. |
 | `projection` | The average monthly change over up to the last 12 intervals, continued 3 and 6 months. `null` with fewer than 3 points |
 
 No data at all gives `net_worth: null` and empty lists.
@@ -819,7 +822,7 @@ The `worker` service (`python -m tijori.collector`) polls each connected mailbox
 - **CDSL e-CAS** (monthly) sets holdings for every demat ISIN and MF folio, and the `stocks` and `mf` net-worth components; AMFI's scheme names replace the wrapped names from the statement. Equity shares and ETFs held in demat count as `stocks`, other funds (folios, or units held in demat) as `mf`. The holdings must add up to the statement's Total Portfolio Value, or the parse fails and the message is retried.
 - **Not in statement.** Once an account's statement is parsed, an alert-only txn still `pending` inside its period (3 days in from each edge) is flagged (`status: "flagged"`, `review_reason: "not_in_statement"`) and leaves the totals: a card hold, or a declined or reversed payment.
 - **Net worth.** SBI e-statements print the PPF balance and HDFC statements the FD total. Both are stored as `component_value` with `source: "statement"`.
-- **Prices.** Once a day the worker fetches AMFI's NAVAll.txt and stores NAVs for the ISINs you hold.
+- **Prices.** Once a day the worker fetches AMFI's NAVAll.txt (fund NAVs) and NSE's end-of-day bhavcopy (share and ETF closes). It stores prices only for the ISINs you hold. The NSE request carries only the date, and a weekend or holiday (404) falls back to the day before.
 
 ## `POST /api/transactions/{id}/split` and `POST /api/transactions/{id}/unsplit`
 

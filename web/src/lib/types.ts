@@ -456,7 +456,7 @@ export interface LiveComponent {
   asset_class: string;
   amount: Decimal;
   share_pct: number;
-  source: "sheet" | "statement" | "manual" | "loans";
+  source: "sheet" | "statement" | "manual" | "loans" | "prices" | "estimate";
   as_of: ISODate;
   stale: boolean;
   editable: boolean;

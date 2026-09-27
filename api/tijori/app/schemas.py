@@ -884,7 +884,7 @@ class LiveComponent(BaseModel):
     asset_class: str
     amount: Money
     share_pct: float
-    source: Literal["sheet", "statement", "manual", "loans"]
+    source: Literal["sheet", "statement", "manual", "loans", "prices", "estimate"]
     as_of: date
     stale: bool
     editable: bool

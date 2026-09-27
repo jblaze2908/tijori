@@ -1,16 +1,17 @@
 """Net-worth snapshots: the sheet, 1:1. Liquid = SBI + HDFC savings + FD, as the sheet defines it."""
 
-from datetime import date
+import re
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, true, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from tijori.db import MemberContext
 from tijori.legacy import SheetRow
-from tijori.models import Account, ComponentValue, Holding, Price, Snapshot, Txn
+from tijori.models import Account, ComponentValue, Holding, Price, Snapshot, Statement, Txn
 from tijori.money import ZERO, fmt
 from tijori.services.common import audit
 from tijori.services import loans
@@ -124,12 +125,15 @@ def upsert_sheet(s: Session, member_id: int, sheet: list[SheetRow]) -> int:
 
 
 # --- live net worth -----------------------------------------------------------------------------
-# Each component takes its newest known value: a sheet snapshot, a value the member set, or (for the
-# two savings accounts) the balance after the newest statement line. Three small queries per call.
+# Each component takes its newest dated value from statements, the CAS, daily prices or a value set by hand;
+# history is those values at each month-end. The imported sheet isn't read here.
 
 STALE_DAYS = 30
 PROJECTION_MONTHS = 12
 BANK_KEYS = {"SBI": "sbi", "HDFC": "hdfc"}
+HISTORY_CORE = ("sbi", "hdfc", "stocks", "mf", "ppf", "epf")  # history starts once each of these (if held) is known
+CARRY_BACK = ("gold", "other")  # before its first value, a component holds that value as a base
+ETF = re.compile(r"\bETF\b|BEES", re.I)
 
 
 def _bank_balances(s: Session, member_id: int) -> dict[str, tuple[Decimal, date]]:
@@ -145,109 +149,192 @@ def _bank_balances(s: Session, member_id: int) -> dict[str, tuple[Decimal, date]
     return out
 
 
-def _as_of_value(snaps: list[Snapshot], day: date) -> Decimal | None:
-    """Net worth at the newest snapshot on or before `day`."""
-    best = None
-    for r in snaps:
-        if r.date <= day:
-            best = r.net_worth
-    return best
-
-
 def _add_months(d: date, n: int) -> date:
     y, m = divmod(d.month - 1 + n, 12)
     return date(d.year + y, m + 1, min(d.day, 28))
 
 
+def _priced(s: Session, member_id: int, today: date) -> dict[str, tuple[Decimal, date, date]]:
+    """Stocks and funds at the newest daily price (NSE close, AMFI NAV) on the latest CAS holdings; only when
+    a price is newer than the CAS. Units bought since the CAS show up with the next one. One query."""
+    latest = s.scalar(select(func.max(Holding.as_of)).where(Holding.member_id == member_id, Holding.source == "cdsl_cas"))
+    if latest is None:
+        return {}
+    px = (select(Price.close, Price.date).where(Price.isin_or_symbol == Holding.isin, Price.date <= today)
+          .order_by(Price.date.desc()).limit(1).lateral())
+    rows = s.execute(select(Holding.isin, Holding.name, Holding.units, px.c.close, px.c.date)
+                     .outerjoin(px, true())
+                     .where(Holding.member_id == member_id, Holding.source == "cdsl_cas", Holding.as_of == latest)).all()
+    out: dict[str, list[Any]] = {}
+    for isin, name, units, close, day in rows:
+        if close is None:
+            continue
+        key = "stocks" if (isin or "").startswith("INE") or ETF.search(name or "") else "mf"
+        v = out.setdefault(key, [ZERO, latest])
+        v[0] += (units * close).quantize(Decimal("0.01"))
+        v[1] = max(v[1], day)
+    return {k: (v[0], v[1], latest) for k, v in out.items() if v[1] > latest}
+
+
+Entry = tuple[date, Decimal, str, date]  # as of, amount, source, what it already includes (a priced CAS: its date)
+
+
+def _series(s: Session, member_id: int, today: date) -> dict[str, list[Entry]]:
+    """Every dated value per component, oldest first: bank statement closings and the newest balance, values
+    read from statements or set by hand, and daily prices. Not the sheet: its EPF, gold and other rows were
+    imported as values set by hand. Four queries plus the balance lookup."""
+    out: dict[str, list[Entry]] = {}
+    for inst, day, amount in s.execute(
+            select(Account.institution, Statement.period_end, func.sum(Statement.closing))
+            .join(Account, Account.id == Statement.account_id)
+            .where(Statement.member_id == member_id, Account.kind == "bank")
+            .group_by(Account.institution, Statement.period_end)):
+        if key := BANK_KEYS.get((inst or "").upper()):
+            out.setdefault(key, []).append((day, amount, "statement", day))
+    for key, (amount, day) in _bank_balances(s, member_id).items():
+        out.setdefault(key, []).append((day, amount, "statement", day))
+    for cv in s.scalars(select(ComponentValue).where(ComponentValue.member_id == member_id)):
+        out.setdefault(cv.key, []).append((cv.as_of, cv.amount, "statement" if cv.source == "statement" else "manual", cv.as_of))
+    for key, (amount, day, units_of) in _priced(s, member_id, today).items():
+        out.setdefault(key, []).append((day, amount, "prices", units_of))
+    for key, v in out.items():
+        v[:] = sorted((x for x in v if x[0] <= today), key=lambda x: x[0])
+    if out.get("epf"):
+        out["epf"] += _epf_estimate(out["epf"], today)
+    return {k: v for k, v in out.items() if v}
+
+
+def _epf_estimate(epf: list[Entry], today: date) -> list[Entry]:
+    """EPF is credited on the 1st: from the last value, add the usual monthly credit on each 1st since, for up to
+    6 months. The usual credit is the commonest month-on-month rise over the last 6 months."""
+    by_month = {(d.year, d.month): v for d, v, _, _ in epf}
+    months = sorted(by_month)[-7:]
+    rises = [by_month[b] - by_month[a] for a, b in zip(months, months[1:])
+             if (b[0] * 12 + b[1]) - (a[0] * 12 + a[1]) == 1 and by_month[b] > by_month[a]]
+    if not rises:
+        return []
+    step = max(set(rises), key=rises.count)
+    last_day, value, _, _ = epf[-1]
+    out, d = [], date(last_day.year + (last_day.month == 12), last_day.month % 12 + 1, 1)
+    while d <= today and len(out) < 6:
+        value += step
+        out.append((d, value, "estimate", d))
+        d = date(d.year + (d.month == 12), d.month % 12 + 1, 1)
+    return out
+
+
+def _value_at(series: list[Entry], day: date, carry_back: bool, bought: list[tuple[date, Decimal]]) -> Decimal | None:
+    """The newest value on or before `day`, plus money invested into it after what that value includes (units
+    bought since the CAS, a deposit the next statement will show)."""
+    best = None
+    for e in series:
+        if e[0] > day:
+            break
+        best = e
+    if best is None:
+        return series[0][1] if carry_back else None
+    return best[1] + sum((a for d, a in bought if best[3] < d <= day), ZERO)
+
+
+# Where an investment lands, by the payee label the classifier gives it; unmatched ones join no component.
+INVESTS_INTO = ((re.compile(r"MF|SIP|NACH", re.I), "mf"), (re.compile(r"stock", re.I), "stocks"),
+                (re.compile(r"PPF", re.I), "ppf"), (re.compile(r"\bFD\b|fixed deposit", re.I), "fd"))
+
+
+def _bought(s: Session, member_id: int, since: date) -> dict[str, list[tuple[date, Decimal]]]:
+    out: dict[str, list[tuple[date, Decimal]]] = {}
+    for day, amount, merchant, narration in s.execute(
+            select(Txn.occurred_at, Txn.amount, Txn.merchant_norm, Txn.narration)
+            .where(Txn.member_id == member_id, Txn.bucket == "invest", Txn.direction == "debit", Txn.occurred_at >= since)):
+        key = next((k for rx, k in INVESTS_INTO if rx.search(merchant or "")), None) or \
+            next((k for rx, k in INVESTS_INTO if rx.search(narration or "")), None)
+        if key:
+            out.setdefault(key, []).append((day, amount))
+    return out
+
+
+def _month_end(d: date) -> date:
+    return date(d.year + (d.month == 12), d.month % 12 + 1, 1) - timedelta(days=1)
+
+
 def live(s: Session, member_id: int, today: date) -> dict[str, Any]:
-    snaps = s.scalars(select(Snapshot).where(Snapshot.member_id == member_id).order_by(Snapshot.date)).all()
-    picked: dict[str, tuple[Decimal, date, str]] = {}
-
-    def offer(key: str, amount: Decimal, as_of: date, source: str) -> None:
-        cur = picked.get(key)
-        if cur is None or as_of >= cur[1]:
-            picked[key] = (amount, as_of, source)
-
-    for r in snaps:
-        for k, v in r.components_json.items():
-            if k in COMPONENT_KEYS and v is not None:
-                offer(k, Decimal(v), r.date, "sheet")
-    for k, (amount, as_of) in _bank_balances(s, member_id).items():
-        offer(k, amount, as_of, "statement")
-    for cv in s.scalars(select(ComponentValue).where(ComponentValue.member_id == member_id)
-                        .order_by(ComponentValue.as_of, ComponentValue.id)).all():
-        offer(cv.key, cv.amount, cv.as_of, "statement" if cv.source == "statement" else "manual")
-    if not picked:
+    series = _series(s, member_id, today)
+    owed, owe = loans.balances(s, member_id)  # open loans: money owed to you is an asset, money you owe a liability
+    if not series:
         return {"as_of": today, "net_worth": None, "liquid": None, "components": [], "by_asset_class": {},
                 "changes": [], "history": [], "months": [], "projection": None}
 
-    owed, owe = loans.balances(s, member_id)  # open loans: money owed to you is an asset, money you owe a liability
-    total = sum((v[0] for v in picked.values()), ZERO) + owed - owe
-    base_month = next((r for r in reversed(snaps) if r.date <= today.replace(day=1)), None)
+    bought = _bought(s, member_id, min(v[0][0] for v in series.values()))
+
+    def at(day: date) -> dict[str, Decimal]:
+        vals = {k: _value_at(series[k], day, k in CARRY_BACK, bought.get(k, [])) for k in COMPONENT_KEYS if k in series}
+        return {k: v for k, v in vals.items() if v is not None}
+
+    # Month-end points from the first month every core account is known; then today.
+    core = [series[k][0][0] for k in HISTORY_CORE if k in series]
+    first = _month_end(max(core)) if core else _month_end(min(v[0][0] for v in series.values()))
+    points: list[tuple[date, dict[str, Decimal]]] = []
+    d = first
+    while d < today:
+        points.append((d, at(d)))
+        d = _month_end(d + timedelta(days=1))
+    now = at(today)
+    points.append((today, now))
+    nw = {day: sum(c.values(), ZERO) for day, c in points}
+
+    total = sum(now.values(), ZERO) + owed - owe
+    base = next((c for day, c in reversed(points) if day < today.replace(day=1)), None)
     comps, by_class = [], {}
     for key in COMPONENT_KEYS:
-        if key not in picked:
+        if key not in now:
             continue
-        amount, as_of, source = picked[key]
+        day, _, source, _ = series[key][-1]
         label, asset_class = LABELS[key]
-        by_class[asset_class] = by_class.get(asset_class, ZERO) + amount
-        base = Decimal(base_month.components_json[key]) if base_month and base_month.components_json.get(key) \
-            else None
-        comps.append({"key": key, "label": label, "asset_class": asset_class, "amount": fmt(amount),
-                      "share_pct": float(round(amount * 100 / total, 1)) if total else 0.0,
-                      "source": source, "as_of": as_of, "stale": (today - as_of).days > STALE_DAYS,
+        by_class[asset_class] = by_class.get(asset_class, ZERO) + now[key]
+        comps.append({"key": key, "label": label, "asset_class": asset_class, "amount": fmt(now[key]),
+                      "share_pct": float(round(now[key] * 100 / total, 1)) if total else 0.0,
+                      "source": source, "as_of": day, "stale": (today - day).days > STALE_DAYS and source != "estimate",
                       "editable": True,
-                      "change_since": fmt(amount - base) if base is not None else None})
+                      "change_since": fmt(now[key] - base[key]) if base and key in base else None})
     for key, label, amount in (("loans_given", "Loans given", owed), ("loans_taken", "Loans taken", -owe)):
         if amount:
             by_class["loans"] = by_class.get("loans", ZERO) + amount
             comps.append({"key": key, "label": label, "asset_class": "loans", "amount": fmt(amount),
                           "share_pct": float(round(amount * 100 / total, 1)) if total else 0.0, "source": "loans",
                           "as_of": today, "stale": False, "editable": False, "change_since": None})
-    liquid = sum((picked[k][0] for k in LIQUID_KEYS if k in picked), ZERO)
+    liquid = sum((now[k] for k in LIQUID_KEYS if k in now), ZERO)
 
     changes = []
     fy_start = date(today.year if today.month >= 4 else today.year - 1, 4, 1)
     for label, since in (("month", today.replace(day=1)), ("year", date(today.year, 1, 1)), ("fy", fy_start)):
-        base_nw = _as_of_value(snaps, since)
+        prior = [nw[day] for day, _ in points if day < since]
+        base_nw = prior[-1] if prior else None
+        net_now = nw[today]
         changes.append({"period": label, "since": since,
-                        "amount": fmt(total - base_nw) if base_nw is not None else None,
-                        "pct": float(round((total - base_nw) * 100 / base_nw, 1)) if base_nw else None})
+                        "amount": fmt(net_now - base_nw) if base_nw is not None else None,
+                        "pct": float(round((net_now - base_nw) * 100 / base_nw, 1)) if base_nw else None})
 
-    # A live point only when something is newer than the last snapshot; otherwise it repeats it.
-    newest = max(v[1] for v in picked.values())
-    has_live = not snaps or newest > snaps[-1].date
-    history = [{"date": r.date, "net_worth": fmt(r.net_worth), "kind": "snapshot"} for r in snaps]
-    if has_live:
-        history.append({"date": today, "net_worth": fmt(total), "kind": "live"})
+    history = [{"date": day, "net_worth": fmt(nw[day]), "kind": "live" if day == today else "snapshot"} for day, _ in points]
 
     # Month by month: change = cash change + contributions + market (and anything set by hand).
-    points = [(r.date, r.net_worth, _liquid({k: Decimal(v) for k, v in r.components_json.items() if v is not None})
-               or ZERO) for r in snaps]
-    if has_live:
-        points.append((today, total, liquid))
-    intervals = list(zip(points, points[1:]))[-6:]
+    liq = [(day, nw[day], sum((c[k] for k in LIQUID_KEYS if k in c), ZERO)) for day, c in points]
+    intervals = list(zip(liq, liq[1:]))[-6:]
     invest = s.execute(
         select(Txn.occurred_at, Txn.amount)
         .where(Txn.member_id == member_id, Txn.direction == "debit", Txn.bucket == "invest",
-               Txn.occurred_at >= intervals[0][0][0])
+               Txn.occurred_at > intervals[0][0][0])
     ).all() if intervals else []
     months = []
     for (d0, nw0, lq0), (d1, nw1, lq1) in intervals:
-        # The live interval includes today; snapshot intervals end the day before the next snapshot.
-        is_live = has_live and d1 == today
-        contrib = sum((a for d, a in invest if d0 <= d and (d <= d1 if is_live else d < d1)), ZERO)
+        contrib = sum((a for day, a in invest if d0 < day <= d1), ZERO)
         change, cash = nw1 - nw0, lq1 - lq0
-        # Live: the split needs every cash balance to be newer than the interval start, else "market" is noise.
-        cash_known = not is_live or all(picked[k][1] > d0 for k in LIQUID_KEYS if k in picked)
         months.append({"start": d0, "end": d1, "start_value": fmt(nw0), "end_value": fmt(nw1),
-                       "change": fmt(change), "cash_change": fmt(cash) if cash_known else None,
-                       "contributions": fmt(contrib),
-                       "market": fmt(change - cash - contrib) if cash_known else None, "live": is_live})
+                       "change": fmt(change), "cash_change": fmt(cash), "contributions": fmt(contrib),
+                       "market": fmt(change - cash - contrib), "live": d1 == today})
     months.reverse()
 
     projection = None
-    recent = points[-(PROJECTION_MONTHS + 1):]
+    recent = [(day, nw[day]) for day, _ in points if day != today][-(PROJECTION_MONTHS + 1):]
     if len(recent) >= 3:
         span = (recent[-1][0].year - recent[0][0].year) * 12 + recent[-1][0].month - recent[0][0].month
         if span > 0:
