@@ -119,6 +119,22 @@ main { padding: 24px 40px 56px; display: flex; flex-direction: column; gap: 24px
 .chart2 .ax { font: 11px var(--mono); fill: var(--t3) }
 .chart2 .ax.now { fill: var(--t1) }
 .chart2 .grid { stroke: var(--line) }
+.cbox { position: relative }
+.cbox > svg { cursor: crosshair; touch-action: pan-y; outline: none }
+.cbox > svg:focus-visible { outline: 2px solid rgba(155, 180, 255, .6); outline-offset: 4px; border-radius: 6px }
+.cbox .xhair { stroke: var(--t3); stroke-opacity: .6; stroke-width: 1 }
+.cbox .xband { fill: #ffffff; fill-opacity: .03 }
+.cbox.spark { display: inline-block; vertical-align: middle }
+.cbox.spark > svg { display: block }
+.ctip { position: absolute; left: 0; transform: translateY(-50%); pointer-events: none; z-index: 5; display: grid; grid-template-columns: 12px auto auto auto; align-items: center; gap: 4px 8px; padding: 8px 10px; background: var(--s2); border: 1px solid var(--line-2); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); font-size: 12px; line-height: 16px; white-space: nowrap }
+.ctip .h { grid-column: 1 / -1; color: var(--t2); margin-bottom: 2px }
+.ctip .r { display: contents; text-align: left }
+.ctip i { width: 12px; height: 2px; border-radius: 1px; background: var(--k, transparent) }
+.ctip i.d { background: repeating-linear-gradient(90deg, var(--k, transparent) 0 3px, transparent 3px 5px) }
+.ctip b { font: 500 13px/16px var(--mono); font-variant-numeric: tabular-nums; color: var(--t1); text-align: right }
+.ctip span { color: var(--t2) }
+.ctip em { font: 12px var(--mono); font-style: normal; color: var(--t3); text-align: right }
+.ctip .r.s b, .ctip .r.s span { font-weight: 600; color: var(--t1) }
 
 /* category rows */
 .cats2 { display: flex; flex-direction: column }
@@ -179,6 +195,8 @@ main { padding: 24px 40px 56px; display: flex; flex-direction: column; gap: 24px
 .t2 tr.click { cursor: pointer }
 .t2 tr.click:hover td { background: rgba(255, 255, 255, .02) }
 .t2 .nm { display: flex; align-items: center; gap: 10px }
+/* Outranks the phone rule that hides Spending's columns 3 and 6–8: here every column is a compared series. */
+.t2.months th:nth-child(n), .t2.months td:nth-child(n) { display: table-cell }
 .t2 small { font-size: 12px; color: var(--t3) }
 .t2 th button { background: none; border: 0; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; padding: 0 }
 .t2 th button.on { color: var(--t1) }

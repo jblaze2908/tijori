@@ -20,6 +20,8 @@ export const OTHER = "var(--t3)";
 export const FLOW = { spend: "var(--c1)", invest: "var(--c2)", saved: "var(--c3)", income: "var(--t3)", committed: "var(--t3)" } as const;
 export const slotColor = (slot: number | undefined) => (slot && slot >= 1 && slot <= 8 ? `var(--c${slot})` : OTHER);
 export const categoryColor = (c: string | null) => slotColor(c ? CATEGORY_SLOT[c] : undefined);
+/** --c6 is too dark to read as a 1.5–2px line on the dark surface, so lines take a lifted step of the same green. */
+export const lineInk = (c: string) => (c === "var(--c6)" ? "#1fa31f" : c);
 
 /** Net-worth groups in stack order: cash first, then the sheet's component keys (docs/api.md). */
 export const NW_SHEET_KEYS = ["sbi", "hdfc", "fd", "stocks", "mf", "ppf", "epf", "gold", "other"];

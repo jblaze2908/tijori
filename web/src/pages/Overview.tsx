@@ -5,7 +5,7 @@ import { ErrorState, Loading } from "../components/ui";
 import { MonthGate, prevCycles, txnsFor, type AppCtx, type MonthCtx } from "../ctx";
 import { api, dataOf, invalidate, read } from "../lib/api";
 import { categoryColor, monogramColor } from "../lib/colors";
-import { compact, dayShort, daysBetween, inr, monthLong, monthShort, monthApos, plural, toPaise } from "../lib/format";
+import { addDays, compact, dayShort, daysBetween, inr, monthLong, monthShort, monthApos, plural, toPaise } from "../lib/format";
 import { within } from "../lib/insights";
 import { byKey, categoryOf, cumulative, largestCharge, normalByKey, normalCurve, NOTABLE, paidFrom, projection, spendOf } from "../lib/metrics";
 import { Link, navigate, useLocation } from "../lib/router";
@@ -80,6 +80,7 @@ function Body({ m, back, txns }: { m: MonthCtx; back: MonthCtx[]; txns: Transact
             projected={d.projected}
             mark={d.big ? { day: daysBetween(m.period.start, d.big.date) + 1, label: `${d.big.merchant} · ${inr(d.big.amount)}` } : null}
             dayLabel={(x) => (x === 1 ? `1 ${mon}` : String(x))}
+            tipLabel={(x) => `${dayShort(addDays(m.period.start, x - 1))} · day ${x}`}
           />
         </div>
       </section>

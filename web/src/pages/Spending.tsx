@@ -6,15 +6,15 @@ import { all, api, dataOf, invalidate, read } from "../lib/api";
 import { BudgetsPanel } from "../components/BudgetsPanel";
 import { LoanLines } from "../components/Loans";
 import { G } from "../components/Glyphs";
-import { categoryColor, slotColor } from "../lib/colors";
-import { addDays, compact, dayShort, daysBetween, inr, monthShort, plural, toPaise } from "../lib/format";
+import { categoryColor, lineInk, slotColor } from "../lib/colors";
+import { addDays, compact, dayShort, daysBetween, inr, monthShort, monthYear, plural, toPaise } from "../lib/format";
 import { isExpense, within } from "../lib/insights";
-import { byKey, categoryOf, NOTABLE, normalByKey, paidFrom, projection, spendOf } from "../lib/metrics";
+import { byKey, groupKey, NOTABLE, normalByKey, paidFrom, projection, spendOf, type Group } from "../lib/metrics";
 import { Link, navigate, useLocation } from "../lib/router";
 import type { ApiCards, ISODate, Transaction, TrendPoint } from "../lib/types";
+import { detailHref, rememberSpending } from "./SpendingDetail";
 
 type Preset = "month" | "last" | "year" | "fy" | "custom";
-type Group = "category" | "merchant" | "account";
 const PRESETS: [Preset, string][] = [
   ["month", "This month"],
   ["last", "Last month"],
@@ -128,14 +128,13 @@ export function Spending({ app }: { app: AppCtx }) {
   );
 }
 
-const keyFn = (g: Group) => (g === "category" ? categoryOf : g === "merchant" ? (t: Transaction) => t.merchant : (t: Transaction) => t.account);
 const colorFor = (g: Group, k: string, i: number) => (k === "Other" ? "var(--t3)" : g === "category" ? categoryColor(k === "Uncategorized" ? null : k) : slotColor(i + 1));
 
 function Body({ app, preset, r, group, txns, trends, recurringIds, showAll, setShowAll }: { app: AppCtx; preset: Preset; r: { from: ISODate; to: ISODate; label: string }; group: Group; txns: Transaction[]; trends: TrendPoint[] | null; recurringIds: Set<string>; showAll: boolean; setShowAll: (all: boolean) => void }) {
   const cur = app.cycle(app.asOf.slice(0, 7));
   const back = prevCycles(app, cur, 3);
   const dayN = daysBetween(cur.period.start, app.asOf) + 1;
-  const key = keyFn(group);
+  const key = groupKey(group);
   const R = useMemo(() => within(txns, r.from, r.to), [txns, r.from, r.to]);
   const C = useMemo(() => within(txns, cur.period.start, app.asOf), [txns, cur.key, app.asOf]);
   const totals = byKey(R, key);
@@ -166,10 +165,11 @@ function Body({ app, preset, r, group, txns, trends, recurringIds, showAll, setS
     const stacks = shown.map((k, i) => ({ key: k, color: colorFor(group, k, i), value: amt(s, k) }));
     const other = points.filter((p) => p.start === s && p.key && !shown.includes(p.key)).reduce((a, p) => a + p.amount, 0);
     if (other) stacks.push({ key: "Other", color: "var(--t3)", value: other });
-    return { label: s === starts[0] || s.endsWith("-01-01") ? `${monthShort(s.slice(0, 7))} '${s.slice(2, 4)}` : monthShort(s.slice(0, 7)), sub: compact(monthTotal(s)).replace("₹", ""), stacks, projected: s === curStart ? projected : null, now: s === curStart };
+    return { label: s === starts[0] || s.endsWith("-01-01") ? `${monthShort(s.slice(0, 7))} '${s.slice(2, 4)}` : monthShort(s.slice(0, 7)), sub: compact(monthTotal(s)).replace("₹", ""), stacks, projected: s === curStart ? projected : null, now: s === curStart, tip: monthYear(s.slice(0, 7)) };
   });
   // The server returns the top 50 series; rows past that have no monthly history to show.
   const spark = (k: string) => (seriesTotals.has(k) ? starts.map((s) => amt(s, k)) : null);
+  const sparkLabels = starts.map((s) => monthYear(s.slice(0, 7)));
 
   // Monthly average over the complete months inside the range.
   const fullMonths = starts.filter((s) => s >= r.from && s !== curStart);
@@ -190,14 +190,7 @@ function Body({ app, preset, r, group, txns, trends, recurringIds, showAll, setS
   const rec = R.filter((t) => isExpense(t) && t.bucket !== "card" && recurringIds.has(t.payee_key ?? t.merchant.toLowerCase()));
   const recurringSpent = rec.reduce((a, t) => a + t.amount, 0);
   const recurringCount = rec.length;
-  const ids = new Map(R.filter((t) => t.category_id != null).map((t) => [t.category ?? "", t.category_id!]));
-  const acctIds = new Map(R.filter((t) => t.account_id).map((t) => [t.account, t.account_id!]));
-  const href = (k: string) =>
-    group === "category"
-      ? `/transactions?from=${r.from}&to=${r.to}&category=${k === "Uncategorized" ? "none" : (ids.get(k) ?? "")}`
-      : group === "account"
-        ? `/transactions?from=${r.from}&to=${r.to}&account=${acctIds.get(k) ?? ""}`
-        : `/transactions?from=${r.from}&to=${r.to}&q=${encodeURIComponent(k)}`;
+  const href = (k: string) => detailHref(group, k);
 
   return (
     <>
@@ -280,9 +273,15 @@ function Body({ app, preset, r, group, txns, trends, recurringIds, showAll, setS
               const avg = rowAvg(row.k);
               const sp = spark(row.k);
               return (
-                <tr key={row.k} className="click" onClick={() => navigate(href(row.k))}>
+                <tr key={row.k} className="click" onClick={() => {
+                  rememberSpending();
+                  navigate(href(row.k));
+                }}>
                   <td>
-                    <Link href={href(row.k)} className="nm">
+                    <Link href={href(row.k)} className="nm" onClick={(e) => {
+                      e.stopPropagation();
+                      rememberSpending();
+                    }}>
                       <i className="sq" style={{ background: color }} />
                       {row.k}
                     </Link>
@@ -295,7 +294,7 @@ function Body({ app, preset, r, group, txns, trends, recurringIds, showAll, setS
                   </td>
                   <td className="r muted">{spent ? `${((row.amount / spent) * 100).toFixed(1)}%` : "—"}</td>
                   <td>
-                    {sp && <Sparkline values={sp} color={color.startsWith("var(--c6") ? "#1fa31f" : color} lastOpen />}
+                    {sp && <Sparkline values={sp} color={lineInk(color)} labels={sparkLabels} lastOpen />}
                   </td>
                   <td className="r muted">{row.count}</td>
                 </tr>

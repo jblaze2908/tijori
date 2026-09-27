@@ -61,6 +61,10 @@ export function byKey(txns: Transaction[], key: (t: Transaction) => string): Map
 }
 export const categoryOf = (t: Transaction) => t.category ?? "Uncategorized";
 
+export type Group = "category" | "merchant" | "account";
+/** The label a transaction is grouped under on Spending: its rows, and the detail page each row opens. */
+export const groupKey = (g: Group): ((t: Transaction) => string) => (g === "category" ? categoryOf : g === "merchant" ? (t) => t.merchant : (t) => t.account);
+
 /** Per key, the average over previous cycles of spend in their first `dayN` days. */
 export function normalByKey(txns: Transaction[], previous: Period[], dayN: number, key: (t: Transaction) => string): Map<string, Paise> {
   const sums = new Map<string, Paise>();

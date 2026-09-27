@@ -15,6 +15,7 @@ import { Onboarding } from "./pages/Onboarding";
 import { Overview } from "./pages/Overview";
 import { SECTIONS, Settings, type Section } from "./pages/Settings";
 import { Spending } from "./pages/Spending";
+import { SpendingDetail } from "./pages/SpendingDetail";
 import { Subscriptions } from "./pages/Subscriptions";
 import { Transactions } from "./pages/Transactions";
 import { Welcome } from "./pages/Welcome";
@@ -47,7 +48,9 @@ function readStoredMonth(): MonthKey | null {
 export function App() {
   useStore();
   const { path, params } = useLocation();
-  const route = ROUTES.find((r) => r.path === path);
+  const detail = match("/spending/:group/:key", path);
+  const detailGroup = (["category", "merchant", "account"] as const).find((g) => g === detail?.group);
+  const route = ROUTES.find((r) => r.path === (detailGroup ? "/spending" : path));
   const [picked, setPicked] = useState<MonthKey | null>(readStoredMonth);
   const pick = (m: MonthKey) => {
     setPicked(m);
@@ -126,7 +129,7 @@ export function App() {
       );
       break;
     case "spending":
-      page = <Spending app={app} />;
+      page = detailGroup ? <SpendingDetail app={app} group={detailGroup} name={detail!.key!} /> : <Spending app={app} />;
       break;
     case "subscriptions":
       page = <Subscriptions app={app} />;
