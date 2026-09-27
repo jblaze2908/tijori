@@ -5,6 +5,7 @@ import { dayLong, dayShort, inr, plural, timeIST, toPaise } from "../lib/format"
 import { navigate } from "../lib/router";
 import type { Cadence, Category, ClassifiedBy, LinkKind, Scope, Transaction } from "../lib/types";
 import { G } from "./Glyphs";
+import { LoanLine, LoanPicker } from "./Loans";
 import { useToast } from "./Toast";
 
 const FILED_BY: Record<ClassifiedBy, string> = {
@@ -78,6 +79,7 @@ function Body({ id }: { id: string }) {
   const categories = cats.status === "ready" ? cats.data : [];
   const chosen = cat ?? t.category_id;
   const changed = chosen != null && chosen !== t.category_id;
+  const toLoan = changed && categories.find((c) => c.id === chosen)?.name === "Loans";
   const credit = t.direction === "credit";
   const alertSeen = d.observations.find((o) => o.source === "alert" && o.received_at);
   const steps: [string, string, boolean][] = [
@@ -137,7 +139,7 @@ function Body({ id }: { id: string }) {
                   </option>
                 ))}
               </select>
-              {t.payee_key && (
+              {t.payee_key && !toLoan && (
                 <span className="seg">
                   <button type="button" className={scope === "this" ? "on" : ""} onClick={() => setScope("this")}>
                     This one
@@ -149,6 +151,12 @@ function Body({ id }: { id: string }) {
               )}
             </span>
           </div>
+          {t.loan_id != null && (
+            <div className="r">
+              <span>Loan</span>
+              <LoanLine txnId={id} loanId={t.loan_id} />
+            </div>
+          )}
           <div className="r">
             <span>Kind</span>
             <span className="v">{KIND[t.kind] ?? t.kind}</span>
@@ -161,6 +169,7 @@ function Body({ id }: { id: string }) {
             </span>
           </div>
         </div>
+        {toLoan && <LoanPicker txnId={id} onDone={() => setCat(null)} />}
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <span className="lbl">Status</span>
           <div className="stepper">
@@ -290,7 +299,7 @@ function Body({ id }: { id: string }) {
         )}
         <span className="sp" />
         <span className="sq" style={{ background: categoryColor(categories.find((c) => c.id === chosen)?.name ?? null), visibility: changed ? "visible" : "hidden" }} />
-        <button type="button" className="btn2 sm primary" disabled={!changed || busy} onClick={() => chosen != null && save(chosen, scope, "Category saved")}>
+        <button type="button" className="btn2 sm primary" disabled={!changed || busy || toLoan} onClick={() => chosen != null && save(chosen, scope, "Category saved")}>
           {busy ? "Saving…" : "Save category"}
         </button>
       </div>

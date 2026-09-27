@@ -283,10 +283,10 @@ Categories visible to the member: household-wide ones plus the member's own, in 
   "kind": "spend", "bucket": "everyday", "credit_bucket": null, "parent_id": null, "scope": "household"}]
 ```
 
-The default taxonomy has 27 categories:
+The default taxonomy has 28 categories:
 
 - **Spend (16):** Groceries, Eating out, Shopping, Bills & subscriptions, Local shops, Travel, Health, Services, Bank charges, Family, Friends, Social circle, Entertainment, Insurance, Tax, Cash. Family, Friends and Social circle count credits as income (`credit_bucket`).
-- **Non-spend (11):** Salary, Interest, Dividends, Other income, Refunds, Reversals, Self transfer, Card bill payment, Pass-through, Investments, Investment redemptions.
+- **Non-spend (12):** Salary, Interest, Dividends, Other income, Refunds, Reversals, Self transfer, Card bill payment, Pass-through, Loans, Investments, Investment redemptions. Loans is filed through [loans](#loans), not the category endpoints.
 
 ## `GET /api/inbox`
 
@@ -896,4 +896,30 @@ A Model Context Protocol server (protocol `2025-06-18`), so Claude can read your
 - `GET` lists `[{id, name, created_at, last_used_at, revoked, token: null}]`.
 - `revoke` stops a token at once. It is audit-logged.
 
+| `list_loans` | none | [Loans](#loans): who, what's still owed, repayments |
+
 Not built yet: OAuth for MCP (tokens are pasted by hand).
+
+## Loans
+
+Money lent to or borrowed from one person. A loan's txns carry `loan_id` and are filed under the **Loans** category (bucket `excluded`), so they never count as spend or income.
+
+- **What's owed:** opening + money out − money in for a loan you `lent`; opening + money in − money out for one you `borrowed`. `opening_amount` is what was owed before the first txn on file.
+- **Net worth:** open loans add `loans_given` (an asset) and `loans_taken` (negative) to [`/api/networth/live`](#get-apinetworthlive) components, with `source: "loans"` and `editable: false`.
+- **Summary:** `/api/summary` adds `loans: {lent, repaid_to_you, borrowed, repaid_by_you}`, each `{amount, count, people}`, for the month cycle. Spending shows these outside the total.
+- **Write-off:** what's left becomes one txn under the category you pick, dated today. A lent loan's becomes a debit, so a spend category counts it as spend. A borrowed loan's becomes a credit, so a people category counts it as income. Reopening removes that txn.
+- **Auto-attach:** when payee memory files a payment under Loans, the worker attaches it to that handle's one open loan (not when the handle has two).
+
+| Endpoint | Body | Notes |
+|---|---|---|
+| `GET /api/loans` | | `{items, unassigned, totals}`. `items`: open loans by amount, then closed ones. `unassigned`: txns under Loans without a loan. `totals`: `owed_to_you`, `you_owe`, `open_lent`, `open_borrowed`, `repaid_fy` (+ count, `fy_start`) |
+| `GET /api/loans/{id}` | | `{loan, txns, suggestions}`. `txns` newest first with `balance_after`. `suggestions`: up to 10 unfiled payments from the loan's handles since a week before it started |
+| `GET /api/loans/for-txn/{txn_id}` | | The filing picker: open loans with `same_payee` first, `new_direction` (a debit starts a loan you lent), and the handle's other unfiled payments |
+| `POST /api/loans` | `{direction?, counterparty?, started_on?, opening_amount?, note?, txn_ids?}` | With `txn_ids`, direction, person and start come from the earliest txn. Without, `direction`, `counterparty` and `started_on` are required |
+| `PATCH /api/loans/{id}` | `{counterparty?, note?, opening_amount?, started_on?}` | |
+| `POST /api/loans/{id}/txns` | `{txn_ids}` (1–200) | Files them under Loans on this loan. Split originals are refused |
+| `POST /api/loans/{id}/txns/remove` | `{txn_ids}` | Back to the Inbox, uncategorized (`review_reason: "loan_removed"`) |
+| `POST /api/loans/{id}/settle`, `…/reopen` | | Closing sets `closed_on`; a closed loan owes nothing and leaves net worth |
+| `POST /api/loans/{id}/write-off` | `{category_id}` | A spend category (`everyday` or `oneoff`) |
+
+Every write is audit-logged. Txns in list and detail responses carry `loan_id`.

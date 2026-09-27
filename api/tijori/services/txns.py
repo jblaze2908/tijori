@@ -369,7 +369,7 @@ def unfile(s: Session, ctx: MemberContext, actor: str, txn_ids: list[int], rule_
     reason = case((Txn.vpa.op("~*")(MERCHANT_QR_HANDLES.pattern), literal_column("'merchant_over_cap'")),
                   (Txn.payee_key.like("vpa:%"), literal_column("'person'")),
                   else_=literal_column("'new_payee'"))
-    back_to_inbox = dict(category_id=None, bucket=None, classified_by=None, rule_id="inbox:undo",
+    back_to_inbox = dict(category_id=None, bucket=None, classified_by=None, rule_id="inbox:undo", loan_id=None,
                          review_reason=reason, updated_at=func.now())
     owned_by = [Txn.classified_by == "user"]
     if rule_pk is not None:

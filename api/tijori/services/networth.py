@@ -13,6 +13,7 @@ from tijori.legacy import SheetRow
 from tijori.models import Account, ComponentValue, Holding, Price, Snapshot, Txn
 from tijori.money import ZERO, fmt
 from tijori.services.common import audit
+from tijori.services import loans
 from tijori.services.recurring import balances
 
 COMPONENT_KEYS = ("sbi", "hdfc", "fd", "stocks", "mf", "ppf", "epf", "gold", "other")
@@ -180,7 +181,8 @@ def live(s: Session, member_id: int, today: date) -> dict[str, Any]:
         return {"as_of": today, "net_worth": None, "liquid": None, "components": [], "by_asset_class": {},
                 "changes": [], "history": [], "months": [], "projection": None}
 
-    total = sum((v[0] for v in picked.values()), ZERO)
+    owed, owe = loans.balances(s, member_id)  # open loans: money owed to you is an asset, money you owe a liability
+    total = sum((v[0] for v in picked.values()), ZERO) + owed - owe
     base_month = next((r for r in reversed(snaps) if r.date <= today.replace(day=1)), None)
     comps, by_class = [], {}
     for key in COMPONENT_KEYS:
@@ -196,6 +198,12 @@ def live(s: Session, member_id: int, today: date) -> dict[str, Any]:
                       "source": source, "as_of": as_of, "stale": (today - as_of).days > STALE_DAYS,
                       "editable": True,
                       "change_since": fmt(amount - base) if base is not None else None})
+    for key, label, amount in (("loans_given", "Loans given", owed), ("loans_taken", "Loans taken", -owe)):
+        if amount:
+            by_class["loans"] = by_class.get("loans", ZERO) + amount
+            comps.append({"key": key, "label": label, "asset_class": "loans", "amount": fmt(amount),
+                          "share_pct": float(round(amount * 100 / total, 1)) if total else 0.0, "source": "loans",
+                          "as_of": today, "stale": False, "editable": False, "change_since": None})
     liquid = sum((picked[k][0] for k in LIQUID_KEYS if k in picked), ZERO)
 
     changes = []

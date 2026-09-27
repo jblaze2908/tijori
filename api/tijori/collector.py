@@ -41,7 +41,7 @@ from tijori.parsers.cdsl_cas import CdslCasParser
 from tijori.parsers import Message, ParseError, route
 from tijori.parsers.alerts import AlertParser
 from tijori.pdf import PdfError, is_pdf, pdf_to_text
-from tijori.services import cards, notify, prices, retention
+from tijori.services import cards, loans, notify, prices, retention
 from tijori.services import secrets as vault
 from tijori.services.ingest import ingest_alert, ingest_statement, load_classifier
 from tijori.settings import Settings, get_settings
@@ -337,6 +337,10 @@ def run_once(engine: Engine, settings: Settings) -> None:
         again = retry_stored(engine, ctx, settings)
         if again:
             log.info("member=%s retried %s", ctx.member_id, again)
+        with member_session(engine, ctx) as s:
+            if n := loans.auto_attach(s, ctx.member_id):
+                log.info("member=%s attached %d txns to loans", ctx.member_id, n)
+            s.commit()
         if time.monotonic() - _last_purge.get(ctx.member_id, -DAY_S) >= DAY_S:
             _last_purge[ctx.member_id] = time.monotonic()
             with member_session(engine, ctx) as s:

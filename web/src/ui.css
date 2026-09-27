@@ -602,3 +602,70 @@ main { padding: 24px 40px 56px; display: flex; flex-direction: column; gap: 24px
   .brow .mono-n { width: auto }
   .brow .pr { display: none }
 }
+
+/* Loans (Paper "11 · Loans — components"): Net worth section, the filing picker, Spending's lines outside the total */
+.loans .lsum { display: flex }
+.lsum > div { flex: 1; display: flex; flex-direction: column; gap: 4px; padding: 0 24px; border-left: 1px solid var(--line); min-width: 0 }
+.lsum > div:first-child { padding-left: 0; border-left: 0 }
+.lsum span, .lpick .lbl, .lnis .lbl { font-size: 12px; line-height: 16px; color: var(--t2) }
+.lsum b { font-size: 24px; line-height: 30px; font-weight: 500 }
+.lsum small, .lrow small, .ldet small { font-size: 12px; line-height: 16px; color: var(--t3) }
+.lgrid { display: flex; gap: 32px; align-items: flex-start }
+.llist { flex: 1; min-width: 0; display: flex; flex-direction: column }
+.lrow { display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 8px 12px; border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--t1); font: inherit; text-align: left; cursor: pointer; border-radius: 0 }
+.lrow:hover { background: var(--s2) }
+.lrow.on { background: var(--s2); border-radius: 8px }
+.lrow.closed .lwho b { color: var(--t3) }
+.lrow .lwho, .ldet .lwho { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; text-align: left }
+.lrow .lwho small { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis }
+.lrow .lwho b, .ldet .lwho b { font-weight: 400; display: flex; gap: 8px; align-items: center; overflow: hidden; white-space: nowrap; text-overflow: ellipsis }
+.lrow .lbar { width: 168px; flex: none; display: flex; flex-direction: column; gap: 4px }
+.lrow .lbar .track { height: 6px; border-radius: 3px; background: var(--track); display: flex }
+.lrow .lbar i { height: 6px; border-radius: 3px }
+.lrow .lbar small { white-space: nowrap }
+.lrow .amt { width: 96px; flex: none; text-align: right }
+.ldet { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 16px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 20px }
+.ldet .lhd { display: flex; gap: 12px; align-items: flex-start }
+.ldet .big { display: flex; flex-direction: column; align-items: flex-end }
+.ldet .big b { font-size: 24px; line-height: 30px; font-weight: 500 }
+.ltl { display: flex; flex-direction: column; border-top: 1px solid var(--line) }
+.ltr { display: flex; align-items: center; gap: 12px; min-height: 44px; border-bottom: 1px solid var(--line) }
+.ltr .d { width: 56px; flex: none; font-size: 12px; color: var(--t2) }
+.ltr .w { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis }
+.ltr .a { width: 96px; flex: none; text-align: right }
+.ltr .b { width: 80px; flex: none; text-align: right; font-size: 12px }
+.ltr .x { width: 24px; flex: none; border: 0; background: none; color: var(--t3); cursor: pointer; font-size: 16px }
+.ltr .x:hover { color: var(--bad) }
+.lsug { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 8px; background: var(--accent-bg) }
+.lsug .w { flex: 1; min-width: 0; display: flex; flex-direction: column }
+.lsug .w b { font-weight: 400; font-size: 13px }
+.lact, .lnew, .lfoot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
+.lnew .inp2 { min-width: 120px }
+.lpick { display: flex; flex-direction: column; gap: 6px; padding: 12px 0 }
+.lopt { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); cursor: pointer }
+.lopt.on { border-color: var(--accent); background: var(--accent-bg) }
+.lopt.new { border-style: dashed }
+.lopt .w { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px }
+.lopt .w b { font-weight: 400; font-size: 13px }
+.lopt .w small { font-size: 12px; color: var(--t2) }
+.lfoot { justify-content: space-between; padding-top: 4px }
+.lfoot .chk { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--t2) }
+.lnis { gap: 0 }
+.lnis .lbl { text-transform: uppercase; letter-spacing: .06em; font-size: 11px; font-weight: 500; color: var(--t3); padding-bottom: 4px }
+.lnr { display: flex; align-items: center; gap: 16px; min-height: 44px; border-bottom: 1px solid var(--line) }
+.lnr .n { width: 190px; flex: none; color: var(--t2) }
+.lnr .p { flex: 1; min-width: 0; font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis }
+.lnr .a { width: 96px; flex: none; text-align: right }
+@media (max-width: 760px) {
+  /* The hero strip's layout is inline, hence !important. */
+  .nwhero { flex-wrap: wrap }
+  .nwhero > div { flex: 1 1 45% !important; border-left: 0 !important; border-top: 1px solid var(--line); padding: 14px 16px !important }
+  .nwhero > div:first-child { flex-basis: 100% !important; border-top: 0 }
+  .loans .lsum { flex-direction: column; gap: 12px }
+  .lsum > div { padding: 0; border-left: 0 }
+  .lgrid { flex-direction: column; gap: 16px }
+  .ldet { width: 100% }
+  .lrow .lbar { display: none }
+  .lnr .n { width: 140px }
+  .ltr .b { display: none }
+}

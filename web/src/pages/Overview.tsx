@@ -393,5 +393,6 @@ export const CLASS_LABEL: Record<string, string> = {
   retirement: "EPF + PPF",
   gold: "Gold",
   other: "Other",
+  loans: "Loans",
 };
 

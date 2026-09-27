@@ -64,6 +64,7 @@ DEFAULT_CATEGORIES: tuple[CategoryDef, ...] = (
     CategoryDef("Self transfer", "transfer", "excluded", "Moves between your own accounts."),
     CategoryDef("Card bill payment", "transfer", "card", "Credit card bill payments (e.g. via CRED); stands in for card spend until card statements are parsed."),
     CategoryDef("Pass-through", "transfer", "excluded", "Money that arrives and leaves the same day on someone else's behalf."),
+    CategoryDef("Loans", "transfer", "excluded", "Money lent or borrowed, and its repayments; tracked per loan, never spend or income."),
     CategoryDef("Investments", "investment", "invest", "SIPs, stock buys, PPF and deposit contributions."),
     CategoryDef("Investment redemptions", "investment", "excluded", "Deposit maturities and investment withdrawals back to the bank."),
 )

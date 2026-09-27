@@ -13,6 +13,9 @@ from sqlalchemy import or_, select
 from tijori.app.deps import MemberDep
 from tijori.app.schemas import (
     LinkCandidates,
+    LoanDetail,
+    LoanPicker,
+    Loans,
     McpTokens,
     RawSources,
     Accounts,
@@ -39,7 +42,8 @@ from tijori.app.schemas import (
 )
 from tijori.classify.taxonomy import KINDS
 from tijori.models import Category
-from tijori.services import alerts, budgets, cards, mcp_tokens, members, networth, raw, recurring, reports, sources, txn_edit, txns
+from tijori.services import (alerts, budgets, cards, loans, mcp_tokens, members, networth, raw, recurring, reports, sources,
+                             txn_edit, txns)
 from tijori.services.common import month_start_day, today_ist
 
 router = APIRouter(prefix="/api")
@@ -193,6 +197,21 @@ def get_recurring(db: MemberDep) -> dict:
 @router.get("/cards", response_model=CardList)
 def get_cards(db: MemberDep) -> dict:
     return cards.card_status(db.session, db.ctx.member_id)
+
+
+@router.get("/loans", response_model=Loans)
+def get_loans(db: MemberDep) -> dict:
+    return loans.list_loans(db.session, db.ctx.member_id)
+
+
+@router.get("/loans/for-txn/{txn_id}", response_model=LoanPicker)
+def loan_picker(db: MemberDep, txn_id: Annotated[int, Path(ge=1)]) -> dict:
+    return loans.for_txn(db.session, db.ctx.member_id, txn_id)
+
+
+@router.get("/loans/{loan_id}", response_model=LoanDetail)
+def get_loan(db: MemberDep, loan_id: Annotated[int, Path(ge=1)]) -> dict:
+    return loans.get_loan(db.session, db.ctx.member_id, loan_id)
 
 
 @router.get("/mcp/tokens", response_model=McpTokens)

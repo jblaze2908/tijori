@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from tijori.db import MemberContext
 from tijori.models import McpToken
-from tijori.services import alerts, networth, recurring, reports, txns
+from tijori.services import alerts, loans, networth, recurring, reports, txns
 from tijori.services.common import month_start_day, today_ist
 
 router = APIRouter()
@@ -101,6 +101,10 @@ def t_inbox(s: Session, ctx: MemberContext, a: dict[str, Any], actor: str) -> An
     return txns.inbox_by_payee(s, ctx.member_id, 1, 25)
 
 
+def t_loans(s: Session, ctx: MemberContext, a: dict[str, Any], actor: str) -> Any:
+    return loans.list_loans(s, ctx.member_id)
+
+
 def t_categorize(s: Session, ctx: MemberContext, a: dict[str, Any], actor: str) -> Any:
     scope = a.get("scope", "this")
     if scope not in ("this", "payee"):
@@ -122,6 +126,7 @@ TOOLS: dict[str, tuple[str, dict[str, Any], Callable[[Session, MemberContext, di
     "get_net_worth": ("Live net worth by component and asset class, with changes over month, year and FY.", _S, t_net_worth),
     "list_alerts": ("Rule alerts for a month cycle: duplicate charge, bounce risk, price increase, missed charge, budgets.",
                     {**_S, "properties": {"month": {"type": "string"}}}, t_alerts),
+    "list_loans": ("Loans you lent or borrowed: who, how much is still owed, repayments so far.", _S, t_loans),
     "list_inbox": ("Payees waiting to be categorised, with their payments.", _S, t_inbox),
     "categorize": ("File a transaction under a category by name; scope 'payee' also files that payee's future payments.",
                    {**_S, "required": ["txn_id", "category"], "properties": {"txn_id": {"type": "integer"},

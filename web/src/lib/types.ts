@@ -54,6 +54,7 @@ export interface ApiTxn {
   settles?: ApiSettles | null;
   split_of?: number | null;
   split_parts?: number;
+  loan_id?: number | null;
 }
 export interface ApiSettles {
   txn_id: number;
@@ -308,6 +309,8 @@ export interface Transaction {
   split_of: string | null;
   /** On the original: how many parts it was split into. */
   split_parts: number;
+  /** Filed under Loans, on this loan. */
+  loan_id: number | null;
 }
 
 export interface Totals {
@@ -453,7 +456,7 @@ export interface LiveComponent {
   asset_class: string;
   amount: Decimal;
   share_pct: number;
-  source: "sheet" | "statement" | "manual";
+  source: "sheet" | "statement" | "manual" | "loans";
   as_of: ISODate;
   stale: boolean;
   editable: boolean;

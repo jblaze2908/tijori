@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { NetWorthChart } from "../components/charts";
+import { LoansPanel } from "../components/Loans";
 import { useToast } from "../components/Toast";
 import { ErrorState, Loading } from "../components/ui";
 import { api, dataOf, invalidate, read, setComponent } from "../lib/api";
@@ -17,8 +18,10 @@ const COLOR: Record<string, string> = {
   epf: "#5fcf9f",
   gold: "#e3b04b",
   other: "#696969",
+  loans_given: "#85c89a",
+  loans_taken: "#e58d8d",
 };
-const SOURCE: Record<LiveComponent["source"], string> = { sheet: "Sheet", statement: "Statement balance", manual: "Set by you" };
+const SOURCE: Record<LiveComponent["source"], string> = { sheet: "Sheet", statement: "Statement balance", manual: "Set by you", loans: "Loans" };
 const RANGES = [
   ["6m", "6M", 6],
   ["1y", "1Y", 12],
@@ -62,7 +65,7 @@ function Body({ nw }: { nw: LiveNetWorth }) {
   const label = { month: "Since 1st", year: "Since 1 Jan", fy: "Since 1 Apr (FY)" } as const;
   return (
     <>
-      <section className="panel" style={{ flexDirection: "row", gap: 0, padding: 0 }}>
+      <section className="panel nwhero" style={{ flexDirection: "row", gap: 0, padding: 0 }}>
         <div style={{ flex: 1.4, padding: "20px 24px", display: "flex", flexDirection: "column", gap: 6 }}>
           <span className="lbl">Net worth · live</span>
           <div className="nwfig lg">
@@ -121,6 +124,7 @@ function Body({ nw }: { nw: LiveNetWorth }) {
       </section>
 
       <Allocation nw={nw} total={total} />
+      <LoansPanel />
       <MonthByMonth nw={nw} />
       <Holdings />
     </>
@@ -138,7 +142,7 @@ function Allocation({ nw, total }: { nw: LiveNetWorth; total: number }) {
         <span className="x">Same rows as your sheet</span>
       </div>
       <div className="split" style={{ height: 10 }}>
-        {nw.components.map((c) => (
+        {nw.components.filter((c) => toPaise(c.amount) > 0).map((c) => (
           <div key={c.key} style={{ width: `${c.share_pct}%`, background: COLOR[c.key] ?? "var(--t3)", height: 10 }} title={`${c.label} ${c.share_pct}%`} />
         ))}
       </div>
@@ -185,7 +189,7 @@ function Allocation({ nw, total }: { nw: LiveNetWorth; total: number }) {
                 )}
               </td>
               <td className="r" style={{ fontFamily: "inherit" }}>
-                {editing !== c.key && (
+                {editing !== c.key && c.editable && (
                   <button type="button" className="linkish" onClick={() => setEditing(c.key)}>
                     Edit
                   </button>
@@ -327,7 +331,7 @@ function Holdings() {
         </table>
       ) : (
         <p className="state" style={{ padding: 0 }}>
-          Fund and stock holdings appear once the CDSL CAS parser lands. Until then, Mutual Funds and Stocks come from the sheet, or from a value you set above.
+          No holdings yet. They come from the monthly CDSL CAS once it is in the mailbox.
         </p>
       )}
     </section>

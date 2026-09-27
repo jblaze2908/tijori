@@ -269,6 +269,7 @@ const mapTxn = (t: ApiTxn): Transaction => ({
   settles: t.settles ?? null,
   split_of: t.split_of != null ? String(t.split_of) : null,
   split_parts: t.split_parts ?? 0,
+  loan_id: t.loan_id ?? null,
 });
 
 const byDate = (a: { date: string }, b: { date: string }) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0);

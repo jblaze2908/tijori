@@ -217,6 +217,7 @@ class Txn(Base):
     sources: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default=text("'{}'::text[]"))
     dedupe_key: Mapped[str] = mapped_column(String(64))
     split_of: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("txn.id", ondelete="CASCADE"), index=True)
+    loan_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("loan.id", ondelete="SET NULL"), index=True)
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -505,6 +506,24 @@ class ComponentValue(Base):
     created_at: Mapped[datetime] = _created()
     source: Mapped[str | None] = mapped_column(String(16))  # null or "manual": set by hand; "statement": read from one
     __table_args__ = (UniqueConstraint("member_id", "key", "as_of"),)
+
+
+class Loan(Base):
+    """Money lent to or borrowed from one person; its txns carry loan_id and sit outside spend and income."""
+
+    __tablename__ = "loan"
+    id: Mapped[int] = _pk()
+    member_id: Mapped[int] = _member_fk()
+    direction: Mapped[str] = mapped_column(_enum("loan_direction", "lent", "borrowed"))
+    counterparty: Mapped[str] = mapped_column(String(120))
+    payee_key: Mapped[str | None] = mapped_column(String(80))  # the handle its payments come from, for suggestions
+    started_on: Mapped[date] = mapped_column(Date)
+    opening_amount: Mapped[Decimal] = mapped_column(Money, server_default="0")  # owed before the first txn on file
+    note: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(_enum("loan_status", "open", "settled", "written_off"), server_default="open")
+    closed_on: Mapped[date | None] = mapped_column(Date)
+    created_at: Mapped[datetime] = _created()
+    __table_args__ = (CheckConstraint("opening_amount >= 0", name="opening_non_negative"),)
 
 
 class McpToken(Base):

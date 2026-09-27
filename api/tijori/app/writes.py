@@ -9,6 +9,13 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
 
 from tijori.app.deps import MemberDep, require_json
 from tijori.app.schemas import (
+    LoanAttachOut,
+    LoanDetachOut,
+    LoanIn,
+    LoanItem,
+    LoanPatch,
+    LoanTxnsIn,
+    LoanWriteOffIn,
     CategorizeIn,
     CategorizeOut,
     ComponentIn,
@@ -37,7 +44,7 @@ from tijori.app.schemas import (
     SettingsIn,
     SettingsOut,
 )
-from tijori.services import budgets, mcp_tokens, members, networth, notify, recurring, txn_edit, txns
+from tijori.services import budgets, loans, mcp_tokens, members, networth, notify, recurring, txn_edit, txns
 from tijori.services.common import today_ist
 from tijori.services.networth import COMPONENT_KEYS
 from tijori.services.errors import NotFound
@@ -104,6 +111,46 @@ def notify_test(request: Request, db: MemberDep) -> dict:
     if not cfg["notify_topic"]:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "set a notification topic first")
     return {"sent": notify.send(request.app.state.settings, cfg["notify_topic"], "Tijori", "Test notification: pushes reach this device.")}
+
+
+@router.post("/loans", response_model=LoanItem)
+def create_loan(db: MemberDep, body: LoanIn) -> dict:
+    return loans.create(db.session, db.ctx, db.actor, direction=body.direction, counterparty=body.counterparty,
+                        started_on=body.started_on, opening_amount=Decimal(body.opening_amount), note=body.note,
+                        txn_ids=body.txn_ids)
+
+
+@router.patch("/loans/{loan_id}", response_model=LoanItem)
+def patch_loan(db: MemberDep, loan_id: Annotated[int, Path(ge=1)], body: LoanPatch) -> dict:
+    fields = {k: getattr(body, k) for k in body.model_fields_set}
+    if "opening_amount" in fields:
+        fields["opening_amount"] = Decimal(fields["opening_amount"] or "0")
+    return loans.update_loan(db.session, db.ctx, db.actor, loan_id, fields)
+
+
+@router.post("/loans/{loan_id}/txns", response_model=LoanAttachOut)
+def attach_loan_txns(db: MemberDep, loan_id: Annotated[int, Path(ge=1)], body: LoanTxnsIn) -> dict:
+    return loans.attach(db.session, db.ctx, db.actor, loan_id, body.txn_ids)
+
+
+@router.post("/loans/{loan_id}/txns/remove", response_model=LoanDetachOut)
+def detach_loan_txns(db: MemberDep, loan_id: Annotated[int, Path(ge=1)], body: LoanTxnsIn) -> dict:
+    return loans.detach(db.session, db.ctx, db.actor, loan_id, body.txn_ids)
+
+
+@router.post("/loans/{loan_id}/settle", response_model=LoanItem)
+def settle_loan(db: MemberDep, loan_id: Annotated[int, Path(ge=1)]) -> dict:
+    return loans.close(db.session, db.ctx, db.actor, loan_id, "settled")
+
+
+@router.post("/loans/{loan_id}/reopen", response_model=LoanItem)
+def reopen_loan(db: MemberDep, loan_id: Annotated[int, Path(ge=1)]) -> dict:
+    return loans.close(db.session, db.ctx, db.actor, loan_id, "open")
+
+
+@router.post("/loans/{loan_id}/write-off", response_model=LoanItem)
+def write_off_loan(db: MemberDep, loan_id: Annotated[int, Path(ge=1)], body: LoanWriteOffIn) -> dict:
+    return loans.close(db.session, db.ctx, db.actor, loan_id, "written_off", body.category_id)
 
 
 @router.put("/budgets/{category_id}", response_model=BudgetOut)

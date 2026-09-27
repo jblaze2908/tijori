@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from tijori.classify.taxonomy import EXPENSE_BUCKETS
 from tijori.models import Budget, Category, Txn
 from tijori.money import ZERO, fmt
-from tijori.services import recurring
+from tijori.services import loans, recurring
 from tijori.services.common import cycle_bounds, previous_month, today_ist
 
 SUMMARY_BUCKETS = ("everyday", "card", "oneoff", "invest", "income")
@@ -99,6 +99,7 @@ def summary(s: Session, member_id: int, month: str, month_start_day: int = 1) ->
         "buckets": buckets,
         "categories": _category_lines(rows, "debit", EXPENSE_BUCKETS, with_uncategorized=True),
         "income_categories": _category_lines(rows, "credit", ("income",), with_uncategorized=False),
+        "loans": loans.month_lines(s, member_id, cur_start, cur_end),
     }
 
 

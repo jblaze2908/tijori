@@ -62,6 +62,7 @@ class TxnOut(BaseModel):
     settles: Settles | None = None  # a bill payment matched to a card's payment line
     split_of: int | None = None  # this is a part of that txn's split
     split_parts: int = 0  # this txn was split into this many parts
+    loan_id: int | None = None  # filed under Loans, on this loan
 
 
 class TotalLine(BaseModel):
@@ -308,6 +309,7 @@ class Summary(BaseModel):
     buckets: list[BucketLine]
     categories: list[CategoryLine]
     income_categories: list[CategoryLine]
+    loans: "LoanLines | None" = None
 
 
 class MonthOut(BaseModel):
@@ -622,7 +624,6 @@ class StatementPasswordIn(BaseModel):
     password: str = Field(min_length=1, max_length=256, repr=False)
 
 
-Summary.model_rebuild()
 
 
 class HouseholdMember(BaseModel):
@@ -883,7 +884,7 @@ class LiveComponent(BaseModel):
     asset_class: str
     amount: Money
     share_pct: float
-    source: Literal["sheet", "statement", "manual"]
+    source: Literal["sheet", "statement", "manual", "loans"]
     as_of: date
     stale: bool
     editable: bool
@@ -1014,3 +1015,117 @@ class McpTokenIn(BaseModel):
 
 class NotifyTestOut(BaseModel):
     sent: bool
+
+
+LoanAmount = Annotated[str, Field(pattern=r"^\d{1,12}(\.\d{1,2})?$")]
+TxnIds = Annotated[list[Annotated[int, Field(ge=1)]], Field(min_length=1, max_length=200)]
+
+
+class LoanItem(BaseModel):
+    id: int
+    direction: str  # lent | borrowed
+    counterparty: str
+    payee_key: str | None
+    started_on: date
+    opening_amount: Money
+    note: str | None
+    status: str  # open | settled | written_off
+    closed_on: date | None
+    given: Money  # lent out (or borrowed), opening included
+    returned: Money  # paid back so far
+    outstanding: Money  # 0 once closed
+    repayments: int
+    last_at: date | None
+
+
+class LoanPickItem(LoanItem):
+    same_payee: bool
+
+
+class LoanTotals(BaseModel):
+    owed_to_you: Money
+    you_owe: Money
+    open_lent: int
+    open_borrowed: int
+    repaid_fy: Money
+    repaid_fy_count: int
+    fy_start: date
+
+
+class Loans(BaseModel):
+    items: list[LoanItem]
+    unassigned: list[TxnOut]  # filed under Loans without a loan
+    totals: LoanTotals
+
+
+class LoanTxn(TxnOut):
+    balance_after: Money
+
+
+class LoanDetail(BaseModel):
+    loan: LoanItem
+    txns: list[LoanTxn]
+    suggestions: list[TxnOut]
+
+
+class LoanPicker(BaseModel):
+    txn_id: int
+    loan_id: int | None
+    new_direction: str
+    counterparty: str | None
+    loans: list[LoanPickItem]
+    other_txns: list[TxnOut]
+
+
+class LoanIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    direction: Literal["lent", "borrowed"] | None = None
+    counterparty: Annotated[str, Field(min_length=1, max_length=120)] | None = None
+    started_on: date | None = None
+    opening_amount: LoanAmount = "0"
+    note: Annotated[str, Field(max_length=2000)] | None = None
+    txn_ids: Annotated[list[Annotated[int, Field(ge=1)]], Field(max_length=200)] = []
+
+
+class LoanPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    counterparty: Annotated[str, Field(min_length=1, max_length=120)] | None = None
+    note: Annotated[str, Field(max_length=2000)] | None = None
+    opening_amount: LoanAmount | None = None
+    started_on: date | None = None
+
+
+class LoanTxnsIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    txn_ids: TxnIds
+
+
+class LoanWriteOffIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    category_id: Annotated[int, Field(ge=1)]
+
+
+class LoanAttachOut(BaseModel):
+    loan_id: int
+    attached: int
+
+
+class LoanDetachOut(BaseModel):
+    loan_id: int
+    removed: int
+
+
+class LoanLine(BaseModel):
+    amount: Money
+    count: int
+    people: list[str]
+
+
+class LoanLines(BaseModel):
+    lent: LoanLine
+    repaid_to_you: LoanLine
+    borrowed: LoanLine
+    repaid_by_you: LoanLine
+
+
+Summary.model_rebuild()

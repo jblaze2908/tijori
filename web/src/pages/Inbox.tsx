@@ -4,6 +4,7 @@ import { useToast } from "../components/Toast";
 import { ErrorState, Loading } from "../components/ui";
 import type { AppCtx } from "../ctx";
 import { api, dataOf, fileInboxPayee, invalidate, read, undoFiling } from "../lib/api";
+import { LoanPicker } from "../components/Loans";
 import { monogramColor } from "../lib/colors";
 import { dayShort, inr, monthShort, plural, toPaise } from "../lib/format";
 import { Link } from "../lib/router";
@@ -202,18 +203,23 @@ function Card({ p, cats, cap, selected, onSelect, onFiled }: { p: InboxPayee; ca
           ))}
         </select>
         <span className="sp" />
-        <span className="seg">
-          <button type="button" className={scope === "this" ? "on" : ""} onClick={() => setScope("this")}>
-            Just this one
+        {cat?.name !== "Loans" && (
+          <span className="seg">
+            <button type="button" className={scope === "this" ? "on" : ""} onClick={() => setScope("this")}>
+              Just this one
+            </button>
+            <button type="button" className={scope === "payee" ? "on" : ""} onClick={() => setScope("payee")}>
+              Always for this payee
+            </button>
+          </span>
+        )}
+        {cat?.name !== "Loans" && (
+          <button type="button" className="btn2 sm primary" disabled={!cat || busy} onClick={file}>
+            {busy ? "Filing…" : "File"}
           </button>
-          <button type="button" className={scope === "payee" ? "on" : ""} onClick={() => setScope("payee")}>
-            Always for this payee
-          </button>
-        </span>
-        <button type="button" className="btn2 sm primary" disabled={!cat || busy} onClick={file}>
-          {busy ? "Filing…" : "File"}
-        </button>
+        )}
       </div>
+      {cat?.name === "Loans" && p.payments[0] && <LoanPicker txnId={p.payments[0].id} txnIds={p.payments.map((x) => Number(x.id))} onDone={() => onFiled(p, cat, null)} />}
     </article>
   );
 }
