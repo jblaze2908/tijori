@@ -10,7 +10,7 @@ Resolution order, first hit wins:
 """
 
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal
@@ -21,7 +21,7 @@ from tijori.classify.kinds import KindInput, MemberProfile, structural_kind
 from tijori.classify.memory import PayeeMemory, memory_key
 from tijori.classify.merchants import MERCHANT_QR_HANDLES, match_brand, normalize_merchant, payee_key
 from tijori.classify.narration import Narration, parse_narration
-from tijori.classify.taxonomy import BY_NAME, Kind, bucket_of, kind_of
+from tijori.classify.taxonomy import BY_NAME, CategoryDef, Kind
 
 Direction = Literal["debit", "credit"]
 ClassifiedBy = Literal["rule", "payee_memory", "dictionary", "heuristic", "user", "system"]
@@ -60,14 +60,11 @@ class Decision:
     inbox_reason: str | None = None
     options: tuple[tuple[str, int], ...] = ()
     suggestion: str | None = None
+    bucket: str | None = None  # set by Classifier from the category and the direction
 
     @property
     def filed(self) -> bool:
         return self.category is not None
-
-    @property
-    def bucket(self) -> str | None:
-        return bucket_of(self.category) if self.category else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,8 +88,6 @@ class Rule:
     def __post_init__(self) -> None:
         if not (self.vpa or self.merchant or self.narration_regex):
             raise ValueError("rule needs a vpa, merchant or narration_regex matcher")
-        if self.category not in BY_NAME:
-            raise ValueError(f"unknown category {self.category!r}")
         if self.narration_regex is not None:
             # Rules are member-authored; bound the pattern size to limit regex blow-ups.
             if len(self.narration_regex) > MAX_RULE_REGEX_LEN:
@@ -148,7 +143,11 @@ def _ordered(rules: Iterable[Rule]) -> tuple[Rule, ...]:
 
 
 class Classifier:
-    """Build once per batch: rules are sorted and memory loaded up front, not per txn."""
+    """Build once per batch: rules are sorted and memory loaded up front, not per txn.
+
+    `categories` is the household's own list (custom ones included) over the defaults; a rule on a
+    category that isn't in it is dropped.
+    """
 
     def __init__(
         self,
@@ -156,11 +155,20 @@ class Classifier:
         member_rules: Iterable[Rule] = (),
         household_rules: Iterable[Rule] = (),
         memory: PayeeMemory | None = None,
+        categories: Mapping[str, CategoryDef] | None = None,
     ) -> None:
         self.profile = profile or MemberProfile()
-        self.member_rules = _ordered(member_rules)
-        self.household_rules = _ordered(household_rules)
+        self.categories: Mapping[str, CategoryDef] = {**BY_NAME, **(categories or {})}
+        self.member_rules = _ordered(r for r in member_rules if r.category in self.categories)
+        self.household_rules = _ordered(r for r in household_rules if r.category in self.categories)
         self.memory = memory or PayeeMemory()
+
+    def _finish(self, txn: TxnInput, d: Decision) -> Decision:
+        if d.category is None:
+            return d
+        c = self.categories[d.category]
+        bucket, kind = c.for_direction(txn.direction)
+        return replace(d, bucket=bucket, kind=kind if c.credit_bucket else d.kind)
 
     @staticmethod
     def identify(txn: TxnInput) -> Identity:
@@ -173,6 +181,9 @@ class Classifier:
         return Identity(narr, brand_core, brand, normalize_merchant(narr, brand), payee_key(narr, brand))
 
     def classify(self, txn: TxnInput) -> Decision:
+        return self._finish(txn, self._decide(txn))
+
+    def _decide(self, txn: TxnInput) -> Decision:
         ident = self.identify(txn)
         narr, brand_core, brand, merchant, key = (
             ident.narration, ident.brand_core, ident.brand, ident.merchant, ident.payee_key
@@ -182,7 +193,8 @@ class Classifier:
 
         for rule in self.member_rules:
             if rule.matches(txn, narr, merchant):
-                return Decision(rule.kind or kind_of(rule.category), rule.category, "rule", rule.rule_id, **base)
+                return Decision(rule.kind or self.categories[rule.category].kind, rule.category, "rule", rule.rule_id,
+                                **base)
 
         hit = structural_kind(
             KindInput(txn.direction, narr, brand_core, narr.raw.upper(), self.profile)
@@ -193,8 +205,8 @@ class Classifier:
 
         suggestion = None
         verdict = self.memory.lookup(memory_key(txn.direction, key))
-        if verdict and verdict.status == "auto":
-            return Decision(kind_of(verdict.category), verdict.category, "payee_memory", f"memory:{key}",
+        if verdict and verdict.status == "auto" and verdict.category in self.categories:
+            return Decision(self.categories[verdict.category].kind, verdict.category, "payee_memory", f"memory:{key}",
                             options=verdict.options, **base)
         if verdict and verdict.status == "conflict":
             return Decision(tentative, None, None, "memory:conflict", inbox_reason="conflict",
@@ -204,10 +216,12 @@ class Classifier:
 
         for rule in self.household_rules:
             if rule.matches(txn, narr, merchant):
-                return Decision(rule.kind or kind_of(rule.category), rule.category, "rule", rule.rule_id, **base)
+                return Decision(rule.kind or self.categories[rule.category].kind, rule.category, "rule", rule.rule_id,
+                                **base)
 
         if brand and txn.direction == "debit":
-            return Decision(kind_of(brand.category), brand.category, "dictionary", f"dict:{brand.key}", **base)
+            return Decision(self.categories[brand.category].kind, brand.category, "dictionary", f"dict:{brand.key}",
+                            **base)
 
         return self._heuristic(txn, narr, tentative, suggestion, base)
 
@@ -242,6 +256,6 @@ class Classifier:
                 and (t.account_id, t.ref_no, t.amount) in reversed_refs
                 and not d.rule_id.startswith("rule:")
             ):
-                decisions[i] = replace(d, kind="refund", category="Reversals", classified_by="rule",
-                                       rule_id="link:reversal", inbox_reason=None, suggestion=None)
+                decisions[i] = self._finish(t, replace(d, kind="refund", category="Reversals", classified_by="rule",
+                                                       rule_id="link:reversal", inbox_reason=None, suggestion=None))
         return decisions

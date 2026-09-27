@@ -331,6 +331,7 @@ class CategoryOut(BaseModel):
     description: str | None
     kind: str
     bucket: str
+    credit_bucket: str | None  # a credit's bucket when it differs: the people categories count it as income
     parent_id: int | None
     scope: str  # household | member
 

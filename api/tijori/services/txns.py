@@ -9,6 +9,7 @@ from sqlalchemy import ColumnElement, String, Text, and_, case, cast, delete, fu
 from sqlalchemy.orm import Session
 
 from tijori.classify.merchants import MERCHANT_QR_HANDLES
+from tijori.classify.taxonomy import bucket_kind
 from tijori.db import MemberContext
 from tijori.models import Account, Category, Observation, RawMessage, Rule, RuleHit, Txn, TxnLink, TxnObservation
 from tijori.money import ZERO, fmt
@@ -271,7 +272,13 @@ def _create_payee_rule(s: Session, ctx: MemberContext, cat: Category, vpa: str |
 
 
 def _filed_values(cat: Category, by: str, rule_id: str) -> dict[str, Any]:
-    return dict(category_id=cat.id, bucket=cat.bucket, kind=cat.kind, classified_by=by, rule_id=rule_id,
+    bucket: Any = cat.bucket
+    kind: Any = cat.kind
+    if cat.credit_bucket:  # people categories: per row, since a payee group can hold both directions
+        credit_bucket, credit_kind = bucket_kind(cat.bucket, cat.kind, cat.credit_bucket, "credit")
+        bucket = case((Txn.direction == "credit", credit_bucket), else_=cat.bucket)
+        kind = case((Txn.direction == "credit", credit_kind), else_=cat.kind)
+    return dict(category_id=cat.id, bucket=bucket, kind=kind, classified_by=by, rule_id=rule_id,
                 review_reason=None, updated_at=func.now())
 
 

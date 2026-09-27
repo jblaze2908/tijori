@@ -14,6 +14,7 @@ from tijori.classify.engine import Classifier, Rule, TxnInput
 from tijori.classify.kinds import MemberProfile
 from tijori.classify.memory import PayeeMemory, memory_key
 from tijori.classify.narration import parse_narration
+from tijori.classify.taxonomy import CategoryDef
 from tijori.db import MemberContext
 from tijori.models import (
     Account,
@@ -84,8 +85,13 @@ def category_ids(s: Session, household_id: int) -> dict[str, int]:
 
 
 def load_classifier(s: Session, ctx: MemberContext) -> Classifier:
-    """Three queries per batch (profile, rules, grouped payee memory), never per txn."""
+    """Four queries per batch (profile, categories, rules, grouped payee memory), never per txn."""
     cfg = s.scalar(select(Member.classify_config).where(Member.id == ctx.member_id)) or {}
+    mine = (Category.member_id.is_(None)) | (Category.member_id == ctx.member_id)
+    categories = {r.name: CategoryDef(r.name, r.kind, r.bucket, "", r.credit_bucket) for r in s.execute(
+        select(Category.name, Category.kind, Category.bucket, Category.credit_bucket)
+        .where(Category.household_id == ctx.household_id, mine)
+        .order_by(Category.member_id.is_(None).desc()))}  # a member's own category wins over the household's
     member_rules, household_rules = [], []
     rows = s.execute(
         select(RuleRow.id, RuleRow.scope, RuleRow.match_json, RuleRow.kind, RuleRow.priority, Category.name)
@@ -97,7 +103,7 @@ def load_classifier(s: Session, ctx: MemberContext) -> Classifier:
         try:
             rule = Rule.from_match_json(r.id, r.name, r.match_json, scope=r.scope, kind=r.kind, priority=r.priority)
         except ValueError:
-            continue  # a rule on a custom category or with a bad pattern never blocks ingest
+            continue  # a rule with a bad pattern never blocks ingest
         (member_rules if r.scope == "member" else household_rules).append(rule)
     counts = s.execute(
         select(Txn.direction, Txn.payee_key, Category.name, func.count())
@@ -107,7 +113,7 @@ def load_classifier(s: Session, ctx: MemberContext) -> Classifier:
         .group_by(Txn.direction, Txn.payee_key, Category.name)
     ).all()
     memory = PayeeMemory.from_counts((memory_key(d, k), name, n) for d, k, name, n in counts)
-    return Classifier(MemberProfile.from_json(cfg), member_rules, household_rules, memory)
+    return Classifier(MemberProfile.from_json(cfg), member_rules, household_rules, memory, categories)
 
 
 def record_raw(s: Session, ctx: MemberContext, *, filename: str | None, sha256: str, blob_ref: str,

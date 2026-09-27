@@ -179,6 +179,7 @@ class Category(Base):
     description: Mapped[str | None] = mapped_column(Text)
     kind: Mapped[str] = mapped_column(_enum("category_kind", *KINDS))
     bucket: Mapped[str] = mapped_column(_enum("category_bucket", *BUCKETS))
+    credit_bucket: Mapped[str | None] = mapped_column(_enum("category_credit_bucket", *BUCKETS))  # credits, if not `bucket`
     sort_order: Mapped[int] = mapped_column(Integer, server_default="0")
     __table_args__ = (
         UniqueConstraint("household_id", "member_id", "name", postgresql_nulls_not_distinct=True),

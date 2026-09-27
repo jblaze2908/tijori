@@ -14,7 +14,7 @@ This is the contract the web UI is built against. Examples come from synthetic s
 | Currency | INR everywhere (`"currency": "INR"`). |
 | Dates and times | Dates are `YYYY-MM-DD`; months are `YYYY-MM`; timestamps are ISO 8601 with an offset. "Today" is taken in Asia/Kolkata. |
 | Months are cycles | Every month parameter and bucket follows the member's `month_start_day` (default 1). This covers `/api/summary`, `/api/months`, `/api/transactions?month=`, `/api/budgets` and `/api/trends`. A month runs from that day to the day before it in the next month. It is **labelled by the calendar month it starts in**: with day 25, `2026-04` is 25 Apr – 24 May. With day 1 it is the calendar month |
-| Spend | **One definition everywhere:** debits in the `everyday`, `oneoff` and `card` buckets, plus uncategorized (Inbox) debits. Refunds are reported separately and never netted. `/api/summary` `expense` and the `/api/trends` totals use exactly this rule, so a headline number always equals its trend bar |
+| Spend | **One definition everywhere:** debits in the `everyday`, `oneoff` and `card` buckets, plus uncategorized (Inbox) debits. Refunds are reported separately and never netted. A txn's `bucket` comes from its category; the people categories (Family, Friends, Social circle) have a `credit_bucket` of `income`, so money sent counts as spend and money received as income. `/api/summary` `expense` and the `/api/trends` totals use exactly this rule, so a headline number always equals its trend bar |
 | Paging | `page` starts at 1. `page_size` runs 1–200 (default 50). Paged responses carry `page`, `page_size` and `total`. |
 | Ordering | Transaction lists are newest first (`occurred_at` desc, then `id` desc). |
 | Nulls | Optional fields are present and set to `null`. They are never omitted. |
@@ -280,12 +280,12 @@ Categories visible to the member: household-wide ones plus the member's own, in 
 
 ```json
 [{"id": 1, "name": "Groceries", "description": "Supermarkets and quick commerce: Blinkit, JioMart, Zepto, BigBasket.",
-  "kind": "spend", "bucket": "everyday", "parent_id": null, "scope": "household"}]
+  "kind": "spend", "bucket": "everyday", "credit_bucket": null, "parent_id": null, "scope": "household"}]
 ```
 
-The default taxonomy has 25 categories:
+The default taxonomy has 27 categories:
 
-- **Spend (14):** Groceries, Eating out, Shopping, Bills & subscriptions, Local shops, Travel, Health, Services, Bank charges, Family, Entertainment, Insurance, Tax, Cash.
+- **Spend (16):** Groceries, Eating out, Shopping, Bills & subscriptions, Local shops, Travel, Health, Services, Bank charges, Family, Friends, Social circle, Entertainment, Insurance, Tax, Cash. Family, Friends and Social circle count credits as income (`credit_bucket`).
 - **Non-spend (11):** Salary, Interest, Dividends, Other income, Refunds, Reversals, Self transfer, Card bill payment, Pass-through, Investments, Investment redemptions.
 
 ## `GET /api/inbox`

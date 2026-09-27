@@ -144,7 +144,8 @@ def categories(db: MemberDep) -> list[dict]:
         .order_by(Category.sort_order, Category.name)
     ).all()
     return [{"id": c.id, "name": c.name, "description": c.description, "kind": c.kind, "bucket": c.bucket,
-             "parent_id": c.parent_id, "scope": "household" if c.member_id is None else "member"} for c in rows]
+             "credit_bucket": c.credit_bucket, "parent_id": c.parent_id,
+             "scope": "household" if c.member_id is None else "member"} for c in rows]
 
 
 @router.get("/inbox", response_model=InboxPage | InboxGroupPage)

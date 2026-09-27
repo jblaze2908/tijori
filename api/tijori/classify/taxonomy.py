@@ -1,7 +1,8 @@
 """Default category taxonomy, seeded per household.
 
 `bucket` is the dashboard grouping (PLAN §8): everyday, oneoff and card make up expense;
-invest is money moved into assets; income is money earned; excluded never counts.
+invest is money moved into assets; income is money earned; excluded never counts. A category with a
+`credit_bucket` (the people categories) counts money sent as spend and money received as income.
 """
 
 from dataclasses import dataclass
@@ -21,6 +22,17 @@ class CategoryDef:
     kind: Kind
     bucket: Bucket
     description: str
+    credit_bucket: Bucket | None = None
+
+    def for_direction(self, direction: str) -> tuple[Bucket, Kind]:
+        return bucket_kind(self.bucket, self.kind, self.credit_bucket, direction)
+
+
+def bucket_kind(bucket: Bucket, kind: Kind, credit_bucket: Bucket | None, direction: str) -> tuple[Bucket, Kind]:
+    """The bucket and kind a txn takes from its category; credits differ only when credit_bucket is set."""
+    if direction == "credit" and credit_bucket:
+        return credit_bucket, "income" if credit_bucket == "income" else kind
+    return bucket, kind
 
 
 DEFAULT_CATEGORIES: tuple[CategoryDef, ...] = (
@@ -34,7 +46,10 @@ DEFAULT_CATEGORIES: tuple[CategoryDef, ...] = (
     CategoryDef("Health", "spend", "everyday", "Doctors, hospitals, pharmacies and diagnostics."),
     CategoryDef("Services", "spend", "everyday", "Paid services: government service centres, repairs, home services."),
     CategoryDef("Bank charges", "fee", "everyday", "Bank fees: mandate bounces, SMS alerts, IMPS and card charges."),
-    CategoryDef("Family", "spend", "oneoff", "Money sent to family members."),
+    CategoryDef("Family", "spend", "oneoff", "Money to and from family: sent counts as spend, received as income.", "income"),
+    CategoryDef("Friends", "spend", "oneoff", "Money to and from friends: sent counts as spend, received as income.", "income"),
+    CategoryDef("Social circle", "spend", "oneoff",
+                "People you know who aren't friends or family: sent counts as spend, received as income.", "income"),
     CategoryDef("Entertainment", "spend", "everyday", "Movies, events, games and outings."),
     CategoryDef("Insurance", "spend", "oneoff", "Health, life and vehicle insurance premiums."),
     CategoryDef("Tax", "spend", "oneoff", "Income tax and other direct tax payments."),

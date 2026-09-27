@@ -14,7 +14,7 @@ from tijori.models import Category, Household, Member
 def seed_categories(session: Session, household_id: int) -> None:
     rows = [
         dict(household_id=household_id, member_id=None, name=c.name, description=c.description,
-             kind=c.kind, bucket=c.bucket, sort_order=i)
+             kind=c.kind, bucket=c.bucket, credit_bucket=c.credit_bucket, sort_order=i)
         for i, c in enumerate(DEFAULT_CATEGORIES)
     ]
     session.execute(insert(Category).values(rows).on_conflict_do_nothing())

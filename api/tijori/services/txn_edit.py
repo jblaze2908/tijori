@@ -14,6 +14,7 @@ from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from tijori.classify.taxonomy import bucket_kind
 from tijori.db import MemberContext
 from tijori.models import Category, Txn, TxnLink
 from tijori.money import fmt
@@ -32,11 +33,11 @@ def _txn(s: Session, ctx: MemberContext, txn_id: int) -> Txn:
     return t
 
 
-def _category_bucket(s: Session, category_id: int | None) -> tuple[str | None, str | None]:
+def _category_bucket(s: Session, category_id: int | None, direction: str) -> tuple[str | None, str | None]:
     if category_id is None:
         return None, None
     c = s.get(Category, category_id)
-    return (c.bucket, c.kind) if c else (None, None)
+    return bucket_kind(c.bucket, c.kind, c.credit_bucket, direction) if c else (None, None)
 
 
 def split(s: Session, ctx: MemberContext, actor: str, txn_id: int, parts: list[dict[str, Any]]) -> dict[str, Any]:
@@ -54,10 +55,11 @@ def split(s: Session, ctx: MemberContext, actor: str, txn_id: int, parts: list[d
         c = s.get(Category, p["category_id"])
         if c is None:
             raise Invalid("unknown category")
+        bucket, kind = bucket_kind(c.bucket, c.kind, c.credit_bucket, t.direction)
         s.add(Txn(member_id=ctx.member_id, account_id=t.account_id, occurred_at=t.occurred_at, posted_at=t.posted_at,
-                  amount=Decimal(p["amount"]), currency=t.currency, direction=t.direction, kind=c.kind,
+                  amount=Decimal(p["amount"]), currency=t.currency, direction=t.direction, kind=kind,
                   merchant_norm=t.merchant_norm, counterparty=t.counterparty, ref_no=t.ref_no, narration=t.narration,
-                  vpa=t.vpa, payee_key=t.payee_key, category_id=c.id, bucket=c.bucket, classified_by="user",
+                  vpa=t.vpa, payee_key=t.payee_key, category_id=c.id, bucket=bucket, classified_by="user",
                   rule_id=None, review_reason=None, status=t.status, notes=p.get("note") or None,
                   sources=list(t.sources or []), split_of=t.id,
                   dedupe_key=hashlib.sha256(f"split|{t.id}|{i}".encode()).hexdigest()))
@@ -73,7 +75,7 @@ def unsplit(s: Session, ctx: MemberContext, actor: str, txn_id: int) -> dict[str
     n = s.execute(delete(Txn).where(Txn.member_id == ctx.member_id, Txn.split_of == t.id)).rowcount
     if not n:
         raise Invalid("this transaction isn't split")
-    t.bucket = _category_bucket(s, t.category_id)[0]
+    t.bucket = _category_bucket(s, t.category_id, t.direction)[0]
     audit(s, ctx, actor, "txn.unsplit", f"txn:{t.id}", {"parts": n})
     return {"id": t.id, "parts": 0}
 
@@ -95,7 +97,7 @@ def _effect(s: Session, ctx: MemberContext, a: Txn, b: Txn, kind: str, on: bool)
     """What a link does to totals; removing it puts each leg back on its category's bucket."""
     legs = (a, b) if kind in ("transfer", "pass_through") else (b,) if kind == "dup" else ()
     for t in legs:
-        t.bucket = "excluded" if on else _category_bucket(s, t.category_id)[0]
+        t.bucket = "excluded" if on else _category_bucket(s, t.category_id, t.direction)[0]
 
 
 def link(s: Session, ctx: MemberContext, actor: str, txn_id: int, other_id: int, kind: str) -> dict[str, Any]:
@@ -122,7 +124,7 @@ def unlink(s: Session, ctx: MemberContext, actor: str, txn_id: int, other_id: in
         _effect(s, ctx, a, b, kind, False)
     else:  # a matched card bill goes back to standing in for card spend
         for t in (a, b):
-            t.bucket = _category_bucket(s, t.category_id)[0]
+            t.bucket = _category_bucket(s, t.category_id, t.direction)[0]
     audit(s, ctx, actor, "txn.unlink", f"txn:{a.id}", {"other": b.id, "kind": kind})
     return {"txn_id": a.id, "other_id": b.id, "kind": kind}
 
