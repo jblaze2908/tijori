@@ -42,5 +42,33 @@ git -C /opt/tijori log -1 deployed        # what's live
 rm /var/lib/tijori/failed-commit          # retry a rejected commit
 ```
 
+## Backups
+`deploy/backup.sh`, run nightly at 03:30 IST by `tijori-backup.timer`:
+
+- **What:** a `pg_dump -Fc` of the database, plus the stored-files volume. The files are already sealed by Tijori.
+- **Where:** restic, which encrypts again with `/etc/tijori/restic.pass`, to Google Drive through the rclone remote `tijori-drive`. The remote uses scope `drive.file`, so it sees only the folder it created.
+- **Kept:** 7 daily, 4 weekly and 12 monthly snapshots.
+- **Checked:** on the 1st (or with `VERIFY=1`), the latest dump is restored and must list its tables, and 5% of the repository is read back.
+
+Two secrets live outside the backup: `TIJORI_MASTER_KEY` (in `/etc/tijori/tijori.env`) and the restic password. Keep both in a password manager. Without the master key, the restored vault and files can't be read. Without the restic password, the backup can't be opened.
+
+One-time setup (as root on host):
+```bash
+apt-get install -y restic rclone
+umask 077; openssl rand -base64 36 > /etc/tijori/restic.pass
+rclone config    # new remote "tijori-drive", type drive, scope drive.file; authorise on a machine with a browser
+cp /opt/tijori/deploy/tijori-backup.{service,timer} /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now tijori-backup.timer
+VERIFY=1 systemctl start tijori-backup.service   # first run, with the restore check
+```
+
+Restore, on a fresh host with the two secrets and the rclone remote:
+```bash
+export RESTIC_REPOSITORY=rclone:tijori-drive:tijori-backup RESTIC_PASSWORD_FILE=/etc/tijori/restic.pass
+restic restore latest --target /restore
+# database: pg_restore -d tijori /restore/var/backups/tijori/nightly.dump
+# files: copy /restore/var/lib/docker/volumes/tijori_blobs/_data into the new tijori_blobs volume
+```
+
 ## Later
 Woodpecker CI, and tests if they're ever reintroduced, would run on pushes and PRs.

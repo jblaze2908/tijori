@@ -1,0 +1,17 @@
+[Unit]
+Description=Back up Tijori off-site (restic to Google Drive)
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/tijori
+Environment=DEPLOY_DIR=/opt/tijori
+Environment=TIJORI_ENV_FILE=/etc/tijori/tijori.env
+TimeoutStartSec=2h
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true
+PrivateTmp=true
+ExecStart=/opt/tijori/deploy/backup.sh
