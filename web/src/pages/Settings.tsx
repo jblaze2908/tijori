@@ -16,7 +16,7 @@ export const SECTIONS = [
   ["household", "Household"],
   ["rules", "Categories & rules"],
   ["notify", "Notifications & retention"],
-  ["claude", "Claude (MCP)"],
+  ["claude", "MCP"],
 ] as const;
 export type Section = (typeof SECTIONS)[number][0] | "accounts" | "upload";
 
@@ -90,7 +90,7 @@ export function Settings({ section }: { section: Section }) {
         )}
         {section === "claude" && (
           <>
-            <CardHead title="Claude (MCP)" x="read + categorize" />
+            <CardHead title="MCP" x="any MCP client" />
             <McpTokens />
           </>
         )}

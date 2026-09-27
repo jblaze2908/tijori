@@ -1,4 +1,5 @@
-"""MCP bearer tokens: shown once at creation, stored as SHA-256, revocable. At most 10 live per member."""
+"""MCP access: pasted bearer tokens (shown once, stored as SHA-256, at most 10 live per member) and the grants
+of apps connected by signing in (services/mcp_oauth.py). Both are listed and revoked here."""
 
 import hashlib
 import secrets
@@ -12,13 +13,14 @@ from tijori.db import MemberContext
 from tijori.models import McpToken
 from tijori.services.common import audit
 from tijori.services.errors import Invalid, NotFound
+from tijori.services.mcp_oauth import can_write
 
 MAX_LIVE = 10
 
 
 def _out(t: McpToken) -> dict[str, Any]:
     return {"id": t.id, "name": t.name, "created_at": t.created_at, "last_used_at": t.last_used_at,
-            "revoked": t.revoked_at is not None}
+            "revoked": t.revoked_at is not None, "kind": "app" if t.client_id else "token", "can_write": can_write(t.scope)}
 
 
 def list_tokens(s: Session, member_id: int) -> list[dict[str, Any]]:
@@ -26,7 +28,8 @@ def list_tokens(s: Session, member_id: int) -> list[dict[str, Any]]:
 
 
 def create(s: Session, ctx: MemberContext, actor: str, name: str) -> dict[str, Any]:
-    live = s.scalar(select(func.count()).where(McpToken.member_id == ctx.member_id, McpToken.revoked_at.is_(None)))
+    live = s.scalar(select(func.count()).where(McpToken.member_id == ctx.member_id, McpToken.revoked_at.is_(None),
+                                               McpToken.token_hash.is_not(None)))  # connected apps don't count
     if live >= MAX_LIVE:
         raise Invalid(f"at most {MAX_LIVE} live tokens; revoke one first")
     token = "tjm_" + secrets.token_urlsafe(32)

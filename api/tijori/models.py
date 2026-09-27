@@ -556,13 +556,74 @@ class OpsEvent(Base):
 
 
 class McpToken(Base):
-    """A bearer token for the MCP endpoint; only its SHA-256 is stored."""
+    """MCP access for one member: a pasted bearer token (only its SHA-256 is stored), or a connected app's
+    OAuth grant (client_id set, no token_hash; its tokens are in oauth_token)."""
 
     __tablename__ = "mcp_token"
     id: Mapped[int] = _pk()
     member_id: Mapped[int] = _member_fk()
     name: Mapped[str] = mapped_column(String(60))
-    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    token_hash: Mapped[str | None] = mapped_column(String(64), unique=True)
+    client_id: Mapped[str | None] = mapped_column(String(512))
+    scope: Mapped[str | None] = mapped_column(String(200))  # None: everything
     created_at: Mapped[datetime] = _created()
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class OAuthClient(Base):
+    """An MCP client: self-registered (RFC 7591), or a cached client ID metadata document."""
+
+    __tablename__ = "oauth_client"
+    client_id: Mapped[str] = mapped_column(String(512), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(12))
+    name: Mapped[str] = mapped_column(String(120))
+    redirect_uris: Mapped[list[str]] = mapped_column(ARRAY(Text))
+    auth_method: Mapped[str] = mapped_column(String(24))
+    secret_hash: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = _created()
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class OAuthRequest(Base):
+    """An authorization request waiting for sign-in and consent: ten minutes."""
+
+    __tablename__ = "oauth_request"
+    id_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    client_id: Mapped[str] = mapped_column(String(512))
+    redirect_uri: Mapped[str] = mapped_column(Text)
+    state: Mapped[str | None] = mapped_column(Text)
+    code_challenge: Mapped[str] = mapped_column(String(128))
+    scope: Mapped[str] = mapped_column(String(200))
+    member_id: Mapped[int | None] = _member_fk(nullable=True)
+    csrf_hash: Mapped[str | None] = mapped_column(String(64))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class OAuthCode(Base):
+    """An authorization code: single use, a few minutes."""
+
+    __tablename__ = "oauth_code"
+    code_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    client_id: Mapped[str] = mapped_column(String(512))
+    member_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("member.id", ondelete="CASCADE"))
+    household_id: Mapped[int] = mapped_column(BigInteger)
+    redirect_uri: Mapped[str] = mapped_column(Text)
+    code_challenge: Mapped[str] = mapped_column(String(128))
+    scope: Mapped[str] = mapped_column(String(200))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class OAuthToken(Base):
+    """A connected app's access or refresh token; only its SHA-256 is stored."""
+
+    __tablename__ = "oauth_token"
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    grant_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("mcp_token.id", ondelete="CASCADE"), index=True)
+    member_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("member.id", ondelete="CASCADE"))
+    household_id: Mapped[int] = mapped_column(BigInteger)
+    kind: Mapped[str] = mapped_column(String(8))
+    created_at: Mapped[datetime] = _created()
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

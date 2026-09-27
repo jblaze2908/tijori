@@ -1110,6 +1110,8 @@ class McpTokenOut(BaseModel):
     created_at: datetime
     last_used_at: datetime | None
     revoked: bool
+    kind: Literal["token", "app"] = "token"  # app: an MCP client connected by signing in (OAuth)
+    can_write: bool = True
     token: str | None = None  # only in the create response
 
 

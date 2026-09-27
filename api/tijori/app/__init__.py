@@ -11,9 +11,10 @@ from tijori.app.onboarding import public as public_router
 from tijori.app.onboarding import router as onboarding_router
 from tijori.app.mcp import build_tools
 from tijori.app.mcp import router as mcp_router
+from tijori.app.oauth import router as oauth_router
 from tijori.app.routes import router
 from tijori.app.uploads import router as uploads_router
-from tijori.app.web import SecurityHeaders, SpaFiles
+from tijori.app.web import MachineCors, SecurityHeaders, SpaFiles
 from tijori.app.writes import router as writes_router
 from tijori.app.schemas import Health
 from tijori.db import make_engine
@@ -41,6 +42,7 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     app.include_router(writes_router)
     app.include_router(onboarding_router)
     app.include_router(mcp_router)
+    app.include_router(oauth_router)
     app.include_router(public_router)
     app.state.mcp = build_tools(app)  # after every router: it checks each /api route has an MCP home
 
@@ -62,6 +64,7 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
         return Health(status="ok", database="ok")
 
     app.add_middleware(SecurityHeaders)
+    app.add_middleware(MachineCors)  # outermost: preflights never reach the app
     # Last: the UI catches every GET the API routes above did not claim.
     if settings.web_dist and (settings.web_dist / "index.html").exists():
         app.mount("/", SpaFiles(settings.web_dist), name="web")

@@ -915,10 +915,13 @@ Pushes go through ntfy (`TIJORI_NTFY_URL`, with `TIJORI_NTFY_TOKEN` when the ser
 
 ## MCP (`POST /mcp`)
 
-A Model Context Protocol server (protocol `2025-06-18`), so Claude can do anything the web can. It speaks JSON-RPC 2.0 over HTTP POST, one JSON response per request; notifications get 202 with no body.
+A Model Context Protocol server, so any MCP client (Claude, ChatGPT, Cursor and others) can do anything the web can. It speaks JSON-RPC 2.0 over HTTP POST, one JSON response per request; notifications get 202 with no body. `GET` and `DELETE` get 405: there are no sessions and no standalone stream.
 
-- **Auth:** `Authorization: Bearer tjm_…` only; the site cookie is not accepted, and `/api` does not accept the token. A missing, unknown or revoked token gets 401. The token binds row-level security like a web session. At most 120 calls a minute per token.
-- **Methods:** `initialize`, `ping`, `tools/list`, `tools/call`.
+- **Auth:** a bearer token only, never the site cookie. It is either an OAuth access token (see [Connecting a client](#connecting-a-client-oauth)) or a pasted `tjm_…` token. `/api` accepts neither. A missing, unknown, expired or revoked token gets 401, with `WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource/mcp", scope="tijori:read tijori:write"`. The token binds row-level security like a web session. At most 120 calls a minute per connection.
+- **Protocol revisions:** both kinds of client work.
+  - A request carrying `_meta["io.modelcontextprotocol/protocolVersion"]` is served as `2026-07-28`. `MCP-Protocol-Version`, `Mcp-Method` and, for `tools/call`, `Mcp-Name` must match the body (else 400, `-32020`). Any other version gets 400 with `-32022` and the supported list. The methods are `server/discover`, `tools/list` and `tools/call`; anything else gets 404 with `-32601`. Results carry `resultType` and `serverInfo`.
+  - Anything else is an `initialize`-based client (`2025-03-26` to `2025-11-25`), with `initialize`, `ping`, `tools/list` and `tools/call`.
+- **Origin:** a browser client's `Origin` must be `https`, or `http` on localhost, else 403. `/mcp` and the OAuth token, register and revoke endpoints answer CORS without credentials.
 - **Tools are grouped by outcome.** There are 11 tools, not one per endpoint. Each takes `{"action": "…", "args": {…}}`, and each action runs one `/api` route in-process as the token's member. So it validates, audit-logs (actor `mcp:<token id>`) and fails exactly as that route does. `tools/list` lists every action's arguments, generated from the route. The API refuses to start if an `/api` route has no action and isn't in the table of routes left out, below.
 - **Arguments:** path, query and body fields all go flat in `args`, under the names this document uses. `link` and `unlink` take the other txn as `other_txn_id`. `upload_statement` takes `text` (pdftotext `-layout` output) or `pdf_base64`, and a locked PDF is tried with the saved passwords. `import_sheet` takes `csv`.
 - **Results:** the route's JSON; a 204 becomes `{"ok": true}`. A 4xx returns `isError: true` with `<status>: <detail>`, and validation errors are cut down to `field: message`. A 5xx returns `internal error`.
@@ -938,7 +941,7 @@ A Model Context Protocol server (protocol `2025-06-18`), so Claude can do anythi
 | `edit_net_worth` | write | `set_value`, `set_remark`, `import_sheet` |
 | `edit_setup` | destructive | `add_account`, `edit_account`, `delete_account`, `upload_statement`, `remove_statement_password`, `edit_mail_source`, `delete_mail_source`, `test_mail_source`, `update_settings`, `rename_me`, `set_onboarding`, `set_classify_profile`, `test_notification`, `revoke_invite` |
 
-Read tools carry `readOnlyHint`, so a client can allow them and still ask before a write. `edit_setup` carries `destructiveHint`.
+Read tools carry `readOnlyHint`, so a client can allow them and still ask before a write. `edit_setup` carries `destructiveHint`. A read-only connection lists only the five read tools; calling a write tool gets 403 with `error="insufficient_scope"`.
 
 **Left out, on purpose (web only):**
 
@@ -958,7 +961,21 @@ Read tools carry `readOnlyHint`, so a client can allow them and still ask before
 - `GET` lists `[{id, name, created_at, last_used_at, revoked, token: null}]`.
 - `revoke` stops a token at once. It is audit-logged.
 
-Not built yet: OAuth for MCP (tokens are pasted by hand).
+Settings lists connected apps with the tokens (`kind` `app` or `token`, and `can_write`). Revoking an app disconnects it.
+
+### Connecting a client (OAuth)
+
+Add `https://tijori.example.com/mcp` in the client. It finds everything else itself, following the MCP authorization spec (revision `2026-07-28`):
+
+- **Discovery:** `GET /.well-known/oauth-protected-resource/mcp` (also at the root path) names the resource and the authorization server, which is Tijori itself. `GET /.well-known/oauth-authorization-server` has the endpoints and says `S256`, client ID metadata documents and `iss` are supported.
+- **Client:** a client ID metadata document (an `https` URL as `client_id`) or `POST /oauth/register` (RFC 7591).
+  - A metadata document is fetched only after a member has signed in. The fetch goes to port 443 on a public address only, with the address pinned, no redirects, at most 16 KiB, a 5 s timeout, and caching for 5 minutes to a day.
+  - Registration is open, rate-limited to 60 an hour in all, and an unused client is dropped after 7 days. An omitted `token_endpoint_auth_method` means `client_secret_basic`, as RFC 7591 says.
+  - A redirect URI must be `https`, `http` on localhost (any port), or an app's own reverse-DNS scheme.
+- **`GET /oauth/authorize`:** needs `response_type=code`, PKCE `S256`, a registered redirect URI, and `resource` if given must be this server. The member signs in with Google if needed, then sees a consent page. It shows the app, where the answer goes (with a warning for localhost), and a tick box for write access. Approving redirects with `code`, `state` and `iss`. An unknown app or redirect gets an error page, never a redirect.
+- **`POST /oauth/token`** (form): `authorization_code` (single use, 5 minutes, verifier checked) or `refresh_token`. Access tokens last an hour. Refresh tokens rotate and last 30 days from the last refresh. Reusing an old refresh token ends the connection. Scopes are `tijori:read` and `tijori:write`.
+- **`POST /oauth/revoke`** (RFC 7009): either token ends the connection.
+- Connecting the same app again replaces its old connection. At most 20 apps stay connected per member; the oldest makes room.
 
 ## Loans
 

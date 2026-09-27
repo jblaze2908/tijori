@@ -13,6 +13,8 @@ interface Token {
   created_at: string;
   last_used_at: string | null;
   revoked: boolean;
+  kind: "token" | "app";
+  can_write: boolean;
   token?: string | null;
 }
 const prefs = () => resource("/api/settings", (r: Prefs) => r, "prefs");
@@ -122,7 +124,7 @@ function Backup() {
   );
 }
 
-/** Bearer tokens for Claude's MCP connector; a token is shown once. */
+/** MCP access: apps connected by signing in, and bearer tokens (shown once) for clients that take a header. */
 export function McpTokens() {
   const st = read(tokens());
   const toast = useToast();
@@ -133,8 +135,9 @@ export function McpTokens() {
   return (
     <>
       <p className="sub">
-        Connect Claude to <span className="mono-n">{url}</span> with a bearer token. Claude can read summaries, transactions, subscriptions, net worth,
-        alerts and the Inbox, and file a transaction under a category. UPI handles of people are masked in what it sees.
+        Add <span className="mono-n">{url}</span> as a connector in any MCP client (Claude, ChatGPT, Cursor and others) and sign in when it asks. You choose
+        read-only or read and write. A client that takes a header instead can use a bearer token from below. UPI handles of people are masked in what it
+        sees.
       </p>
       <div className="row mt" style={{ gap: 8 }}>
         <input className="inp2" value={name} maxLength={60} onChange={(e) => setName(e.target.value)} aria-label="Token name" />
@@ -168,6 +171,7 @@ export function McpTokens() {
               {t.name}
               <small className="faint">
                 {" "}
+                · {t.kind === "app" ? `connected app, ${t.can_write ? "read and write" : "read only"}` : "token"}
                 · created {t.created_at.slice(0, 10)}
                 {t.last_used_at ? ` · used ${t.last_used_at.slice(0, 10)}` : " · never used"}
                 {t.revoked ? " · revoked" : ""}
@@ -181,13 +185,13 @@ export function McpTokens() {
                   try {
                     await request(`/api/mcp/tokens/${t.id}/revoke`, "POST", {});
                     invalidate(["/api/mcp/tokens"]);
-                    toast("Token revoked");
+                    toast(t.kind === "app" ? "Disconnected" : "Token revoked");
                   } catch {
                     toast("Couldn't revoke.");
                   }
                 }}
               >
-                Revoke
+                {t.kind === "app" ? "Disconnect" : "Revoke"}
               </button>
             )}
           </div>

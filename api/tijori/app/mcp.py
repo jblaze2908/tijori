@@ -4,7 +4,8 @@ Tools are grouped by outcome, not one per endpoint: each action names an /api ro
 through the app, so validation, RLS, audit and error shapes are the web's own. build_tools() fails the boot
 when an /api route is neither an action nor in EXCLUDED, which keeps MCP able to do what the API does.
 
-Auth is a member's bearer token only (never the site cookie). Per tools/call: one token check (lookup and
+Auth is a bearer token only, never the site cookie: a pasted tjm_ token, or an OAuth access token from any
+MCP client (app/oauth.py), whose scope may be read-only. Per tools/call: one token check (lookup and
 last_used_at), then the route's own bind and queries. Person UPI handles are masked in all text returned,
 since the output leaves Tijori (PLAN §10); payee keys stay whole because the writes take them back.
 """
@@ -33,13 +34,17 @@ from tijori.app.auth import MCP_IDENTITY, Identity
 from tijori.app.multipart import read_capped
 from tijori.app.ratelimit import RateLimiter
 from tijori.app.routes import MONTH_PATTERN
+from tijori.app.web import origin_ok
 from tijori.db import bind_member_by_mcp_token
 from tijori.models import McpToken
+from tijori.services import mcp_oauth as oauth
 from tijori.services.networth import MANUAL_KEYS
 
 log = logging.getLogger(__name__)
 router = APIRouter()
-PROTOCOL = "2025-06-18"
+MODERN = "2026-07-28"
+LEGACY = ("2025-11-25", "2025-06-18", "2025-03-26")  # initialize-based revisions, newest first
+SERVER_INFO = {"name": "tijori", "version": "2.1"}
 CALLS = RateLimiter(limit=120, window_s=60)  # per token; filing a whole Inbox stays well under it
 READ, WRITE, DESTRUCTIVE = "read", "write", "destructive"
 
@@ -177,6 +182,7 @@ class Op:
 class Tool:
     ops: dict[str, Op]
     listing: dict[str, Any]  # the tools/list entry
+    read_only: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,7 +219,7 @@ def build_tools(app: FastAPI) -> Registry:
             "inputSchema": {"type": "object", "additionalProperties": False, "required": ["action"], "properties": {
                 "action": {"type": "string", "enum": list(ops)},
                 "args": {"type": "object", "description": "The action's arguments, as listed in the description."}}},
-            "annotations": {"readOnlyHint": kind == READ, "destructiveHint": kind == DESTRUCTIVE}})
+            "annotations": {"readOnlyHint": kind == READ, "destructiveHint": kind == DESTRUCTIVE}}, kind == READ)
     if errors:
         raise RuntimeError("MCP is out of step with the API: " + "; ".join(sorted(errors)))
     return Registry(tools, [(compile_path(c.path)[0], frozenset(c.methods), c.name) for c in every])
@@ -435,61 +441,131 @@ async def _call(app: FastAPI, reg: Registry, tool: Tool, arguments: dict[str, An
     return _result(status, raw)
 
 
-def _touch(engine: Engine, token_hash: str) -> int | None:
-    """The token's id, stamping last_used_at; None when it is unknown or revoked."""
+def _touch(engine: Engine, token_hash: str) -> tuple[int, str | None] | None:
+    """(grant id, scope) for a live token, stamping last_used_at; None when it is unknown, expired or revoked."""
     with Session(engine) as s, s.begin():
         found = bind_member_by_mcp_token(s, token_hash)
         if found is None:
             return None
         s.execute(update(McpToken).where(McpToken.id == found[1]).values(last_used_at=datetime.now(UTC)))
-        return found[1]
+        return found[1], found[2]
 
 
 def _rpc(id_: Any, result: Any = None, error: tuple[int, str] | None = None) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": id_, **({"error": {"code": error[0], "message": error[1]}} if error else {"result": result})}
 
 
-def _unauthorized() -> Response:
-    return Response(status_code=401, headers={"WWW-Authenticate": "Bearer"})
+def _send(out: dict[str, Any], status: int = 200, headers: dict[str, str] | None = None) -> Response:
+    return Response(json.dumps(out, ensure_ascii=False), status_code=status, media_type="application/json", headers=headers)
+
+
+def _challenge(request: Request, status: int = 401, error: str | None = None, body: dict[str, Any] | None = None) -> Response:
+    """RFC 6750 / 9728: where the authorization server is, and which scopes to ask for."""
+    base = oauth.issuer(request.app.state.settings.public_url)
+    params = ([f'error="{error}"'] if error else []) + [
+        f'resource_metadata="{base}/.well-known/oauth-protected-resource/mcp"', f'scope="{" ".join(oauth.SCOPES)}"']
+    headers = {"WWW-Authenticate": "Bearer " + ", ".join(params)}
+    return _send(body, status, headers) if body else Response(status_code=status, headers=headers)
+
+
+def _header_value(v: str | None) -> str | None:
+    """Mcp-Name may carry =?base64?…?= (2026-07-28 value encoding)."""
+    if v and v.startswith("=?base64?") and v.endswith("?="):
+        try:
+            return base64.b64decode(v[9:-2], validate=True).decode()
+        except (binascii.Error, UnicodeDecodeError):
+            return None
+    return v
+
+
+def _modern_problem(request: Request, msg: dict[str, Any], version: str | None) -> tuple[int, dict[str, Any]] | None:
+    """2026-07-28 Streamable HTTP: the mirrored headers must match the body, and the version must be one we speak."""
+    h, id_, params = request.headers, msg.get("id"), msg.get("params") or {}
+    if h.get("mcp-protocol-version") != version:
+        return 400, _rpc(id_, error=(-32020, "MCP-Protocol-Version header does not match _meta protocolVersion"))
+    if version != MODERN:
+        return 400, {"jsonrpc": "2.0", "id": id_, "error": {"code": -32022, "message": "Unsupported protocol version",
+                                                           "data": {"supported": [MODERN, *LEGACY], "requested": version}}}
+    if h.get("mcp-method") != msg.get("method"):
+        return 400, _rpc(id_, error=(-32020, "Mcp-Method header does not match method"))
+    if msg.get("method") == "tools/call" and _header_value(h.get("mcp-name")) != params.get("name"):
+        return 400, _rpc(id_, error=(-32020, "Mcp-Name header does not match params.name"))
+    return None
+
+
+async def _dispatch(request: Request, msg: dict[str, Any], modern: bool, token_hash: str, token_id: int,
+                    scope: str | None) -> Response:
+    reg: Registry = request.app.state.mcp
+    method, id_, params = msg["method"], msg.get("id"), msg.get("params") or {}
+    writable = oauth.can_write(scope)
+    stamp = {"resultType": "complete", "_meta": {"io.modelcontextprotocol/serverInfo": SERVER_INFO}} if modern else {}
+    if method == "initialize" and not modern:
+        asked = params.get("protocolVersion")
+        return _send(_rpc(id_, {"protocolVersion": asked if asked in LEGACY else LEGACY[0], "capabilities": {"tools": {}},
+                                "serverInfo": SERVER_INFO}))
+    if method == "ping" and not modern:
+        return _send(_rpc(id_, {}))
+    if method == "server/discover":
+        return _send(_rpc(id_, {"resultType": "complete", "supportedVersions": [MODERN, *LEGACY],
+                                "capabilities": {"tools": {}}, "_meta": {"io.modelcontextprotocol/serverInfo": SERVER_INFO},
+                                "ttlMs": 3_600_000, "cacheScope": "public"}))
+    if method == "tools/list":
+        tools = [t.listing for t in reg.tools.values() if writable or t.read_only]  # a read-only grant sees reads only
+        return _send(_rpc(id_, {"tools": tools, **stamp, **({"ttlMs": 300_000, "cacheScope": "private"} if modern else {})}))
+    if method == "tools/call":
+        tool = reg.tools.get(params.get("name"))  # type: ignore[arg-type]
+        arguments = params.get("arguments") or {}
+        if tool is None or not isinstance(arguments, dict):
+            return _send(_rpc(id_, error=(-32602, f"unknown tool; one of {', '.join(reg.tools)}")))
+        if not (writable or tool.read_only):
+            return _challenge(request, 403, "insufficient_scope",
+                              _rpc(id_, error=(-32001, "this connection is read-only; reconnect and allow changes")))
+        result = await _call(request.app, reg, tool, arguments, Identity("mcp", token_hash), token_id)
+        return _send(_rpc(id_, {**result, **stamp}))
+    return _send(_rpc(id_, error=(-32601, "method not found")), 404 if modern else 200)
 
 
 @router.post("/mcp")
 async def mcp(request: Request) -> Response:
+    """Dual-era: a request with per-request _meta (2026-07-28) is served statelessly; anything else is a
+    legacy client (initialize-based, 2025-03-26 to 2025-11-25). Both are stateless here."""
+    origin = request.headers.get("origin")
+    if origin is not None and not origin_ok(origin):  # Streamable HTTP: an invalid Origin gets 403
+        return _send({"jsonrpc": "2.0", "error": {"code": -32600, "message": "origin not allowed"}}, 403)
     auth = request.headers.get("authorization", "")
     tok = auth[7:].strip() if auth.lower().startswith("bearer ") else None
     if not tok:
-        return _unauthorized()
+        return _challenge(request)
     # A base64 PDF is a third bigger than the file; the upload route applies the real cap.
     raw = await read_capped(request, request.app.state.settings.max_upload_bytes * 4 // 3 + 64 * 1024)
     try:
         msg = json.loads(raw)
     except ValueError:
-        return Response(json.dumps(_rpc(None, error=(-32700, "parse error"))), media_type="application/json")
-    if not isinstance(msg, dict) or msg.get("jsonrpc") != "2.0":
-        return Response(json.dumps(_rpc(None, error=(-32600, "invalid request"))), media_type="application/json")
-    method, id_, params = msg.get("method"), msg.get("id"), msg.get("params") or {}
+        return _send(_rpc(None, error=(-32700, "parse error")), 400)
+    if (not isinstance(msg, dict) or msg.get("jsonrpc") != "2.0" or not isinstance(msg.get("method"), str)
+            or not isinstance(msg.get("params") or {}, dict)):
+        return _send(_rpc(None, error=(-32600, "invalid request")), 400)
     token_hash = hashlib.sha256(tok.encode()).hexdigest()
-    token_id = await run_in_threadpool(_touch, request.app.state.engine, token_hash)
-    if token_id is None:
-        return _unauthorized()
-    if id_ is None:  # a notification (e.g. notifications/initialized): nothing to answer
+    found = await run_in_threadpool(_touch, request.app.state.engine, token_hash)
+    if found is None:
+        return _challenge(request, error="invalid_token")
+    if msg.get("id") is None:  # a notification (e.g. notifications/initialized): nothing to answer
         return Response(status_code=202)
-    reg: Registry = request.app.state.mcp
-    tools = reg.tools
-    if method == "initialize":
-        out = _rpc(id_, {"protocolVersion": PROTOCOL, "capabilities": {"tools": {}},
-                         "serverInfo": {"name": "tijori", "version": "2.0"}})
-    elif method == "ping":
-        out = _rpc(id_, {})
-    elif method == "tools/list":
-        out = _rpc(id_, {"tools": [t.listing for t in tools.values()]})
-    elif method == "tools/call" and isinstance(params, dict):
-        tool = tools.get(params.get("name"))  # type: ignore[arg-type]
-        arguments = params.get("arguments") or {}
-        if tool is None or not isinstance(arguments, dict):
-            out = _rpc(id_, error=(-32602, f"unknown tool; one of {', '.join(tools)}"))
-        else:
-            out = _rpc(id_, await _call(request.app, reg, tool, arguments, Identity("mcp", token_hash), token_id))
-    else:
-        out = _rpc(id_, error=(-32601, "method not found"))
-    return Response(json.dumps(out, ensure_ascii=False), media_type="application/json")
+    meta = (msg.get("params") or {}).get("_meta")
+    version = meta.get("io.modelcontextprotocol/protocolVersion") if isinstance(meta, dict) else None
+    header = request.headers.get("mcp-protocol-version")
+    modern = version is not None or header == MODERN
+    if modern:
+        problem = _modern_problem(request, msg, version)
+        if problem:
+            return _send(problem[1], problem[0])
+    elif header is not None and header not in LEGACY and msg["method"] != "initialize":
+        return _send(_rpc(msg.get("id"), error=(-32600, f"unsupported MCP-Protocol-Version {header[:20]}")), 400)
+    return await _dispatch(request, msg, modern, token_hash, *found)
+
+
+@router.get("/mcp")
+@router.delete("/mcp")
+def mcp_other_methods() -> Response:
+    """No standalone SSE stream and no sessions (2026-07-28 drops both; earlier revisions allow a 405)."""
+    return Response(status_code=405, headers={"Allow": "POST"})
