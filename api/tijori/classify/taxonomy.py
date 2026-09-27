@@ -35,6 +35,9 @@ def bucket_kind(bucket: Bucket, kind: Kind, credit_bucket: Bucket | None, direct
     return bucket, kind
 
 
+# Payee memory never learns from it: a later payment to the same payee comes back to the Inbox.
+UNRECALLED = "Don't remember"
+
 DEFAULT_CATEGORIES: tuple[CategoryDef, ...] = (
     # Spend
     CategoryDef("Groceries", "spend", "everyday", "Supermarkets and quick commerce: Blinkit, JioMart, Zepto, BigBasket."),
@@ -54,6 +57,8 @@ DEFAULT_CATEGORIES: tuple[CategoryDef, ...] = (
     CategoryDef("Insurance", "spend", "oneoff", "Health, life and vehicle insurance premiums."),
     CategoryDef("Tax", "spend", "oneoff", "Income tax and other direct tax payments."),
     CategoryDef("Cash", "cash", "oneoff", "Cash withdrawn by ATM or self cheque; spent untracked."),
+    CategoryDef(UNRECALLED, "spend", "oneoff", "Payments you can't place: sent counts as spend, received as income.",
+                "income"),
     # Not spend
     CategoryDef("Salary", "income", "income", "Salary and bonus from an employer."),
     CategoryDef("Interest", "income", "income", "Savings account and deposit interest."),

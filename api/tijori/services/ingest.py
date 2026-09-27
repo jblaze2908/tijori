@@ -14,7 +14,7 @@ from tijori.classify.engine import Classifier, Rule, TxnInput
 from tijori.classify.kinds import MemberProfile
 from tijori.classify.memory import PayeeMemory, memory_key
 from tijori.classify.narration import parse_narration
-from tijori.classify.taxonomy import CategoryDef
+from tijori.classify.taxonomy import UNRECALLED, CategoryDef
 from tijori.db import MemberContext
 from tijori.models import (
     Account,
@@ -110,7 +110,7 @@ def load_classifier(s: Session, ctx: MemberContext) -> Classifier:
         select(Txn.direction, Txn.payee_key, Category.name, func.count())
         .join(Category, Category.id == Txn.category_id)
         .where(Txn.member_id == ctx.member_id, Txn.payee_key.is_not(None),
-               Txn.classified_by.in_(("user", "system")))
+               Txn.classified_by.in_(("user", "system")), Category.name != UNRECALLED)
         .group_by(Txn.direction, Txn.payee_key, Category.name)
     ).all()
     memory = PayeeMemory.from_counts((memory_key(d, k), name, n) for d, k, name, n in counts)

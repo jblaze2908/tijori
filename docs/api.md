@@ -284,9 +284,9 @@ Categories visible to the member: household-wide ones plus the member's own, in 
   "kind": "spend", "bucket": "everyday", "credit_bucket": null, "parent_id": null, "scope": "household"}]
 ```
 
-The default taxonomy has 28 categories:
+The default taxonomy has 29 categories:
 
-- **Spend (16):** Groceries, Eating out, Shopping, Bills & subscriptions, Local shops, Travel, Health, Services, Bank charges, Family, Friends, Social circle, Entertainment, Insurance, Tax, Cash. Family, Friends and Social circle count credits as income (`credit_bucket`).
+- **Spend (17):** Groceries, Eating out, Shopping, Bills & subscriptions, Local shops, Travel, Health, Services, Bank charges, Family, Friends, Social circle, Entertainment, Insurance, Tax, Cash, Don't remember. Family, Friends, Social circle and Don't remember count credits as income (`credit_bucket`). Payee memory never learns from Don't remember, so a later payment to that payee comes back to the Inbox.
 - **Non-spend (12):** Salary, Interest, Dividends, Other income, Refunds, Reversals, Self transfer, Card bill payment, Pass-through, Loans, Investments, Investment redemptions. Loans is filed through [loans](#loans), not the category endpoints.
 
 ## `GET /api/inbox`
@@ -330,7 +330,7 @@ Files the group's Inbox txns. `{payee_key}` must be URL-encoded.
 | `remember` | bool, default false | Also create a member rule for the payee. `scope: "payee"` is accepted as an alias |
 | `txn_ids` | list of ints, ≤ 500 | Optional: file only these txns in the group |
 
-Returns `{"filed": 3, "rule_id": null}`, or `"rule:5"` when `remember` is set. Filed txns get `classified_by: "user"`, which is how payee memory learns. After two agreeing confirmations, the next statement files that payee automatically (`classified_by: "payee_memory"`).
+Returns `{"filed": 3, "rule_id": null}`, or `"rule:5"` when `remember` is set. Filed txns get `classified_by: "user"`, which is how payee memory learns. After two agreeing confirmations, the next statement files that payee automatically (`classified_by: "payee_memory"`), except for Don't remember.
 
 Errors: 404 when the group has no Inbox txns, or isn't yours. The call is audit-logged.
 
