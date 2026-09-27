@@ -44,7 +44,6 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 MODERN = "2026-07-28"
 LEGACY = ("2025-11-25", "2025-06-18", "2025-03-26")  # initialize-based revisions, newest first
-SERVER_INFO = {"name": "tijori", "version": "2.1"}
 CALLS = RateLimiter(limit=120, window_s=60)  # per token; filing a whole Inbox stays well under it
 READ, WRITE, DESTRUCTIVE = "read", "write", "destructive"
 
@@ -459,6 +458,14 @@ def _send(out: dict[str, Any], status: int = 200, headers: dict[str, str] | None
     return Response(json.dumps(out, ensure_ascii=False), status_code=status, media_type="application/json", headers=headers)
 
 
+def _server_info(request: Request) -> dict[str, Any]:
+    """MCP Implementation, with icons (2025-11-25+) so a client can show Tijori's logo rather than a generic one."""
+    base = oauth.issuer(request.app.state.settings.public_url)
+    return {"name": "tijori", "title": "Tijori", "version": "2.1", "websiteUrl": base,
+            "icons": [{"src": f"{base}/icon-256.png", "mimeType": "image/png", "sizes": ["256x256"]},
+                      {"src": f"{base}/favicon.svg", "mimeType": "image/svg+xml", "sizes": ["any"]}]}
+
+
 def _challenge(request: Request, status: int = 401, error: str | None = None, body: dict[str, Any] | None = None) -> Response:
     """RFC 6750 / 9728: where the authorization server is, and which scopes to ask for."""
     base = oauth.issuer(request.app.state.settings.public_url)
@@ -498,16 +505,17 @@ async def _dispatch(request: Request, msg: dict[str, Any], modern: bool, token_h
     reg: Registry = request.app.state.mcp
     method, id_, params = msg["method"], msg.get("id"), msg.get("params") or {}
     writable = oauth.can_write(scope)
-    stamp = {"resultType": "complete", "_meta": {"io.modelcontextprotocol/serverInfo": SERVER_INFO}} if modern else {}
+    info = _server_info(request)
+    stamp = {"resultType": "complete", "_meta": {"io.modelcontextprotocol/serverInfo": info}} if modern else {}
     if method == "initialize" and not modern:
         asked = params.get("protocolVersion")
         return _send(_rpc(id_, {"protocolVersion": asked if asked in LEGACY else LEGACY[0], "capabilities": {"tools": {}},
-                                "serverInfo": SERVER_INFO}))
+                                "serverInfo": info}))
     if method == "ping" and not modern:
         return _send(_rpc(id_, {}))
     if method == "server/discover":
         return _send(_rpc(id_, {"resultType": "complete", "supportedVersions": [MODERN, *LEGACY],
-                                "capabilities": {"tools": {}}, "_meta": {"io.modelcontextprotocol/serverInfo": SERVER_INFO},
+                                "capabilities": {"tools": {}}, "_meta": {"io.modelcontextprotocol/serverInfo": info},
                                 "ttlMs": 3_600_000, "cacheScope": "public"}))
     if method == "tools/list":
         tools = [t.listing for t in reg.tools.values() if writable or t.read_only]  # a read-only grant sees reads only

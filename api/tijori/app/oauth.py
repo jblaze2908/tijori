@@ -289,13 +289,20 @@ ul{padding-left:18px;margin:12px 0}label{display:flex;gap:8px;align-items:flex-s
 .row{display:flex;gap:8px;margin-top:20px}button{flex:1;font:inherit;padding:10px;border-radius:10px;
 border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer}
 button.ok{background:var(--acc);border-color:var(--acc);color:#fff}
+.brand{display:flex;align-items:center;gap:8px;margin:0 0 16px;font-weight:600}.logo{width:28px;height:28px}
 """
+
+
+# web/public/favicon.svg, inline: the pages' CSP (default-src 'none') loads no images.
+_LOGO = ("<svg class=logo viewBox='0 0 24 24' aria-hidden=true><rect width='24' height='24' rx='6' fill='#c9933a'/>"
+         "<g fill='none' stroke='#1a1405' stroke-width='2.2' stroke-linecap='round'><rect x='4' y='4' width='16' height='16' "
+         "rx='3'/><circle cx='12' cy='12' r='3.2'/><path d='M12 8.8V7M15.2 12H17'/></g></svg>")
 
 
 def _html(title: str, body: str, csp: str) -> HTMLResponse:
     doc = (f"<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content='width=device-width,"
            f"initial-scale=1'><title>{html.escape(title)} · Tijori</title><style>{_STYLE}</style></head>"
-           f"<body><main><div class=card>{body}</div></main></body></html>")
+           f"<body><main><div class=brand>{_LOGO}<span>Tijori</span></div><div class=card>{body}</div></main></body></html>")
     return HTMLResponse(doc, headers={**NO_STORE, "Content-Security-Policy": csp})
 
 
