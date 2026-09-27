@@ -60,15 +60,17 @@ function useNearest(xs: number[], W: number) {
   return { i: i != null && i < n ? i : null, pointer, keys };
 }
 
-/** The chart box's CSS width, so a chart can draw in real pixels: text and dots keep their size on a phone.
- *  Re-renders only when the box resizes. */
+/** The chart box's CSS width, so every chart draws in real pixels: a fixed viewBox stretched to the box blew text
+ *  and dots up on a wide page and shrank them on a phone. Read before first paint; re-renders only on resize. */
 function useBoxWidth(fallback: number) {
   const ref = useRef<HTMLDivElement>(null);
   const [w, setW] = useState(fallback);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const ro = new ResizeObserver(([e]) => setW(Math.round(e!.contentRect.width) || fallback));
+    const read = () => setW(Math.round(el.clientWidth) || fallback);
+    read();
+    const ro = new ResizeObserver(read);
     ro.observe(el);
     return () => ro.disconnect();
   }, [fallback]);
@@ -116,8 +118,8 @@ export function ProgressChart(o: {
   width?: number;
   height?: number;
 }) {
-  const W = o.width ?? 740;
-  const H = o.height ?? 300;
+  const [box, W] = useBoxWidth(o.width ?? 740);
+  const H = o.height ?? (W < 600 ? 220 : 300);
   const L = 44, R = W - 10, T = 12, B = H - 30;
   const top = niceMax(Math.max(o.projected ?? 0, ...o.actual, ...(o.normal ?? [0])));
   const x = (d: number) => L + ((d - 1) / Math.max(1, o.days - 1)) * (R - L);
@@ -140,8 +142,11 @@ export function ProgressChart(o: {
         ...(hov.normal != null ? [{ color: AX, dash: true, label: "Normal", value: inr(hov.normal), note: hov.spent != null ? signedK(hov.spent - hov.normal) : undefined }] : []),
       ];
   const hy = hov ? y(Math.max(hov.spent ?? 0, hov.proj ?? 0, hov.normal ?? 0)) : 0;
+  // End labels: the higher line's goes above it, the lower one's below, so close endings don't overprint.
+  const showProj = o.projected != null && today < o.days;
+  const projUp = !showProj || !o.normal || o.projected! >= o.normal.at(-1)!;
   return (
-    <div className="cbox">
+    <div className="cbox" ref={box}>
       <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Cumulative spend by day" {...pointer} {...keys}>
         {ticks.map((t) => (
           <g key={t}>
@@ -177,13 +182,13 @@ export function ProgressChart(o: {
         {o.projected != null && today < o.days && (
           <>
             <circle cx={x(o.days)} cy={y(o.projected)} r={3.5} fill="var(--s1)" stroke={BLUE} strokeWidth={1.5} />
-            <text x={R - 4} y={y(o.projected) - 12} textAnchor="end" className="ax now" fontSize={12}>
+            <text x={R - 4} y={y(o.projected) + (projUp ? -12 : 22)} textAnchor="end" className="ax now" fontSize={12}>
               {compact(o.projected)}
             </text>
           </>
         )}
         {o.normal && (
-          <text x={R - 4} y={y(o.normal.at(-1)!) + 22} textAnchor="end" className="ax" fontSize={12}>
+          <text x={R - 4} y={y(o.normal.at(-1)!) + (projUp ? 22 : -12)} textAnchor="end" className="ax" fontSize={12}>
             {compact(o.normal.at(-1)!)}
           </text>
         )}
@@ -221,14 +226,16 @@ export interface Stack {
 }
 /** One stacked bar per period; `projected` draws a dashed cap above the last bar. */
 export function StackedBars(o: { bars: { label: string; sub: string; stacks: Stack[]; projected?: Paise | null; now?: boolean; tip?: string }[]; normal?: Paise | null; height?: number }) {
-  const W = 1080;
-  const H = o.height ?? 280;
+  const [box, W] = useBoxWidth(1080);
+  const H = o.height ?? (W < 600 ? 220 : 280);
   const L = 48, R = W - 8, T = 16, B = H - 44;
   const totals = o.bars.map((b) => b.stacks.reduce((a, s) => a + s.value, 0));
   const top = niceMax(Math.max(...totals, ...o.bars.map((b) => b.projected ?? 0), o.normal ?? 0));
   const y = (v: number) => B - (v / top) * (B - T);
   const slot = (R - L) / Math.max(1, o.bars.length);
   const bw = Math.min(40, slot * 0.55);
+  // A "Jan '26" label needs ~52px; on a narrow box keep every k-th, counted back from the latest bar.
+  const every = Math.max(1, Math.ceil(52 / slot));
   const cxs = o.bars.map((_, i) => L + slot * i + slot / 2);
   const { i: hi, pointer, keys } = useNearest(cxs, W);
   const hb = hi == null ? null : o.bars[hi]!;
@@ -241,7 +248,7 @@ export function StackedBars(o: { bars: { label: string; sub: string; stacks: Sta
         ...(o.normal ? [{ color: "#ededed", dash: true, label: "Normal", value: inr(o.normal) }] : []),
       ];
   return (
-    <div className="cbox">
+    <div className="cbox" ref={box}>
       <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Spend by period" {...pointer} {...keys}>
         {[0, 1, 2, 3].map((i) => (
           <g key={i}>
@@ -266,12 +273,16 @@ export function StackedBars(o: { bars: { label: string; sub: string; stacks: Sta
               {b.projected != null && b.projected > acc && (
                 <rect x={cx - bw / 2} y={y(b.projected)} width={bw} height={y(acc) - y(b.projected)} fill="none" stroke="#9bb4ff" strokeDasharray="3 3" />
               )}
-              <text x={cx} y={B + 16} textAnchor="middle" className={`ax${b.now || hi === i ? " now" : ""}`}>
-                {b.label}
-              </text>
-              <text x={cx} y={B + 32} textAnchor="middle" className={`ax${b.now || hi === i ? " now" : ""}`}>
-                {b.sub}
-              </text>
+              {(o.bars.length - 1 - i) % every === 0 && (
+                <>
+                  <text x={cx} y={B + 16} textAnchor="middle" className={`ax${b.now || hi === i ? " now" : ""}`}>
+                    {b.label}
+                  </text>
+                  <text x={cx} y={B + 32} textAnchor="middle" className={`ax${b.now || hi === i ? " now" : ""}`}>
+                    {b.sub}
+                  </text>
+                </>
+              )}
             </g>
           );
         })}
@@ -380,8 +391,8 @@ export function LineChart(o: { labels: string[]; tips?: string[]; series: Line[]
 
 /** Net worth history (solid) and projection points (dotted), a dot on every point, labels on the key points. */
 export function NetWorthChart(o: { history: { date: string; value: Paise }[]; projection: { date: string; value: Paise }[]; label: (d: string) => string; height?: number; width?: number }) {
-  const W = o.width ?? 1100;
-  const H = o.height ?? 260;
+  const [box, W] = useBoxWidth(o.width ?? 1100);
+  const H = o.height ?? (W < 600 ? 200 : 260);
   const L = 48, R = W - 16, T = 24, B = H - 30;
   const all = [...o.history, ...o.projection];
   const t0 = all.length ? Date.parse(all[0]!.date) : 0, t1 = all.length ? Date.parse(all.at(-1)!.date) : 0;
@@ -401,7 +412,7 @@ export function NetWorthChart(o: { history: { date: string; value: Paise }[]; pr
   const hp = hi == null ? null : all[hi]!;
   const projected = hi != null && hi >= o.history.length;
   return (
-    <div className="cbox">
+    <div className="cbox" ref={box}>
       <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Net worth over time" {...pointer} {...keys}>
         {ticks.map((t) => (
           <g key={t}>
