@@ -16,7 +16,7 @@ from tijori.services.recurring import balances
 from tijori.services.secrets import names, remove, statement_password_name
 
 DEFAULT_MONTH_START_DAY = 1
-DEFAULT_RETENTION_DAYS = 365  # stored emails and PDFs; 0 keeps them forever
+DEFAULT_RETENTION_DAYS = 0  # keep forever until the member picks a window: purging is irreversible
 
 
 def _settings(settings: dict[str, Any], classify_config: dict[str, Any]) -> dict[str, Any]:

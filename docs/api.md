@@ -110,7 +110,7 @@ Needs no auth and returns no personal data.
 
 ## `GET /api/settings` and `PATCH /api/settings`
 
-`GET` returns `{"month_start_day": 1, "local_shop_cap": "500.00", "raw_retention_days": 365, "notify_topic": null, "notify_enabled": false}`.
+`GET` returns `{"month_start_day": 1, "local_shop_cap": "500.00", "raw_retention_days": 0, "notify_topic": null, "notify_enabled": false}`.
 
 `PATCH` takes a JSON body with at least one of the fields below, and returns the new settings. It is audit-logged.
 
@@ -118,7 +118,7 @@ Needs no auth and returns no personal data.
 |---|---|---|
 | `month_start_day` | integer 1–28 | The salary-cycle start. It moves every month boundary: summary, months, the transactions `month` filter, budgets, and trend months, quarters and FYs |
 | `local_shop_cap` | money string (`"750.00"`) or integer, 0–1,00,000 | A merchant-QR payment up to this amount auto-files as Local shops. It applies to statements uploaded after the change |
-| `raw_retention_days` | `0`, `90`, `180`, `365` (default), `730` | How long stored mail and files are kept. `0` keeps them forever. See [Retention](#retention) |
+| `raw_retention_days` | `0` (default), `90`, `180`, `365`, `730` | How long stored mail and files are kept. `0` keeps them forever. See [Retention](#retention) |
 | `notify_topic` | 12–64 of `A-Z a-z 0-9 _ -`, or `null` | The ntfy topic pushes go to. `null` removes it and turns notifications off. See [Notifications](#notifications) |
 | `notify_enabled` | bool | Send pushes. Has no effect without a topic |
 
@@ -853,9 +853,9 @@ The emails and files a txn was read from.
 
 ## Retention
 
-Stored mail and files are not kept forever. Once a day the worker removes those older than the member's `raw_retention_days`:
+Once a day the worker removes stored mail and files older than the member's `raw_retention_days`. Nothing is removed until the member picks a window (the default, `0`, keeps everything):
 
-- A message that was `parsed` or `ignored` goes after N days. One still waiting (`failed`, `parser_needed`, `needs_password`) gets 2N days, so a later parser or password can still read it.
+- A message that was `parsed` or `ignored` goes after N days. One still waiting gets 2N days, so a later parser or password can still read it: `failed`, `parser_needed`, `needs_password`, or a statement that didn't reconcile.
 - The row stays, with `purged_at` set. Its txns, statements and holdings are untouched: only the email and the files go.
 - A file is deleted only when no unremoved message or attachment still points at it.
 - `0` turns retention off.

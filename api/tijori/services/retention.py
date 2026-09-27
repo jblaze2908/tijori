@@ -1,6 +1,6 @@
 """Raw-file retention: stored emails and PDFs older than the member's setting are deleted; the rows and
-everything parsed from them stay (purged_at is set). Mail still waiting for a parser or a password is
-kept twice as long, so it can still be re-read. A file shared by two rows (the same PDF mailed twice) goes
+everything parsed from them stay (purged_at is set). Mail still waiting for a parser or a password, or a statement
+that didn't reconcile, is kept twice as long, so it can still be re-read. A file shared by two rows (the same PDF mailed twice) goes
 only when no unpurged row points at it. Runs daily from the collector; one pass is a few indexed queries
 plus one unlink per file."""
 
@@ -13,7 +13,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from tijori.db import MemberContext
-from tijori.models import Member, RawAttachment, RawMessage
+from tijori.models import Member, RawAttachment, RawMessage, Statement
 from tijori.services.members import DEFAULT_RETENTION_DAYS
 
 log = logging.getLogger("tijori.retention")
@@ -42,10 +42,14 @@ def purge(s: Session, ctx: MemberContext, root: Path, now: datetime | None = Non
         return {}
     now = now or datetime.now(UTC)
     cutoff, long_cutoff = now - timedelta(days=days), now - timedelta(days=2 * days)
+    # A statement that didn't reconcile is re-read hourly (collector.retry_stored), so it waits like a failure.
+    unreconciled = (select(RawAttachment.raw_message_id).join(Statement, Statement.raw_attachment_id == RawAttachment.id)
+                    .where(Statement.member_id == ctx.member_id, Statement.reconciled_at.is_(None)))
+    waiting = RawMessage.parse_status.in_(WAITING) | RawMessage.id.in_(unreconciled)
     msgs = s.scalars(select(RawMessage).where(
         RawMessage.member_id == ctx.member_id, RawMessage.purged_at.is_(None),
-        or_(RawMessage.parse_status.in_(DONE) & (RawMessage.received_at < cutoff),
-            RawMessage.parse_status.in_(WAITING) & (RawMessage.received_at < long_cutoff)))).all()
+        or_(RawMessage.parse_status.in_(DONE) & ~waiting & (RawMessage.received_at < cutoff),
+            waiting & (RawMessage.received_at < long_cutoff)))).all()
     out: dict[str, Any] = {"messages": 0, "files": 0}
     for m in msgs:
         refs = [m.blob_ref]
