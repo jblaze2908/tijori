@@ -915,30 +915,48 @@ Pushes go through ntfy (`TIJORI_NTFY_URL`, with `TIJORI_NTFY_TOKEN` when the ser
 
 ## MCP (`POST /mcp`)
 
-A Model Context Protocol server (protocol `2025-06-18`), so Claude can read your data. It speaks JSON-RPC 2.0 over HTTP POST, one JSON response per request; notifications get 202 with no body.
+A Model Context Protocol server (protocol `2025-06-18`), so Claude can do anything the web can. It speaks JSON-RPC 2.0 over HTTP POST, one JSON response per request; notifications get 202 with no body.
 
-- **Auth:** `Authorization: Bearer tjm_…` only; the site cookie is not accepted. A missing or unknown token gets 401. The token binds row-level security like a web session.
+- **Auth:** `Authorization: Bearer tjm_…` only; the site cookie is not accepted, and `/api` does not accept the token. A missing, unknown or revoked token gets 401. The token binds row-level security like a web session. At most 120 calls a minute per token.
 - **Methods:** `initialize`, `ping`, `tools/list`, `tools/call`.
-- **Masking:** person UPI handles come back as `ra***@okaxis`, since the output leaves Tijori. Merchant QR handles are kept.
-- **Errors:** a tool's bad argument or missing row returns `isError: true` with a short message.
+- **Tools are grouped by outcome.** There are 11 tools, not one per endpoint. Each takes `{"action": "…", "args": {…}}`, and each action runs one `/api` route in-process as the token's member. So it validates, audit-logs (actor `mcp:<token id>`) and fails exactly as that route does. `tools/list` lists every action's arguments, generated from the route. The API refuses to start if an `/api` route has no action and isn't in the table of routes left out, below.
+- **Arguments:** path, query and body fields all go flat in `args`, under the names this document uses. `link` and `unlink` take the other txn as `other_txn_id`. `upload_statement` takes `text` (pdftotext `-layout` output) or `pdf_base64`, and a locked PDF is tried with the saved passwords. `import_sheet` takes `csv`.
+- **Results:** the route's JSON; a 204 becomes `{"ok": true}`. A 4xx returns `isError: true` with `<status>: <detail>`, and validation errors are cut down to `field: message`. A 5xx returns `internal error`.
+- **Masking:** person UPI handles are masked anywhere in the output, narrations and email text included (`ra***@okaxis`), since it leaves Tijori. Merchant QR handles stay. `payee_key` and `payee_keys` also stay whole, because writes take them back.
 
-| Tool | Arguments | Returns |
+| Tool | Kind | Actions |
 |---|---|---|
-| `get_month_summary` | `month` (default: this cycle) | The [summary](#get-apisummary) plus spend by category |
-| `list_transactions` | `from`, `to`, `q`, `min`, `max`, `sort`, `limit` ≤ 100 | A page of txns and the totals of the whole filtered set |
-| `list_subscriptions` | none | Recurring series: cost per month, next due date, state |
-| `get_net_worth` | none | Live net worth by component and class, with month, year and FY changes |
-| `list_alerts` | `month` | [Alerts](#get-apialertsmonthyyyy-mm), budgets included |
-| `list_inbox` | none | Payees waiting to be filed, with their payments |
-| `categorize` | `txn_id`, `category` (name), `scope` `this` \| `payee` | Files the txn. `payee` also files that payee's future payments. Audit-logged as `mcp:<token id>` |
+| `get_reports` | read | `summary`, `months`, `trends`, `budgets`, `recurring`, `alerts`, `filing_stats` |
+| `find_transactions` | read | `search`, `get`, `sources`, `link_candidates`, `inbox` |
+| `get_loans` | read | `list`, `get`, `for_txn` |
+| `get_net_worth` | read | `live`, `history`, `holdings` |
+| `get_setup` | read | `me`, `accounts`, `cards`, `categories`, `rules`, `payees`, `payee_names`, `settings`, `onboarding`, `classify_profile`, `household`, `mail_sources`, `statement_queue`, `backup` |
+| `classify` | write | `set_category`, `file_payee`, `undo`, `set_rule`, `rename_payees`, `reset_payee_names`, `dismiss_name_suggestion` |
+| `edit_transactions` | write | `notes`, `split`, `unsplit`, `link`, `unlink` |
+| `plan_spending` | write | `set_budget`, `set_recurring` |
+| `edit_loans` | write | `create`, `edit`, `attach_txns`, `detach_txns`, `settle`, `reopen`, `write_off` |
+| `edit_net_worth` | write | `set_value`, `set_remark`, `import_sheet` |
+| `edit_setup` | destructive | `add_account`, `edit_account`, `delete_account`, `upload_statement`, `remove_statement_password`, `edit_mail_source`, `delete_mail_source`, `test_mail_source`, `update_settings`, `rename_me`, `set_onboarding`, `set_classify_profile`, `test_notification`, `revoke_invite` |
+
+Read tools carry `readOnlyHint`, so a client can allow them and still ask before a write. `edit_setup` carries `destructiveHint`.
+
+**Left out, on purpose (web only):**
+
+| Route | Why |
+|---|---|
+| `POST /api/invites` | It grants household access, and the invite link would pass through the model |
+| `GET /api/invites/{token}` | Public landing page: there is no member to act as |
+| The MCP token routes | A token must not mint or manage tokens |
+| `POST /api/mail-sources`, `POST /api/mail-sources/test` | They take an IMAP app password, which must not pass through the model. `edit_mail_source` can't set one either |
+| `PUT /api/accounts/{id}/statement-password`, `POST /api/accounts/{id}/statement-passwords` | They take a statement password |
+| `DELETE /api/accounts/{id}/statement-password` | `remove_statement_password` does the same |
+| `GET /api/raw/attachments/{id}` | The binary original, with unmasked account details |
 
 ### Tokens: `GET /api/mcp/tokens`, `POST /api/mcp/tokens`, `POST /api/mcp/tokens/{id}/revoke`
 
 - `POST` `{"name": "Claude"}` creates a token and returns it once, in `token`; only its SHA-256 is stored. A member can have at most 10 live tokens.
 - `GET` lists `[{id, name, created_at, last_used_at, revoked, token: null}]`.
 - `revoke` stops a token at once. It is audit-logged.
-
-| `list_loans` | none | [Loans](#loans): who, what's still owed, repayments |
 
 Not built yet: OAuth for MCP (tokens are pasted by hand).
 

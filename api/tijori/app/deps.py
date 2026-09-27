@@ -9,7 +9,7 @@ from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 
 from tijori.app.auth import Identity, authenticate
-from tijori.db import MemberContext, bind_member_by_email, bind_member_by_session
+from tijori.db import MemberContext, bind_member_by_email, bind_member_by_mcp_token, bind_member_by_session
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +21,11 @@ class MemberDB:
 
 def bind(session: Session, identity: Identity) -> tuple[MemberContext, str]:
     """Resolve the login and SET LOCAL the RLS context: one round-trip per request."""
+    if identity.kind == "mcp":
+        token = bind_member_by_mcp_token(session, identity.value)
+        if token is None:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "token revoked")
+        return token[0], f"mcp:{token[1]}"
     if identity.kind == "session":
         found = bind_member_by_session(session, identity.value)
         if found is None:

@@ -32,8 +32,12 @@ def session_cookie_name(settings: Settings) -> str:
 
 @dataclass(frozen=True, slots=True)
 class Identity:
-    kind: Literal["email", "session"]
-    value: str  # an email (dev header) or a session id hash; never the raw cookie
+    kind: Literal["email", "session", "mcp"]
+    value: str  # an email (dev header), a session id hash or an MCP token hash; never the raw secret
+
+
+# Set only by the in-process MCP dispatch (app/mcp.py): no HTTP client can write an ASGI scope key.
+MCP_IDENTITY = "tijori.mcp_identity"
 
 
 def _origin(url: str) -> str:
@@ -86,7 +90,7 @@ def build_auth(settings: Settings) -> AuthChain:
 
 
 def authenticate(request: Request) -> Identity:
-    identity = request.app.state.auth.authenticate(request)
+    identity = request.scope.get(MCP_IDENTITY) or request.app.state.auth.authenticate(request)
     if identity is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not signed in")
     return identity

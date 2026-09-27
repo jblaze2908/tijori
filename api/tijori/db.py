@@ -29,6 +29,14 @@ _BIND_BY_SESSION = text(
 )
 
 
+_BIND_BY_MCP_TOKEN = text(
+    "SELECT t.member_id, t.household_id, t.token_id,"
+    " set_config('tijori.member_id', t.member_id::text, true),"
+    " set_config('tijori.household_id', t.household_id::text, true)"
+    " FROM mcp_member_by_token(:token_hash) AS t"
+)
+
+
 @dataclass(frozen=True, slots=True)
 class MemberContext:
     member_id: int
@@ -52,6 +60,12 @@ def bind_member_by_session(session: Session, id_hash: str) -> tuple[MemberContex
     """(context, email) for a live session; the lookup and SET LOCAL share one round-trip."""
     row = session.execute(_BIND_BY_SESSION, {"id_hash": id_hash}).first()
     return (MemberContext(row.member_id, row.household_id), row.email) if row else None
+
+
+def bind_member_by_mcp_token(session: Session, token_hash: str) -> tuple[MemberContext, int] | None:
+    """(context, token id) for a live MCP token; the lookup and SET LOCAL share one round-trip."""
+    row = session.execute(_BIND_BY_MCP_TOKEN, {"token_hash": token_hash}).first()
+    return (MemberContext(row.member_id, row.household_id), row.token_id) if row else None
 
 
 @contextmanager

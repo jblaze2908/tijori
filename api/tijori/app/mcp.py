@@ -1,40 +1,381 @@
 """MCP server (PLAN §9): JSON-RPC over streamable HTTP at POST /mcp, one response per request.
 
-Auth is a member's bearer token only (never the site cookie): its SHA-256 is looked up through
-mcp_member_by_token() and binds row-level security like a web session. Person UPI handles are masked in
-everything returned, since the output leaves Tijori (PLAN §10). Per call: the token lookup, then the
-tool's own queries (the same services the web uses).
+Tools are grouped by outcome, not one per endpoint: each action names an /api route and runs it in-process
+through the app, so validation, RLS, audit and error shapes are the web's own. build_tools() fails the boot
+when an /api route is neither an action nor in EXCLUDED, which keeps MCP able to do what the API does.
+
+Auth is a member's bearer token only (never the site cookie). Per tools/call: one token check (lookup and
+last_used_at), then the route's own bind and queries. Person UPI handles are masked in all text returned,
+since the output leaves Tijori (PLAN §10); payee keys stay whole because the writes take them back.
 """
 
+import base64
+import binascii
 import hashlib
 import json
+import logging
 import re
-from datetime import UTC, date, datetime
-from decimal import Decimal
-from typing import Any, Callable
+import secrets
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
+from urllib.parse import quote, urlencode
 
-from fastapi import APIRouter, Request, Response
-from sqlalchemy import text, update
+import anyio
+from fastapi import APIRouter, FastAPI, Request, Response
+from fastapi.concurrency import run_in_threadpool
+from fastapi.routing import APIRoute, RouteContext, iter_route_contexts
+from sqlalchemy import Engine, update
 from sqlalchemy.orm import Session
+from starlette.routing import compile_path
 
-from tijori.db import MemberContext
+from tijori.app.auth import MCP_IDENTITY, Identity
+from tijori.app.multipart import read_capped
+from tijori.app.ratelimit import RateLimiter
+from tijori.app.routes import MONTH_PATTERN
+from tijori.db import bind_member_by_mcp_token
 from tijori.models import McpToken
-from tijori.services import alerts, loans, networth, recurring, reports, txns
-from tijori.services.common import month_start_day, today_ist
+from tijori.services.networth import MANUAL_KEYS
 
+log = logging.getLogger(__name__)
 router = APIRouter()
 PROTOCOL = "2025-06-18"
-_BIND = text("SELECT t.member_id, t.household_id, t.token_id, set_config('tijori.member_id', t.member_id::text, true),"
-             " set_config('tijori.household_id', t.household_id::text, true) FROM mcp_member_by_token(:h) AS t")
+CALLS = RateLimiter(limit=120, window_s=60)  # per token; filing a whole Inbox stays well under it
+READ, WRITE, DESTRUCTIVE = "read", "write", "destructive"
+
+# tool: (description, kind, {action: (route name, hint)}). Reads and writes are separate tools so a
+# client can allow the reads and still ask before a write.
+TOOLS: dict[str, tuple[str, str, dict[str, tuple[str, str]]]] = {
+    "get_reports": ("Spending and income views. A month is YYYY-MM, in the member's month cycle.", READ, {
+        "summary": ("summary", "spend, income, invested and spend by category for one month"),
+        "months": ("get_months", "every month with data, and its totals"),
+        "trends": ("trends", "totals per period, optionally grouped"),
+        "budgets": ("get_budgets", "budget vs actual and pace, per category"),
+        "recurring": ("get_recurring", "subscriptions, bills and SIPs: cost per month, next due date, state"),
+        "alerts": ("get_alerts", "rule alerts: duplicate charge, bounce risk, price rise, missed charge, budgets"),
+        "filing_stats": ("inbox_stats", "how the month's txns got their category, and how many still wait"),
+    }),
+    "find_transactions": ("Search and inspect transactions, and see what waits in the Inbox.", READ, {
+        "search": ("transactions", "a page of txns and the totals of the whole filtered set; category takes ids or 'none'"),
+        "get": ("transaction", "one txn with its observations, links, payee history and split parts"),
+        "sources": ("txn_sources", "the emails and files the txn was read from"),
+        "link_candidates": ("link_candidates", "txns this one could be linked to"),
+        "inbox": ("inbox", "txns waiting for a category; group=payee groups them by payee"),
+    }),
+    "get_loans": ("Money lent or borrowed.", READ, {
+        "list": ("get_loans", "every loan: who, how much is still owed"),
+        "get": ("get_loan", "one loan with its repayments"),
+        "for_txn": ("loan_picker", "open loans a txn could be filed under"),
+    }),
+    "get_net_worth": ("Net worth, its history and holdings.", READ, {
+        "live": ("networth_live", "net worth now by component and asset class, with month, year and FY change"),
+        "history": ("get_networth", "monthly snapshots, with remarks"),
+        "holdings": ("get_holdings", "funds and stocks with units and value"),
+    }),
+    "get_setup": ("Accounts, categories, rules, payees, settings and household.", READ, {
+        "me": ("get_me", "the signed-in member"),
+        "accounts": ("get_accounts", "accounts with sync health and coverage"),
+        "cards": ("get_cards", "credit card bills: statement, due date, paid"),
+        "categories": ("categories", "every category with its id, kind and bucket"),
+        "rules": ("get_rules", "classification rules and payee memory"),
+        "payees": ("get_payees", "find payees by name"),
+        "payee_names": ("get_payee_aliases", "the member's payee renames, and suggested ones"),
+        "settings": ("get_settings", "month start day, notifications, retention"),
+        "onboarding": ("get_onboarding", "onboarding progress"),
+        "classify_profile": ("get_profile", "what the classifier knows about the member (employer, family, own accounts)"),
+        "household": ("get_household", "household members and open invites"),
+        "mail_sources": ("list_mail_sources", "connected mailboxes and their last sync"),
+        "statement_queue": ("parse_queue", "documents that no parser could read yet"),
+        "backup": ("backup_status", "when the last backup ran"),
+    }),
+    "classify": ("File transactions under categories, and manage rules and payee names.", WRITE, {
+        "set_category": ("categorize", "file one txn by category_id or category name; scope=payee also files that payee's future payments"),
+        "file_payee": ("file_inbox", "file a payee's Inbox txns at once; remember=true keeps doing it"),
+        "undo": ("undo_filing", "send txns back to the Inbox, or undo what a rule filed"),
+        "set_rule": ("patch_rule", "turn a rule on or off"),
+        "rename_payees": ("rename_payees", "give payees one name"),
+        "reset_payee_names": ("reset_payees", "drop the member's names for these payees"),
+        "dismiss_name_suggestion": ("dismiss_alias_suggestion", "stop suggesting this name for the payee"),
+    }),
+    "edit_transactions": ("Notes, tags, splits and links on a transaction.", WRITE, {
+        "notes": ("patch_txn", "set notes and tags"),
+        "split": ("split_txn", "split one txn into 2 to 10 parts, each with its category; amounts are rupee strings"),
+        "unsplit": ("unsplit_txn", "undo a split"),
+        "link": ("link_txn", "link this txn to other_txn_id as a transfer, refund, duplicate or pass-through"),
+        "unlink": ("unlink_txn", "remove that link"),
+    }),
+    "plan_spending": ("Budgets and recurring charges.", WRITE, {
+        "set_budget": ("put_budget", "set or clear (amount null) a category's monthly budget; amount is a rupee string"),
+        "set_recurring": ("put_recurring", "confirm, reject or end a recurring series, with its cadence and expected amount"),
+    }),
+    "edit_loans": ("Record and settle money lent or borrowed.", WRITE, {
+        "create": ("create_loan", "a new loan, optionally from txns"),
+        "edit": ("patch_loan", "change who, when, the opening amount or the note"),
+        "attach_txns": ("attach_loan_txns", "count txns as this loan's lending or repayments"),
+        "detach_txns": ("detach_loan_txns", "stop counting those txns"),
+        "settle": ("settle_loan", "mark it repaid"),
+        "reopen": ("reopen_loan", "open it again"),
+        "write_off": ("write_off_loan", "give up on the rest, filed under category_id"),
+    }),
+    "edit_net_worth": ("Manual net-worth values, snapshot remarks and the sheet import.", WRITE, {
+        "set_value": ("put_component", f"set a manual component ({'|'.join(MANUAL_KEYS)}) as of a date; the rest come from statements"),
+        "set_remark": ("patch_remark", "the remark on a monthly snapshot"),
+        "import_sheet": ("import_sheet", "the net-worth Google Sheet as CSV text; upserts by month"),
+    }),
+    "edit_setup": ("Accounts, statements, mailboxes, settings and household. Deletes cannot be undone.", DESTRUCTIVE, {
+        "add_account": ("create_account", "a new bank, card or investment account"),
+        "edit_account": ("patch_account", "rename it or change its last digits"),
+        "delete_account": ("delete_account", "delete the account"),
+        "upload_statement": ("upload", "a statement as pdftotext -layout text, or a PDF as base64; locked PDFs try the saved passwords"),
+        "remove_statement_password": ("remove_statement_password", "forget one saved statement password"),
+        "edit_mail_source": ("patch_mail_source", "relabel a mailbox"),
+        "delete_mail_source": ("delete_mail_source", "disconnect a mailbox"),
+        "test_mail_source": ("test_mail_source", "log in to a saved mailbox and count its messages"),
+        "update_settings": ("patch_settings", "month start day, local shop cap, notifications, raw retention; null notify_topic clears it"),
+        "rename_me": ("rename_me", "the member's display name"),
+        "set_onboarding": ("patch_onboarding", "move the onboarding step"),
+        "set_classify_profile": ("put_profile", "replace what the classifier knows about the member"),
+        "test_notification": ("notify_test", "send a test push to the notification topic"),
+        "revoke_invite": ("revoke_invite", "cancel an open household invite"),
+    }),
+}
+
+# Routes MCP deliberately leaves out, and why.
+EXCLUDED = {
+    "invite_info": "public invite landing page; there is no member to act as",
+    "create_invite": "grants household access, and the invite link would pass through the model",
+    "get_mcp_tokens": "MCP tokens are managed by the signed-in person only",
+    "create_mcp_token": "a token must not mint tokens",
+    "revoke_mcp_token": "MCP tokens are managed by the signed-in person only",
+    "create_mail_source": "takes an IMAP app password, which must not pass through the model",
+    "test_new_mail_source": "takes an IMAP app password, which must not pass through the model",
+    "put_statement_password": "takes a statement password, which must not pass through the model",
+    "add_statement_password": "takes a statement password, which must not pass through the model",
+    "delete_statement_password": "remove_statement_password does the same",
+    "raw_attachment": "binary original with unmasked account details",
+}
+RENAMES = {"link_txn": {"other_txn_id": "txn_id"}, "unlink_txn": {"other_txn_id": "txn_id"}}  # argument → body field
+DENIED = {"patch_mail_source": {"app_password"}}  # body fields MCP never sends
+UPLOADS = {"upload": ("file", "text?: str, pdf_base64?: str, filename?: str"), "import_sheet": ("sheet", "csv: str")}
+
+
+@dataclass(frozen=True, slots=True)
+class Op:
+    name: str  # the route's name
+    method: str
+    path: str  # the path format, e.g. /api/loans/{loan_id}
+    path_params: frozenset[str]
+    query: frozenset[str]
+    body: frozenset[str] | None  # argument names that go in the JSON body; None: no JSON body
+    renames: dict[str, str]
+    upload: str | None  # the multipart field, for the upload routes
+    sig: str
+    hint: str
+
+
+@dataclass(frozen=True, slots=True)
+class Tool:
+    ops: dict[str, Op]
+    listing: dict[str, Any]  # the tools/list entry
+
+
+@dataclass(frozen=True, slots=True)
+class Registry:
+    tools: dict[str, Tool]
+    matchers: list[tuple[re.Pattern[str], frozenset[str], str]]  # every API route in router order: regex, methods, name
+
+
+def build_tools(app: FastAPI) -> Registry:
+    """Once per process, after the routers are included. Raises when MCP and the API disagree: an /api
+    route with no action and no EXCLUDED reason, a name no route has, or an argument with two homes."""
+    spec = app.openapi()
+    defs = spec.get("components", {}).get("schemas", {})
+    every = [c for c in iter_route_contexts(app.routes) if isinstance(c.original_route, APIRoute)]
+    api = [c for c in every if c.path.startswith("/api/")]
+    routes = {r.name: r for r in api}
+    mapped = {name for _, _, acts in TOOLS.values() for name, _ in acts.values()}
+    errors = [f"two routes are named {n}" for n in routes if sum(r.name == n for r in api) > 1]
+    errors += [f"route {n} is neither an MCP action nor in EXCLUDED" for n in routes.keys() - mapped - EXCLUDED.keys()]
+    errors += [f"{n} names no /api route" for n in (mapped | EXCLUDED.keys()) - routes.keys()]
+    errors += [f"{n} is both an action and excluded" for n in mapped & EXCLUDED.keys()]
+    tools: dict[str, Tool] = {}
+    for name, (desc, kind, acts) in TOOLS.items():
+        ops: dict[str, Op] = {}
+        for action, (route_name, hint) in acts.items():
+            if route_name in routes:
+                try:
+                    ops[action] = _op(routes[route_name], spec, defs, hint)
+                except ValueError as exc:
+                    errors.append(str(exc))
+        lines = "\n".join(f"- {a}({op.sig}): {op.hint}" for a, op in ops.items())
+        tools[name] = Tool(ops, {
+            "name": name, "description": f"{desc} Pass the action and its args.\n{lines}",
+            "inputSchema": {"type": "object", "additionalProperties": False, "required": ["action"], "properties": {
+                "action": {"type": "string", "enum": list(ops)},
+                "args": {"type": "object", "description": "The action's arguments, as listed in the description."}}},
+            "annotations": {"readOnlyHint": kind == READ, "destructiveHint": kind == DESTRUCTIVE}})
+    if errors:
+        raise RuntimeError("MCP is out of step with the API: " + "; ".join(sorted(errors)))
+    return Registry(tools, [(compile_path(c.path)[0], frozenset(c.methods), c.name) for c in every])
+
+
+def _op(route: RouteContext, spec: dict[str, Any], defs: dict[str, Any], hint: str) -> Op:
+    method = next(iter(route.methods))
+    if route.name in UPLOADS:
+        field, sig = UPLOADS[route.name]
+        return Op(route.name, method, route.path_format, frozenset(), frozenset(), None, {}, field, sig, hint)
+    doc = spec["paths"][route.path_format][method.lower()]
+    params = doc.get("parameters", [])
+    path = [p for p in params if p["in"] == "path"]
+    query = [p for p in params if p["in"] == "query"]
+    body_ref = doc.get("requestBody", {}).get("content", {}).get("application/json", {}).get("schema")
+    body = _deref(body_ref, defs) if body_ref else None
+    renames = RENAMES.get(route.name, {})
+    arg_of = {field: arg for arg, field in renames.items()}
+    fields = {k: v for k, v in (body or {}).get("properties", {}).items() if k not in DENIED.get(route.name, ())}
+    required = set((body or {}).get("required", ()))
+    body_args = {arg_of.get(k, k): (v, k in required) for k, v in fields.items()}
+    clash = body_args.keys() & {p["name"] for p in params}
+    if clash:
+        raise ValueError(f"{route.name}: {sorted(clash)} is both a parameter and a body field; add a RENAMES entry")
+    sig = [f"{p['name']}{'' if p.get('required') else '?'}: {_ty(p.get('schema', {}), defs)}" for p in path + query]
+    sig += [f"{a}{'' if req else '?'}: {_ty(v, defs)}" for a, (v, req) in body_args.items()]
+    return Op(route.name, method, route.path_format, frozenset(p["name"] for p in path), frozenset(p["name"] for p in query),
+              frozenset(body_args) if body is not None else None, renames, None, ", ".join(sig), hint)
+
+
+def _deref(sc: dict[str, Any], defs: dict[str, Any]) -> dict[str, Any]:
+    while "$ref" in sc:
+        sc = defs[sc["$ref"].rsplit("/", 1)[1]]
+    return sc
+
+
+def _ty(sc: dict[str, Any], defs: dict[str, Any], depth: int = 0) -> str:
+    """A compact type for the tool description: int, YYYY-MM, a|b, {x, y?}[] and so on."""
+    sc = _deref(sc, defs)
+    if "enum" in sc:
+        return "|".join(map(str, sc["enum"]))
+    if "const" in sc:
+        return str(sc["const"])
+    if "anyOf" in sc:
+        return "|".join(dict.fromkeys(_ty(x, defs, depth) for x in sc["anyOf"] if x.get("type") != "null"))
+    kind = sc.get("type")
+    if kind == "array":
+        return _ty(sc.get("items", {}), defs, depth) + "[]"
+    if kind == "object" and "properties" in sc:
+        if depth >= 2:
+            return "obj"
+        req = set(sc.get("required", ()))
+        return "{" + ", ".join(f"{k}{'' if k in req else '?'}: {_ty(v, defs, depth + 1)}"
+                               for k, v in sc["properties"].items()) + "}"
+    if sc.get("pattern") == MONTH_PATTERN:
+        return "YYYY-MM"
+    if sc.get("format") == "date":
+        return "YYYY-MM-DD"
+    return {"integer": "int", "number": "num", "boolean": "bool", "string": "str", "object": "obj"}.get(kind, "any")
+
+
+def _request(op: Op, args: dict[str, Any]) -> tuple[str, list[tuple[str, str]], bytes, str]:
+    """(path, query, body, content type) for one action; ValueError names the bad argument."""
+    if op.upload:
+        return op.path, [], *_multipart(op.upload, args)
+    path: dict[str, str] = {}
+    query: list[tuple[str, str]] = []
+    body: dict[str, Any] = {}
+    for k, v in args.items():
+        if k in op.path_params:
+            path[k] = str(v)
+        elif k in op.query:
+            query += [(k, str(x).lower() if isinstance(x, bool) else str(x))
+                      for x in (v if isinstance(v, list) else [v]) if x is not None]
+        elif op.body is not None and k in op.body:
+            body[op.renames.get(k, k)] = v  # an explicit null is kept: some edits clear a field with it
+        else:
+            raise ValueError(f"unknown argument {k!r}; this action takes ({op.sig})")
+    missing = op.path_params - path.keys()
+    if missing:
+        raise ValueError(f"missing {', '.join(sorted(missing))}; this action takes ({op.sig})")
+    raw = json.dumps(body).encode() if op.body is not None else b""
+    return op.path.format(**path), query, raw, "application/json"
+
+
+def _multipart(field: str, args: dict[str, Any]) -> tuple[bytes, str]:
+    allowed = {"csv"} if field == "sheet" else {"text", "pdf_base64", "filename"}
+    if args.keys() - allowed:
+        raise ValueError(f"unknown argument {sorted(args.keys() - allowed)[0]!r}; takes {', '.join(sorted(allowed))}")
+    if field == "sheet":
+        if not isinstance(args.get("csv"), str):
+            raise ValueError("csv is required: the sheet exported as CSV text")
+        data, name = args["csv"].encode(), "sheet.csv"
+    else:
+        text, pdf = args.get("text"), args.get("pdf_base64")
+        if (text is None) == (pdf is None):
+            raise ValueError("send exactly one of text (pdftotext -layout output) or pdf_base64")
+        try:
+            data = str(text).encode() if text is not None else base64.b64decode(str(pdf), validate=True)
+        except binascii.Error as exc:
+            raise ValueError("pdf_base64 is not valid base64") from exc
+        name = re.sub(r"[^\w .\-]", "_", str(args.get("filename") or ("statement.pdf" if pdf else "statement.txt")))[:200]
+    boundary = secrets.token_hex(16)
+    head = (f'--{boundary}\r\nContent-Disposition: form-data; name="{field}"; filename="{name}"\r\n'
+            "Content-Type: application/octet-stream\r\n\r\n").encode()
+    return head + data + f"\r\n--{boundary}--\r\n".encode(), f"multipart/form-data; boundary={boundary}"
+
+
+def _resolves(reg: Registry, op: Op, path: str) -> bool:
+    """The first route that takes this method and path must be the action's own, so no argument can steer a
+    call to another route (say, an excluded one)."""
+    for regex, methods, name in reg.matchers:
+        if op.method in methods and regex.match(path):
+            return name == op.name
+    return False
+
+
+async def _asgi(app: FastAPI, method: str, path: str, query: list[tuple[str, str]], body: bytes, ctype: str,
+                identity: Identity) -> tuple[int, bytes]:
+    """Run one request through the whole app, as the MCP token's member."""
+    done = anyio.Event()
+    status, chunks, sent = 500, [], False
+
+    async def receive() -> dict[str, Any]:
+        nonlocal sent
+        if not sent:
+            sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        await done.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(msg: dict[str, Any]) -> None:
+        nonlocal status
+        if msg["type"] == "http.response.start":
+            status = msg["status"]
+        elif msg["type"] == "http.response.body":
+            chunks.append(msg.get("body", b""))
+            if not msg.get("more_body"):
+                done.set()
+
+    scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": method, "scheme": "http",
+             "path": path, "raw_path": quote(path).encode(), "root_path": "", "query_string": urlencode(query).encode(),
+             "headers": [(b"content-type", ctype.encode()), (b"content-length", str(len(body)).encode()),
+                         (b"x-requested-with", b"tijori")],
+             "client": ("127.0.0.1", 0), "server": ("mcp", 0), MCP_IDENTITY: identity}
+    await app(scope, receive, send)
+    return status, b"".join(chunks)
+
+
 _PERSON_VPA = re.compile(r"^([a-z0-9.\-_]{1,2})[a-z0-9.\-_]*(@[a-z]+)$", re.I)
+_HANDLE = re.compile(r"[a-z0-9.\-_]+@[a-z]+\b", re.I)
+_KEEP = frozenset({"payee_key", "payee_keys"})  # identifiers the writes take back
 
 
 def _mask(v: Any) -> Any:
-    """Person handles (name@bank) become as***@okicici; merchant QR handles are left as they are."""
+    """Person handles (name@bank) become as***@okicici wherever they appear; merchant QR handles stay."""
     if isinstance(v, dict):
-        return {k: (_mask_vpa(x) if k == "vpa" and isinstance(x, str) else _mask(x)) for k, x in v.items()}
+        return {k: x if k in _KEEP else _mask(x) for k, x in v.items()}
     if isinstance(v, list):
         return [_mask(x) for x in v]
+    if isinstance(v, str) and "@" in v:
+        return _HANDLE.sub(lambda m: _mask_vpa(m[0]), v)
     return v
 
 
@@ -45,140 +386,110 @@ def _mask_vpa(v: str) -> str:
     return f"{m[1]}***{m[2]}" if m else v
 
 
-def _json(o: Any) -> Any:
-    if isinstance(o, (date, datetime)):
-        return o.isoformat()
-    if isinstance(o, Decimal):
-        return str(o)
-    raise TypeError(type(o).__name__)
+def _error(msg: str) -> dict[str, Any]:
+    return {"content": [{"type": "text", "text": f"error: {msg}"[:600]}], "isError": True}
 
 
-def _month(args: dict[str, Any]) -> str:
-    m = str(args.get("month") or today_ist().strftime("%Y-%m"))
-    if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", m):
-        raise ValueError("month must be YYYY-MM")
-    return m
+def _detail(data: Any) -> str:
+    d = data.get("detail", data) if isinstance(data, dict) else data
+    if isinstance(d, list):  # pydantic errors: keep where and what, drop the echoed input
+        d = "; ".join(f"{'.'.join(map(str, e.get('loc', [])[1:])) or 'body'}: {e.get('msg')}" if isinstance(e, dict)
+                      else str(e) for e in d)
+    return str(d)
 
 
-def t_summary(s: Session, ctx: MemberContext, a: dict[str, Any], actor: str) -> Any:
-    m = _month(a)
-    return reports.summary(s, ctx.member_id, m, month_start_day(s, ctx.member_id))
+def _result(status: int, raw: bytes) -> dict[str, Any]:
+    try:
+        data = json.loads(raw) if raw else {"ok": True}
+    except ValueError:
+        return _error("internal error")
+    if status >= 500:
+        return _error("internal error")
+    if status >= 400:
+        return _error(f"{status}: {_detail(data)}")
+    data = _mask(data)
+    return {"content": [{"type": "text", "text": json.dumps(data, ensure_ascii=False, separators=(",", ":"))}],
+            "structuredContent": data if isinstance(data, dict) else {"items": data}}
 
 
-def t_transactions(s: Session, ctx: MemberContext, a: dict[str, Any], actor: str) -> Any:
-    def d(k: str) -> date | None:
-        return date.fromisoformat(a[k]) if a.get(k) else None
-    q = str(a["q"])[:100] if a.get("q") else None
-    f = txns.TxnFilter(date_from=d("from"), date_to=d("to"), q=q,
-                       min_amount=Decimal(str(a["min"])) if a.get("min") is not None else None,
-                       max_amount=Decimal(str(a["max"])) if a.get("max") is not None else None,
-                       sort=a.get("sort") if a.get("sort") in txns.SORTS else "date_desc")
-    out = txns.list_txns(s, ctx.member_id, f, 1, max(1, min(int(a.get("limit", 50)), 100)))
-    keep = ("id", "occurred_at", "amount", "direction", "merchant", "vpa", "category", "bucket", "account", "status")
-    return {"total": out["total"], "totals": out["totals"],
-            "items": [{k: (i[k]["name"] if k == "category" and i[k] else i[k]["label"] if k == "account" and i[k] else i[k])
-                       for k in keep} for i in out["items"]]}
+async def _call(app: FastAPI, reg: Registry, tool: Tool, arguments: dict[str, Any], identity: Identity, token_id: int) -> dict[str, Any]:
+    action, args = arguments.get("action"), arguments.get("args") or {}
+    op = tool.ops.get(action) if isinstance(action, str) else None
+    if op is None:
+        return _error(f"unknown action {action!r}; one of {', '.join(tool.ops)}")
+    if not isinstance(args, dict):
+        return _error("args must be an object")
+    if not CALLS.allow(str(token_id)):
+        return _error("too many calls; wait a minute")
+    try:
+        path, query, body, ctype = _request(op, args)
+    except ValueError as exc:
+        return _error(str(exc))
+    if not _resolves(reg, op, path):
+        return _error(f"these arguments do not fit {action}({op.sig})")
+    try:
+        status, raw = await _asgi(app, op.method, path, query, body, ctype, identity)
+    except Exception:  # the app already answered 500; log it here too, since the caller only sees "internal error"
+        log.exception("mcp action %s failed", action)
+        return _error("internal error")
+    return _result(status, raw)
 
 
-def t_subscriptions(s: Session, ctx: MemberContext, a: dict[str, Any], actor: str) -> Any:
-    out = recurring.list_recurring(s, ctx.member_id)
-    return {"totals": out["totals"], "items": [{k: x[k] for k in ("merchant", "kind", "cadence", "state", "amount_expected",
-                                                                "monthly_cost", "next_due", "last_at", "account")}
-                                               for x in out["items"]]}
-
-
-def t_net_worth(s: Session, ctx: MemberContext, a: dict[str, Any], actor: str) -> Any:
-    out = networth.live(s, ctx.member_id, today_ist())
-    return {k: out[k] for k in ("as_of", "net_worth", "liquid", "components", "by_asset_class", "changes")}
-
-
-def t_alerts(s: Session, ctx: MemberContext, a: dict[str, Any], actor: str) -> Any:
-    m = _month(a)
-    return alerts.month_alerts(s, ctx.member_id, m, month_start_day(s, ctx.member_id))
-
-
-def t_inbox(s: Session, ctx: MemberContext, a: dict[str, Any], actor: str) -> Any:
-    return txns.inbox_by_payee(s, ctx.member_id, 1, 25)
-
-
-def t_loans(s: Session, ctx: MemberContext, a: dict[str, Any], actor: str) -> Any:
-    return loans.list_loans(s, ctx.member_id)
-
-
-def t_categorize(s: Session, ctx: MemberContext, a: dict[str, Any], actor: str) -> Any:
-    scope = a.get("scope", "this")
-    if scope not in ("this", "payee"):
-        raise ValueError("scope must be this or payee")
-    return txns.set_category(s, ctx, actor, int(a["txn_id"]), category_id=None, category=str(a["category"])[:80], scope=scope)
-
-
-_S = {"type": "object", "additionalProperties": False}
-TOOLS: dict[str, tuple[str, dict[str, Any], Callable[[Session, MemberContext, dict[str, Any], str], Any]]] = {
-    "get_month_summary": ("Spend, income, invested and spend by category for one month cycle (YYYY-MM; default this month).",
-                          {**_S, "properties": {"month": {"type": "string"}}}, t_summary),
-    "list_transactions": ("Transactions with optional filters: from/to (YYYY-MM-DD), q (text), min/max (rupees), sort, "
-                          "limit (≤100). Returns the page and totals of the whole filtered set.",
-                          {**_S, "properties": {"from": {"type": "string"}, "to": {"type": "string"}, "q": {"type": "string"},
-                                                "min": {"type": "number"}, "max": {"type": "number"},
-                                                "sort": {"type": "string", "enum": list(txns.SORTS)},
-                                                "limit": {"type": "integer", "minimum": 1, "maximum": 100}}}, t_transactions),
-    "list_subscriptions": ("Recurring charges: subscriptions, bills, SIPs; cost per month, next due date, state.", _S, t_subscriptions),
-    "get_net_worth": ("Live net worth by component and asset class, with changes over month, year and FY.", _S, t_net_worth),
-    "list_alerts": ("Rule alerts for a month cycle: duplicate charge, bounce risk, price increase, missed charge, budgets.",
-                    {**_S, "properties": {"month": {"type": "string"}}}, t_alerts),
-    "list_loans": ("Loans you lent or borrowed: who, how much is still owed, repayments so far.", _S, t_loans),
-    "list_inbox": ("Payees waiting to be categorised, with their payments.", _S, t_inbox),
-    "categorize": ("File a transaction under a category by name; scope 'payee' also files that payee's future payments.",
-                   {**_S, "required": ["txn_id", "category"], "properties": {"txn_id": {"type": "integer"},
-                    "category": {"type": "string"}, "scope": {"type": "string", "enum": ["this", "payee"]}}}, t_categorize),
-}
+def _touch(engine: Engine, token_hash: str) -> int | None:
+    """The token's id, stamping last_used_at; None when it is unknown or revoked."""
+    with Session(engine) as s, s.begin():
+        found = bind_member_by_mcp_token(s, token_hash)
+        if found is None:
+            return None
+        s.execute(update(McpToken).where(McpToken.id == found[1]).values(last_used_at=datetime.now(UTC)))
+        return found[1]
 
 
 def _rpc(id_: Any, result: Any = None, error: tuple[int, str] | None = None) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": id_, **({"error": {"code": error[0], "message": error[1]}} if error else {"result": result})}
 
 
-def _token(request: Request) -> str | None:
-    auth = request.headers.get("authorization", "")
-    return auth[7:].strip() if auth.lower().startswith("bearer ") else None
+def _unauthorized() -> Response:
+    return Response(status_code=401, headers={"WWW-Authenticate": "Bearer"})
 
 
 @router.post("/mcp")
 async def mcp(request: Request) -> Response:
-    tok = _token(request)
+    auth = request.headers.get("authorization", "")
+    tok = auth[7:].strip() if auth.lower().startswith("bearer ") else None
     if not tok:
-        return Response(status_code=401, headers={"WWW-Authenticate": "Bearer"})
+        return _unauthorized()
+    # A base64 PDF is a third bigger than the file; the upload route applies the real cap.
+    raw = await read_capped(request, request.app.state.settings.max_upload_bytes * 4 // 3 + 64 * 1024)
     try:
-        msg = json.loads(await request.body())
+        msg = json.loads(raw)
     except ValueError:
         return Response(json.dumps(_rpc(None, error=(-32700, "parse error"))), media_type="application/json")
     if not isinstance(msg, dict) or msg.get("jsonrpc") != "2.0":
         return Response(json.dumps(_rpc(None, error=(-32600, "invalid request"))), media_type="application/json")
     method, id_, params = msg.get("method"), msg.get("id"), msg.get("params") or {}
-    engine = request.app.state.engine
-    with Session(engine) as s, s.begin():
-        row = s.execute(_BIND, {"h": hashlib.sha256(tok.encode()).hexdigest()}).first()
-        if row is None:
-            return Response(status_code=401, headers={"WWW-Authenticate": "Bearer"})
-        if id_ is None:  # a notification (e.g. notifications/initialized): nothing to answer
-            return Response(status_code=202)
-        ctx = MemberContext(row.member_id, row.household_id)
-        s.execute(update(McpToken).where(McpToken.id == row.token_id).values(last_used_at=datetime.now(UTC)))
-        if method == "initialize":
-            out = _rpc(id_, {"protocolVersion": PROTOCOL, "capabilities": {"tools": {}},
-                             "serverInfo": {"name": "tijori", "version": "1.0"}})
-        elif method == "ping":
-            out = _rpc(id_, {})
-        elif method == "tools/list":
-            out = _rpc(id_, {"tools": [{"name": n, "description": d, "inputSchema": sch} for n, (d, sch, _) in TOOLS.items()]})
-        elif method == "tools/call" and params.get("name") in TOOLS:
-            try:
-                data = _mask(json.loads(json.dumps(TOOLS[params["name"]][2](s, ctx, params.get("arguments") or {}, f"mcp:{row.token_id}"), default=_json)))
-                out = _rpc(id_, {"content": [{"type": "text", "text": json.dumps(data, ensure_ascii=False)}],
-                                 "structuredContent": data if isinstance(data, dict) else {"items": data}})
-            except (ValueError, LookupError, TypeError) as exc:  # Invalid, NotFound, bad arguments
-                s.rollback()
-                out = _rpc(id_, {"content": [{"type": "text", "text": f"error: {exc}"[:300]}], "isError": True})
+    token_hash = hashlib.sha256(tok.encode()).hexdigest()
+    token_id = await run_in_threadpool(_touch, request.app.state.engine, token_hash)
+    if token_id is None:
+        return _unauthorized()
+    if id_ is None:  # a notification (e.g. notifications/initialized): nothing to answer
+        return Response(status_code=202)
+    reg: Registry = request.app.state.mcp
+    tools = reg.tools
+    if method == "initialize":
+        out = _rpc(id_, {"protocolVersion": PROTOCOL, "capabilities": {"tools": {}},
+                         "serverInfo": {"name": "tijori", "version": "2.0"}})
+    elif method == "ping":
+        out = _rpc(id_, {})
+    elif method == "tools/list":
+        out = _rpc(id_, {"tools": [t.listing for t in tools.values()]})
+    elif method == "tools/call" and isinstance(params, dict):
+        tool = tools.get(params.get("name"))  # type: ignore[arg-type]
+        arguments = params.get("arguments") or {}
+        if tool is None or not isinstance(arguments, dict):
+            out = _rpc(id_, error=(-32602, f"unknown tool; one of {', '.join(tools)}"))
         else:
-            out = _rpc(id_, error=(-32601, "method not found"))
+            out = _rpc(id_, await _call(request.app, reg, tool, arguments, Identity("mcp", token_hash), token_id))
+    else:
+        out = _rpc(id_, error=(-32601, "method not found"))
     return Response(json.dumps(out, ensure_ascii=False), media_type="application/json")
