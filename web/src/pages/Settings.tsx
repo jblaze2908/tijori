@@ -6,7 +6,7 @@ import { MailSources } from "./setup/mail";
 import { ProfileForm } from "./setup/profile";
 import { HouseholdPanel, StatementPasswords } from "./setup/secrets";
 import { McpTokens, NotifyRetention } from "./Prefs";
-import { Rules, Sources } from "./Sources";
+import { PayeeNames, Rules, Sources } from "./Sources";
 
 export const SECTIONS = [
   ["general", "General"],
@@ -34,7 +34,12 @@ export function Settings({ section }: { section: Section }) {
       </nav>
       <div className="content">
       {current === "sources" && <Sources />}
-      {current === "rules" && <Rules />}
+      {current === "rules" && (
+        <>
+          <Rules />
+          <PayeeNames />
+        </>
+      )}
       {!["sources", "rules"].includes(current) && <div className="card settings-card">
         {section === "general" && (
           <>

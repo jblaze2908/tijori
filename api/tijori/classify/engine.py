@@ -7,6 +7,8 @@ Resolution order, first hit wins:
   4. household rules, then the brand dictionary
   5. UPI-handle heuristics (merchant QR under the cap → Local shops; people → Inbox)
   6. Inbox
+
+A member's payee alias (services/aliases) renames the merchant before step 1.
 """
 
 import re
@@ -116,7 +118,9 @@ class Rule:
     def specificity(self) -> int:
         return 0 if self.vpa else 1 if self.merchant else 2
 
-    def matches(self, txn: TxnInput, narr: Narration, merchant: str) -> bool:
+    def matches(self, txn: TxnInput, narr: Narration, merchant: str, parsed: str | None = None) -> bool:
+        """`merchant` is the name the txn goes by (the member's alias, if any); `parsed` the name before it,
+        so a rule made before the alias keeps matching."""
         if self.direction and txn.direction != self.direction:
             return False
         if self.account_id is not None and txn.account_id != self.account_id:
@@ -129,7 +133,8 @@ class Rule:
             # Exact on the 10-char prefix SBI keeps, so one rule covers both banks' spellings.
             return bool(narr.vpa_key) and self.vpa.lower()[:10] == narr.vpa_key
         if self.merchant:
-            return self.merchant.casefold() == merchant.casefold()
+            want = self.merchant.casefold()
+            return want == merchant.casefold() or (parsed is not None and want == parsed.casefold())
         assert self._rx is not None
         return bool(self._rx.search(narr.raw))
 
@@ -146,7 +151,7 @@ class Classifier:
     """Build once per batch: rules are sorted and memory loaded up front, not per txn.
 
     `categories` is the household's own list (custom ones included) over the defaults; a rule on a
-    category that isn't in it is dropped.
+    category that isn't in it is dropped. `aliases` maps payee_key to the member's name for that payee.
     """
 
     def __init__(
@@ -156,12 +161,14 @@ class Classifier:
         household_rules: Iterable[Rule] = (),
         memory: PayeeMemory | None = None,
         categories: Mapping[str, CategoryDef] | None = None,
+        aliases: Mapping[str, str] | None = None,
     ) -> None:
         self.profile = profile or MemberProfile()
         self.categories: Mapping[str, CategoryDef] = {**BY_NAME, **(categories or {})}
         self.member_rules = _ordered(r for r in member_rules if r.category in self.categories)
         self.household_rules = _ordered(r for r in household_rules if r.category in self.categories)
         self.memory = memory or PayeeMemory()
+        self.aliases: Mapping[str, str] = aliases or {}
 
     def _finish(self, txn: TxnInput, d: Decision) -> Decision:
         if d.category is None:
@@ -185,14 +192,16 @@ class Classifier:
 
     def _decide(self, txn: TxnInput) -> Decision:
         ident = self.identify(txn)
-        narr, brand_core, brand, merchant, key = (
+        narr, brand_core, brand, parsed, key = (
             ident.narration, ident.brand_core, ident.brand, ident.merchant, ident.payee_key
         )
+        alias = self.aliases.get(key)
+        merchant = alias or parsed
         base = dict(merchant=merchant, payee_key=key, vpa=narr.vpa)
         tentative: Kind = "spend" if txn.direction == "debit" else "income"
 
         for rule in self.member_rules:
-            if rule.matches(txn, narr, merchant):
+            if rule.matches(txn, narr, merchant, parsed):
                 return Decision(rule.kind or self.categories[rule.category].kind, rule.category, "rule", rule.rule_id,
                                 **base)
 
@@ -201,7 +210,7 @@ class Classifier:
         )
         if hit:
             return Decision(hit.kind, hit.category, "rule", hit.rule_id,
-                            **{**base, "merchant": hit.merchant or merchant})
+                            **{**base, "merchant": alias or hit.merchant or merchant})
 
         suggestion = None
         verdict = self.memory.lookup(memory_key(txn.direction, key))
@@ -215,7 +224,7 @@ class Classifier:
             suggestion = verdict.category
 
         for rule in self.household_rules:
-            if rule.matches(txn, narr, merchant):
+            if rule.matches(txn, narr, merchant, parsed):
                 return Decision(rule.kind or self.categories[rule.category].kind, rule.category, "rule", rule.rule_id,
                                 **base)
 

@@ -290,6 +290,22 @@ class Merchant(Base):
     default_category: Mapped[str | None] = mapped_column(String(80))
 
 
+class PayeeAlias(Base):
+    """The member's name for a payee (services/aliases). Payees sharing a name group as one merchant."""
+
+    __tablename__ = "payee_alias"
+    id: Mapped[int] = _pk()
+    member_id: Mapped[int] = _member_fk()
+    payee_key: Mapped[str] = mapped_column(String(80))
+    name: Mapped[str] = mapped_column(String(120))
+    original: Mapped[str] = mapped_column(String(120))  # merchant_norm before the alias; restored on reset
+    created_at: Mapped[datetime] = _created()
+    __table_args__ = (
+        UniqueConstraint("member_id", "payee_key"),
+        Index("ix_payee_alias_member_name", "member_id", "name"),
+    )
+
+
 class Recurring(Base):
     __tablename__ = "recurring"
     id: Mapped[int] = _pk()

@@ -27,6 +27,9 @@ import type {
   ISODate,
   LiveNetWorth,
   ParseQueue,
+  PayeeAlias,
+  PayeeMatch,
+  PayeeSuggested,
   Rule,
   TxnPage,
   TxnQuery,
@@ -258,6 +261,7 @@ const mapTxn = (t: ApiTxn): Transaction => ({
   account_kind: t.account?.kind ?? null,
   sources: t.sources ?? [],
   merchant: t.merchant ?? t.narration ?? "Unknown payee",
+  named: t.named ?? false,
   category: t.category?.name ?? null,
   category_id: t.category?.id ?? null,
   bucket: t.bucket,
@@ -437,6 +441,9 @@ export const api = {
   holdings: () => resource("/api/holdings", (r: { items: Holding[] }) => r.items),
   inboxStats: (month: MonthKey) => resource(`/api/inbox/stats?${qs({ month })}`, (r: InboxStats) => r),
   rules: () => resource("/api/rules", (r: { items: Rule[] }) => r.items),
+  payeeAliases: () => resource("/api/payee-aliases", (r: { items: PayeeAlias[]; suggestions: PayeeSuggested[] }) => r),
+  /** Payees whose name contains or looks like q: the candidates to give one name. */
+  payees: (q: string) => resource(`/api/payees?${qs({ q })}`, (r: { items: PayeeMatch[] }) => r.items),
   sourcesQueue: () => resource("/api/sources/queue", (r: ParseQueue) => r),
 };
 
@@ -561,6 +568,28 @@ export async function decideRecurring(
 ): Promise<void> {
   await request<unknown>(`/api/recurring/${encodeURIComponent(key)}`, "PUT", body);
   invalidate(["/api/recurring", "/api/trends", "/api/alerts"]);
+}
+
+const AFTER_ALIAS = [...AFTER_EDIT, "/api/payee-aliases", "/api/payees"];
+
+/** Gives these payees one name; payees sharing a name group as one merchant everywhere. */
+export async function renamePayees(name: string, payeeKeys: string[]): Promise<{ name: string; updated: number; similar: number }> {
+  const r = await request<{ name: string; updated: number; similar: number }>("/api/payee-aliases", "POST", { name, payee_keys: payeeKeys });
+  invalidate(AFTER_ALIAS);
+  return r;
+}
+
+/** Drops your names for these payees; their txns take back the name they had before. */
+export async function resetPayees(payeeKeys: string[]): Promise<{ restored: number }> {
+  const r = await request<{ restored: number }>("/api/payee-aliases/reset", "POST", { payee_keys: payeeKeys });
+  invalidate(AFTER_ALIAS);
+  return r;
+}
+
+/** "Not this": the alias is never suggested for that payee again. */
+export async function dismissAliasSuggestion(payeeKey: string, name: string): Promise<void> {
+  await request<unknown>("/api/payee-aliases/dismiss", "POST", { payee_key: payeeKey, name });
+  invalidate(["/api/payee-aliases", "/api/transactions/"]);
 }
 
 export async function setRuleEnabled(id: string, enabled: boolean): Promise<void> {

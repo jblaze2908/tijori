@@ -13,7 +13,7 @@ from tijori.classify.taxonomy import bucket_kind
 from tijori.db import MemberContext
 from tijori.models import Account, Category, Observation, RawMessage, Rule, RuleHit, Txn, TxnLink, TxnObservation
 from tijori.money import ZERO, fmt
-from tijori.services import cards, txn_edit
+from tijori.services import aliases, cards, txn_edit
 from tijori.services.common import audit, category_by_ref, cycle_bounds, txn_out, txn_query
 from tijori.services.errors import Invalid, NotFound
 from tijori.services.reports import is_expense
@@ -166,21 +166,27 @@ def get_txn(s: Session, member_id: int, txn_id: int) -> dict[str, Any]:
     ).all()
     payee = None
     if t.payee_key:
-        n, total = s.execute(
-            select(func.count(), func.coalesce(func.sum(Txn.amount), 0))
-            .where(Txn.member_id == member_id, Txn.payee_key == t.payee_key, Txn.direction == t.direction)
-        ).one()
-        hist = payee_history(s, member_id, {(t.payee_key, t.direction)})
+        # Payees the member gave one name count as one payee here.
+        alias, original, keys = aliases.group_of(s, member_id, t.payee_key)
+        same = and_(Txn.member_id == member_id, Txn.payee_key.in_(keys), Txn.direction == t.direction)
+        n, total = s.execute(select(func.count(), func.coalesce(func.sum(Txn.amount), 0)).where(same)).one()
+        hist: dict[tuple[int, str], int] = {}
+        for h in payee_history(s, member_id, {(k, t.direction) for k in keys}).values():
+            for x in h:
+                hist[(x["category_id"], x["category"])] = hist.get((x["category_id"], x["category"]), 0) + x["count"]
         recent = s.execute(
             select(Txn.id, Txn.occurred_at, Txn.amount, Category.name)
-            .outerjoin(Category, Category.id == Txn.category_id)
-            .where(Txn.member_id == member_id, Txn.payee_key == t.payee_key, Txn.direction == t.direction)
+            .outerjoin(Category, Category.id == Txn.category_id).where(same)
             .order_by(Txn.occurred_at.desc(), Txn.id.desc()).limit(PAYEE_RECENT)
         ).all()
         payee = {"payee_key": t.payee_key, "count": n, "total": fmt(total),
-                 "history": hist.get((t.payee_key, t.direction), []),
+                 "history": [{"category_id": c, "category": name, "count": k}
+                             for (c, name), k in sorted(hist.items(), key=lambda x: (-x[1], x[0][1]))],
                  "recent": [{"id": r.id, "occurred_at": r.occurred_at, "amount": fmt(r.amount), "category": r.name}
-                            for r in recent]}
+                            for r in recent],
+                 "alias": {"name": alias, "original": original, "payee_keys": sorted(keys)} if alias else None,
+                 "suggest": None if alias else aliases.suggest_for(s, member_id, t.payee_key,
+                                                                   [t.merchant_norm, t.counterparty])}
     return {
         "transaction": {**txn_out(row), "settles": cards.settles(s, member_id, [txn_id]).get(txn_id)},
         "observations": [
@@ -255,9 +261,13 @@ def _resolve_category(s: Session, ctx: MemberContext, category_id: int | None, n
 
 
 def _create_payee_rule(s: Session, ctx: MemberContext, cat: Category, vpa: str | None, merchant: str | None,
-                       direction: str | None) -> Rule:
-    if vpa:
-        match: dict[str, Any] = {"vpa": vpa}
+                       direction: str | None, alias: str | None = None) -> Rule:
+    """On the handle, else the name. An aliased payee's rule is on its alias, so it covers every payee sharing
+    the name (the classifier matches aliases, engine.Rule.matches)."""
+    if alias:
+        match: dict[str, Any] = {"merchant": alias}
+    elif vpa:
+        match = {"vpa": vpa}
     elif merchant:
         match = {"merchant": merchant}
     else:
@@ -293,10 +303,11 @@ def set_category(s: Session, ctx: MemberContext, actor: str, txn_id: int, *, cat
     s.execute(update(Txn).where(Txn.id == txn_id).values(**_filed_values(cat, "user", "user")))
     updated, rule_ref = 1, None
     if scope == "payee":
-        rule = _create_payee_rule(s, ctx, cat, t.vpa, t.merchant_norm, t.direction)
+        alias, _, keys = aliases.group_of(s, ctx.member_id, t.payee_key) if t.payee_key else (None, None, set())
+        rule = _create_payee_rule(s, ctx, cat, t.vpa, t.merchant_norm, t.direction, alias)
         rule_ref = f"rule:{rule.id}"
         others = s.scalars(
-            update(Txn).where(Txn.member_id == ctx.member_id, Txn.payee_key == t.payee_key,
+            update(Txn).where(Txn.member_id == ctx.member_id, Txn.payee_key.in_(keys),
                               Txn.direction == t.direction, Txn.id != txn_id,
                               Txn.classified_by.is_distinct_from("user"))
             .values(**_filed_values(cat, "rule", rule_ref)).returning(Txn.id)
@@ -329,8 +340,9 @@ def file_inbox(s: Session, ctx: MemberContext, actor: str, payee_key: str, *, ca
     rule_ref = None
     if remember:
         directions = {f.direction for f in filed}
+        alias = None if payee_key.startswith("txn:") else aliases.group_of(s, ctx.member_id, payee_key)[0]
         rule = _create_payee_rule(s, ctx, cat, filed[0].vpa, filed[0].merchant_norm,
-                                  directions.pop() if len(directions) == 1 else None)
+                                  directions.pop() if len(directions) == 1 else None, alias)
         rule_ref = f"rule:{rule.id}"
     audit(s, ctx, actor, "inbox.file", f"payee:{payee_key}",
           {"category_id": cat.id, "filed": len(filed), "rule_id": rule_ref})

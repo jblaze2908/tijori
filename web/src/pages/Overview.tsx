@@ -301,8 +301,8 @@ export function TxnLine({ t, today }: { t: Transaction; today: string }) {
         {unknown ? "?" : (t.merchant.replace(/[^A-Za-z0-9]/g, "")[0] ?? "•").toUpperCase()}
       </span>
       <span className="mid">
-        <b className={t.vpa && unknown ? "mono-n" : ""} style={t.vpa && unknown ? { fontSize: 13 } : undefined}>
-          {unknown && t.vpa ? t.vpa : t.merchant}
+        <b className={t.vpa && unknown && !t.named ? "mono-n" : ""} style={t.vpa && unknown && !t.named ? { fontSize: 13 } : undefined}>
+          {unknown && t.vpa && !t.named ? t.vpa : t.merchant}
         </b>
         <small>
           {unknown ? (

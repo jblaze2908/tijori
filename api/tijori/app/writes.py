@@ -25,6 +25,12 @@ from tijori.app.schemas import (
     McpTokenIn,
     McpTokenOut,
     NotifyTestOut,
+    PayeeDismissIn,
+    PayeeDismissOut,
+    PayeeRenameIn,
+    PayeeRenameOut,
+    PayeeResetIn,
+    PayeeResetOut,
     LinkIn,
     LinkResult,
     RecurringDecision,
@@ -44,7 +50,7 @@ from tijori.app.schemas import (
     SettingsIn,
     SettingsOut,
 )
-from tijori.services import budgets, loans, mcp_tokens, members, networth, notify, recurring, txn_edit, txns
+from tijori.services import aliases, budgets, loans, mcp_tokens, members, networth, notify, recurring, txn_edit, txns
 from tijori.services.common import today_ist
 from tijori.services.networth import COMPONENT_KEYS, MANUAL_KEYS
 from tijori.services.errors import NotFound
@@ -190,6 +196,21 @@ def put_recurring(db: MemberDep, payee_key: Annotated[str, Path(min_length=1, ma
     amount = Decimal(body.amount_expected) if body.amount_expected is not None else None
     return recurring.decide(db.session, db.ctx, db.actor, payee_key, body.decision, body.cadence, amount,
                             body.kind, body.ended)
+
+
+@router.post("/payee-aliases", response_model=PayeeRenameOut)
+def rename_payees(db: MemberDep, body: PayeeRenameIn) -> dict:
+    return aliases.rename(db.session, db.ctx, db.actor, body.name, body.payee_keys)
+
+
+@router.post("/payee-aliases/reset", response_model=PayeeResetOut)
+def reset_payees(db: MemberDep, body: PayeeResetIn) -> dict:
+    return aliases.reset(db.session, db.ctx, db.actor, body.payee_keys)
+
+
+@router.post("/payee-aliases/dismiss", response_model=PayeeDismissOut)
+def dismiss_alias_suggestion(db: MemberDep, body: PayeeDismissIn) -> dict:
+    return aliases.dismiss(db.session, db.ctx, db.actor, body.payee_key, body.name)
 
 
 @router.post("/inbox/{payee_key:path}/file", response_model=FileInboxOut)

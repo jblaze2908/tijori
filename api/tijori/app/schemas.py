@@ -45,6 +45,7 @@ class TxnOut(BaseModel):
     direction: str
     kind: str
     merchant: str | None
+    named: bool = False  # merchant is the member's own name for the payee (payee-aliases)
     counterparty: str | None
     vpa: str | None  # a person's handle is masked
     payee_key: str | None
@@ -113,12 +114,26 @@ class PayeeRecent(BaseModel):
     category: str | None
 
 
+class PayeeGroup(BaseModel):
+    name: str
+    original: str | None  # this payee's name before the alias
+    payee_keys: list[str]  # every payee sharing the name, this one included
+
+
+class AliasSuggestion(BaseModel):
+    name: str  # the alias it looks like
+    why: Literal["prefix", "words", "spelling"]
+    like: str  # the name it matched: the alias, or one of its payees' originals
+
+
 class PayeeStats(BaseModel):
     payee_key: str
     count: int
     total: Money
     history: list[PayeeHistory]
     recent: list[PayeeRecent]
+    alias: PayeeGroup | None = None
+    suggest: AliasSuggestion | None = None  # an alias this payee looks like, when it has none
 
 
 class SplitPartOut(BaseModel):
@@ -843,6 +858,84 @@ class RuleOut(BaseModel):
 
 class Rules(BaseModel):
     items: list[RuleOut]
+
+
+# --- payee aliases ---------------------------------------------------------------------------
+
+PayeeKey = Annotated[str, Field(min_length=1, max_length=80)]
+
+
+class PayeeRenameIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: Annotated[str, Field(min_length=1, max_length=120)]
+    payee_keys: list[PayeeKey] = Field(min_length=1, max_length=50)
+
+
+class PayeeRenameOut(BaseModel):
+    name: str
+    payee_keys: list[str]
+    updated: int
+    similar: int  # payees left without an alias that look like this name
+
+
+class PayeeResetIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    payee_keys: list[PayeeKey] = Field(min_length=1, max_length=50)
+
+
+class PayeeResetOut(BaseModel):
+    payee_keys: list[str]
+    restored: int
+
+
+class PayeeDismissIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    payee_key: PayeeKey
+    name: Annotated[str, Field(min_length=1, max_length=120)]
+
+
+class PayeeDismissOut(BaseModel):
+    payee_key: str
+    name: str
+
+
+class PayeeAliasOut(BaseModel):
+    payee_key: str
+    name: str
+    original: str
+    count: int
+
+
+class PayeeSuggested(BaseModel):
+    payee_key: str
+    merchant: str | None
+    counterparty: str | None
+    vpa: str | None
+    count: int
+    total: Money
+    last_at: date
+    suggest: AliasSuggestion
+
+
+class PayeeAliases(BaseModel):
+    items: list[PayeeAliasOut]
+    suggestions: list[PayeeSuggested]
+
+
+class PayeeMatch(BaseModel):
+    payee_key: str
+    merchant: str | None
+    counterparty: str | None
+    vpa: str | None
+    alias: str | None
+    why: Literal["contains", "prefix", "words", "spelling"]
+    count: int
+    total: Money
+    last_at: date
+
+
+class PayeeMatches(BaseModel):
+    items: list[PayeeMatch]
 
 
 class RulePatch(BaseModel):

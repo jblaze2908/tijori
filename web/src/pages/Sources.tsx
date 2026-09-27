@@ -1,6 +1,6 @@
 import { G } from "../components/Glyphs";
 import { useToast } from "../components/Toast";
-import { api, dataOf, read, setRuleEnabled } from "../lib/api";
+import { api, dataOf, dismissAliasSuggestion, read, renamePayees, resetPayees, setRuleEnabled } from "../lib/api";
 import { monogramColor } from "../lib/colors";
 import { dayShort, inr, plural, timeIST, toPaise } from "../lib/format";
 import { Link } from "../lib/router";
@@ -247,5 +247,108 @@ export function Rules() {
         <p className="state" style={{ padding: 0 }}>No rules yet. File a payee in the Inbox with "Always for this payee" to make one.</p>
       )}
     </section>
+  );
+}
+
+const WHY: Record<string, string> = { prefix: "same start", words: "same words", spelling: "similar spelling" };
+
+/** Your names for payees, and payees whose name matches one of them (a rule: services/aliases.likeness). */
+export function PayeeNames() {
+  const st = dataOf(read(api.payeeAliases()));
+  const toast = useToast();
+  const items = st?.items ?? [];
+  const suggestions = st?.suggestions ?? [];
+  const run = async (f: () => Promise<string>) => {
+    try {
+      toast(await f());
+    } catch {
+      toast("Couldn't save that. Try again.");
+    }
+  };
+  const names = new Set(items.map((a) => a.name)).size;
+  return (
+    <>
+      {suggestions.length > 0 && (
+        <section className="panel" aria-label="Similar payees">
+          <div className="panel-h">
+            <h2>Similar payees · {suggestions.length}</h2>
+            <span className="x">Name matches one of your payee names</span>
+          </div>
+          <table className="t2">
+            <thead>
+              <tr>
+                <th>Payee</th>
+                <th>Similar to</th>
+                <th>Match</th>
+                <th className="r">Payments</th>
+                <th className="r">Total</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {suggestions.map((p) => (
+                <tr key={p.payee_key}>
+                  <td>
+                    {p.merchant ?? p.payee_key}
+                    {p.vpa && <span className="muted mono-n"> · {p.vpa}</span>}
+                  </td>
+                  <td>{p.suggest.name}</td>
+                  <td className="muted">
+                    {WHY[p.suggest.why]}
+                    {p.suggest.like !== p.suggest.name ? ` · “${p.suggest.like}”` : ""}
+                  </td>
+                  <td className="r">{p.count}</td>
+                  <td className="r">{inr(toPaise(p.total))}</td>
+                  <td className="r" style={{ fontFamily: "inherit", whiteSpace: "nowrap" }}>
+                    <button type="button" className="linkish" onClick={() => run(async () => (await dismissAliasSuggestion(p.payee_key, p.suggest.name), `Not ${p.suggest.name}`))}>
+                      Not this
+                    </button>
+                    <button type="button" className="linkish" onClick={() => run(async () => { const r = await renamePayees(p.suggest.name, [p.payee_key]); return `Named ${r.name} · ${plural(r.updated, "transaction")}`; })}>
+                      Name it
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+      <section className="panel" aria-label="Payee names">
+        <div className="panel-h">
+          <h2>Payee names · {names}</h2>
+          <span className="x">Payees with one name count as one merchant</span>
+        </div>
+        {items.length ? (
+          <table className="t2">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Was</th>
+                <th>Payee</th>
+                <th className="r">Payments</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((a) => (
+                <tr key={a.payee_key}>
+                  <td>{a.name}</td>
+                  <td className="muted">{a.original}</td>
+                  <td className="mono-n muted">{a.payee_key}</td>
+                  <td className="r">{a.count}</td>
+                  <td className="r" style={{ fontFamily: "inherit" }}>
+                    <button type="button" className="linkish" onClick={() => run(async () => `Name reset · ${plural((await resetPayees([a.payee_key])).restored, "transaction")}`)}>
+                      Reset
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p className="state" style={{ padding: 0 }}>No payee names yet. Rename a payee from its transaction.</p>
+        )}
+      </section>
+    </>
   );
 }

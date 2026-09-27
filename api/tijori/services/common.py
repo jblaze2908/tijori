@@ -4,11 +4,11 @@ import hashlib
 from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, and_, select
 from sqlalchemy.orm import Session
 
 from tijori.db import MemberContext
-from tijori.models import Account, AuditLog, Category, Txn
+from tijori.models import Account, AuditLog, Category, PayeeAlias, Txn
 from tijori.money import fmt
 
 # India has no DST, so a fixed offset is exact and needs no tz database in the image.
@@ -57,11 +57,13 @@ def account_label(institution: str | None, name: str | None, mask: str | None) -
 
 
 def txn_query() -> Select[Any]:
+    """`named`: the member gave this payee a name (services/aliases); one row per txn, the alias is unique."""
     return (
         select(Txn, Category.name.label("category_name"), Account.institution, Account.name.label("account_name"),
-               Account.kind.label("account_kind"), Account.mask)
+               Account.kind.label("account_kind"), Account.mask, PayeeAlias.id.is_not(None).label("named"))
         .outerjoin(Category, Category.id == Txn.category_id)
         .outerjoin(Account, Account.id == Txn.account_id)
+        .outerjoin(PayeeAlias, and_(PayeeAlias.member_id == Txn.member_id, PayeeAlias.payee_key == Txn.payee_key))
     )
 
 
@@ -80,7 +82,7 @@ def txn_out(row: Any) -> dict[str, Any]:
     vpa, narration = t.vpa, t.narration
     return {
         "id": t.id, "occurred_at": t.occurred_at, "posted_at": t.posted_at, "amount": fmt(t.amount),
-        "currency": t.currency, "direction": t.direction, "kind": t.kind, "merchant": t.merchant_norm,
+        "currency": t.currency, "direction": t.direction, "kind": t.kind, "merchant": t.merchant_norm, "named": row.named,
         "counterparty": t.counterparty, "vpa": vpa, "payee_key": t.payee_key, "narration": narration,
         "account": account_ref(t.account_id, row.institution, row.account_name, row.account_kind, row.mask),
         "category": {"id": t.category_id, "name": row.category_name} if t.category_id is not None else None,

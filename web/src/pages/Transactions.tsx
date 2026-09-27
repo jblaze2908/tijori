@@ -499,7 +499,7 @@ function Row({ t, sel, onOpen }: { t: Transaction; sel: boolean; onOpen: () => v
           {t.category == null ? "?" : (t.merchant.replace(/[^A-Za-z0-9]/g, "")[0] ?? "•").toUpperCase()}
         </span>
         <span className="nmcol">
-          <span className={`nm${muted ? " muted" : ""}`}>{t.category == null && t.vpa ? t.vpa : t.merchant}</span>
+          <span className={`nm${muted ? " muted" : ""}`}>{t.category == null && t.vpa && !t.named ? t.vpa : t.merchant}</span>
           <small className="msub">
             {catText} · {t.account}
           </small>

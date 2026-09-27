@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { api, categorize, dataOf, decideRecurring, linkTxn, patchTxn, read, splitTxn, unsplitTxn } from "../lib/api";
+import { api, categorize, dataOf, decideRecurring, dismissAliasSuggestion, linkTxn, patchTxn, read, renamePayees, resetPayees, splitTxn, unsplitTxn } from "../lib/api";
 import { categoryColor, monogramColor } from "../lib/colors";
 import { dayLong, dayShort, inr, plural, timeIST, toPaise } from "../lib/format";
 import { navigate } from "../lib/router";
-import type { Cadence, Category, ClassifiedBy, LinkKind, Scope, Transaction } from "../lib/types";
+import type { AliasSuggestion, Cadence, Category, ClassifiedBy, LinkKind, Scope, Transaction } from "../lib/types";
 import { G } from "./Glyphs";
 import { LoanLine, LoanPicker } from "./Loans";
 import { useToast } from "./Toast";
@@ -24,11 +24,16 @@ export function TxnDrawer({ id, onClose, prev, next }: { id: string | null; onCl
   const [shown, setShown] = useState(id);
   if (id && id !== shown) setShown(id);
   const panel = useRef<HTMLDivElement>(null);
+  // The page passes new prev/next closures on every render; read them from a ref so a data refresh doesn't
+  // re-run the effect, which would move focus to Close mid-typing (then Space or Enter closes the drawer).
+  const nav = useRef({ onClose, prev, next });
+  nav.current = { onClose, prev, next };
   useEffect(() => {
     if (!open) return;
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     panel.current?.querySelector<HTMLElement>("[data-close]")?.focus();
     const onKey = (e: KeyboardEvent) => {
+      const { onClose, prev, next } = nav.current;
       if (e.key === "Escape") onClose();
       if (e.target instanceof HTMLElement && /input|textarea|select/i.test(e.target.tagName)) return;
       if (e.key === "ArrowUp" && prev) prev();
@@ -39,7 +44,7 @@ export function TxnDrawer({ id, onClose, prev, next }: { id: string | null; onCl
       removeEventListener("keydown", onKey);
       opener?.focus();
     };
-  }, [open, prev, next]);
+  }, [open]);
   return (
     <>
       <div className={`scrim${open ? " open" : ""}`} onClick={onClose} aria-hidden />
@@ -71,6 +76,7 @@ function Body({ id }: { id: string }) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [tagText, setTagText] = useState("");
+  const [renaming, setRenaming] = useState(false);
   if (st.status === "loading") return <div className="body"><p className="state">Loading…</p></div>;
   if (st.status === "error") return <div className="body"><p className="state">This transaction couldn't load.</p></div>;
   const d = st.data;
@@ -97,6 +103,15 @@ function Body({ id }: { id: string }) {
       toast("Couldn't save that. Try again.");
     } finally {
       setBusy(false);
+    }
+  };
+  const alias = d.payee?.alias ?? null;
+  const resetName = async () => {
+    try {
+      const r = await resetPayees([t.payee_key!]);
+      toast(`Name reset · ${plural(r.restored, "transaction")}`);
+    } catch {
+      toast("Couldn't reset the name. Try again.");
     }
   };
   const selfTransfer = categories.find((c) => c.name === "Self transfer");
@@ -127,7 +142,26 @@ function Body({ id }: { id: string }) {
           {dayLong(t.date)}
           {alertSeen?.received_at ? ` · ${timeIST(alertSeen.received_at)}` : ""} · {t.account}
         </div>
+        {t.payee_key && d.payee?.suggest && !renaming && <AliasHint payeeKey={t.payee_key} hint={d.payee.suggest} />}
         <div className="dl">
+          {t.payee_key && (
+            <div className="r">
+              <span>Name</span>
+              <span className="v">
+                {alias ? `Yours · was ${alias.original ?? "—"}${alias.payee_keys.length > 1 ? ` · ${alias.payee_keys.length} payees` : ""}` : "As printed"}
+                <span style={{ marginLeft: "auto" }}>
+                  {alias && !renaming && (
+                    <button type="button" className="linkish" onClick={resetName}>
+                      Reset
+                    </button>
+                  )}
+                  <button type="button" className="linkish" onClick={() => setRenaming((v) => !v)}>
+                    {renaming ? "Cancel" : "Rename"}
+                  </button>
+                </span>
+              </span>
+            </div>
+          )}
           <div className="r">
             <span>Category</span>
             <span className="v">
@@ -169,6 +203,7 @@ function Body({ id }: { id: string }) {
             </span>
           </div>
         </div>
+        {renaming && t.payee_key && <RenameBlock t={t} group={alias?.payee_keys ?? [t.payee_key]} onDone={() => setRenaming(false)} />}
         {toLoan && <LoanPicker txnId={id} onDone={() => setCat(null)} />}
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <span className="lbl">Status</span>
@@ -303,6 +338,113 @@ function Body({ id }: { id: string }) {
           {busy ? "Saving…" : "Save category"}
         </button>
       </div>
+    </>
+  );
+}
+
+const WHY: Record<string, string> = { contains: "contains it", prefix: "same start", words: "same words", spelling: "similar spelling" };
+
+/** Rule flag: this payee's name matches one of your names (services/aliases.likeness). */
+function AliasHint({ payeeKey, hint }: { payeeKey: string; hint: AliasSuggestion }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const act = async (accept: boolean) => {
+    setBusy(true);
+    try {
+      if (accept) {
+        const r = await renamePayees(hint.name, [payeeKey]);
+        toast(`Named ${r.name} · ${plural(r.updated, "transaction")}`);
+      } else {
+        await dismissAliasSuggestion(payeeKey, hint.name);
+        toast(`Not ${hint.name}`);
+      }
+    } catch {
+      toast("Couldn't save that. Try again.");
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="obs" style={{ flexWrap: "wrap" }}>
+      {G.link}
+      <span className="mid">
+        <span>Similar to {hint.name}</span>
+        <small>
+          {WHY[hint.why]}
+          {hint.like !== hint.name ? ` · “${hint.like}”` : ""}
+        </small>
+      </span>
+      <button type="button" className="btn2 sm" disabled={busy} onClick={() => act(false)}>
+        Not this
+      </button>
+      <button type="button" className="btn2 sm primary" disabled={busy} onClick={() => act(true)}>
+        Name it
+      </button>
+    </div>
+  );
+}
+
+/** Names this payee (and `group`, the payees already sharing its name); payees whose name contains or matches
+ * the typed one are listed to take it too. Payees with one name count as one merchant. */
+function RenameBlock({ t, group, onDone }: { t: Transaction; group: string[]; onDone: () => void }) {
+  const [name, setName] = useState(t.merchant);
+  const [q, setQ] = useState(t.merchant.trim());
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
+  useEffect(() => {
+    const h = setTimeout(() => setQ(name.trim()), 300);
+    return () => clearTimeout(h);
+  }, [name]);
+  const clean = name.trim().replace(/\s+/g, " ");
+  const n = group.length + picked.size;
+  const save = async () => {
+    if (!clean || busy) return;
+    setBusy(true);
+    try {
+      const r = await renamePayees(clean, [...group, ...picked]);
+      toast(`Named ${r.name} · ${plural(r.updated, "transaction")}${r.similar ? ` · ${plural(r.similar, "similar payee")} in Settings` : ""}`);
+      onDone();
+    } catch {
+      toast("Couldn't rename. Try again.");
+      setBusy(false);
+    }
+  };
+  const toggle = (k: string) => setPicked((p) => (p.has(k) ? new Set([...p].filter((x) => x !== k)) : new Set([...p, k])));
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <span className="lbl">Name · {plural(n, "payee")}</span>
+      <div className="markrec">
+        <input className="inp2" style={{ flex: 1 }} value={name} maxLength={120} autoFocus aria-label="Payee name" onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && save()} />
+        <button type="button" className="btn2 sm primary" disabled={!clean || busy} onClick={save}>
+          {busy ? "Saving…" : "Save name"}
+        </button>
+      </div>
+      {q.length >= 2 && <RenameCandidates q={q} skip={group} picked={picked} toggle={toggle} />}
+    </div>
+  );
+}
+
+function RenameCandidates({ q, skip, picked, toggle }: { q: string; skip: string[]; picked: Set<string>; toggle: (k: string) => void }) {
+  const st = read(api.payees(q));
+  const rows = (dataOf(st) ?? []).filter((p) => !skip.includes(p.payee_key));
+  if (!rows.length) return null;
+  return (
+    <>
+      <span className="lbl">Payees matching “{q}”</span>
+      {rows.map((p) => (
+        <label key={p.payee_key} className="obs linkrow">
+          <input type="checkbox" checked={picked.has(p.payee_key)} onChange={() => toggle(p.payee_key)} />
+          <span className="mid">
+            <span>
+              {p.merchant ?? p.payee_key}
+              {p.alias ? <span className="faint"> · your name</span> : null}
+            </span>
+            <small>
+              {[p.counterparty !== p.merchant && p.counterparty, p.vpa, plural(p.count, "payment"), inr(toPaise(p.total)), `last ${dayShort(p.last_at)}`, WHY[p.why]].filter(Boolean).join(" · ")}
+            </small>
+          </span>
+        </label>
+      ))}
     </>
   );
 }

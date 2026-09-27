@@ -36,6 +36,8 @@ export interface ApiTxn {
   direction: Direction;
   kind: TxnKind;
   merchant: string | null;
+  /** merchant is your own name for the payee (payee aliases). */
+  named?: boolean;
   counterparty: string | null;
   vpa: string | null;
   payee_key: string | null;
@@ -288,6 +290,8 @@ export interface Transaction {
   account: string;
   account_kind: AccountKind | null;
   merchant: string;
+  /** merchant is your own name for the payee, so it wins over the UPI handle. */
+  named: boolean;
   category: string | null;
   category_id: number | null;
   bucket: Bucket | null;
@@ -449,7 +453,43 @@ export interface ApiTxnDetail {
     total: Decimal;
     history: PayeeHistory[];
     recent: { id: number; occurred_at: ISODate; amount: Decimal; category: string | null }[];
+    /** Set when you named this payee: every payee sharing the name counts as one here. */
+    alias?: { name: string; original: string | null; payee_keys: string[] } | null;
+    /** An alias of yours this payee's name looks like, when it has none. */
+    suggest?: AliasSuggestion | null;
   } | null;
+}
+
+// ---------- payee aliases (docs/api.md) ----------
+
+export type AliasWhy = "prefix" | "words" | "spelling";
+export interface AliasSuggestion {
+  name: string;
+  why: AliasWhy;
+  /** The name it matched: the alias itself, or the name one of its payees had before. */
+  like: string;
+}
+export interface PayeeAlias {
+  payee_key: string;
+  name: string;
+  original: string;
+  count: number;
+}
+interface PayeeBase {
+  payee_key: string;
+  merchant: string | null;
+  counterparty: string | null;
+  vpa: string | null;
+  count: number;
+  total: Decimal;
+  last_at: ISODate;
+}
+export interface PayeeSuggested extends PayeeBase {
+  suggest: AliasSuggestion;
+}
+export interface PayeeMatch extends PayeeBase {
+  alias: string | null;
+  why: AliasWhy | "contains";
 }
 
 export interface LiveComponent {

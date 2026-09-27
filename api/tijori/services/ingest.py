@@ -22,6 +22,7 @@ from tijori.models import (
     ComponentValue,
     Member,
     Observation,
+    PayeeAlias,
     RawAttachment,
     RawMessage,
     RuleHit,
@@ -85,7 +86,7 @@ def category_ids(s: Session, household_id: int) -> dict[str, int]:
 
 
 def load_classifier(s: Session, ctx: MemberContext) -> Classifier:
-    """Four queries per batch (profile, categories, rules, grouped payee memory), never per txn."""
+    """Five queries per batch (profile, categories, rules, grouped payee memory, aliases), never per txn."""
     cfg = s.scalar(select(Member.classify_config).where(Member.id == ctx.member_id)) or {}
     mine = (Category.member_id.is_(None)) | (Category.member_id == ctx.member_id)
     categories = {r.name: CategoryDef(r.name, r.kind, r.bucket, "", r.credit_bucket) for r in s.execute(
@@ -113,7 +114,9 @@ def load_classifier(s: Session, ctx: MemberContext) -> Classifier:
         .group_by(Txn.direction, Txn.payee_key, Category.name)
     ).all()
     memory = PayeeMemory.from_counts((memory_key(d, k), name, n) for d, k, name, n in counts)
-    return Classifier(MemberProfile.from_json(cfg), member_rules, household_rules, memory, categories)
+    aliases = dict(s.execute(select(PayeeAlias.payee_key, PayeeAlias.name)
+                             .where(PayeeAlias.member_id == ctx.member_id)).tuples().all())
+    return Classifier(MemberProfile.from_json(cfg), member_rules, household_rules, memory, categories, aliases)
 
 
 def record_raw(s: Session, ctx: MemberContext, *, filename: str | None, sha256: str, blob_ref: str,

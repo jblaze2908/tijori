@@ -26,6 +26,8 @@ from tijori.app.schemas import (
     Holdings,
     LiveNetWorth,
     ParseQueue,
+    PayeeAliases,
+    PayeeMatches,
     RecurringList,
     Rules,
     Budgets,
@@ -43,7 +45,7 @@ from tijori.app.schemas import (
 )
 from tijori.classify.taxonomy import KINDS
 from tijori.models import Category
-from tijori.services import (alerts, budgets, cards, loans, mcp_tokens, members, networth, ops, raw, recurring, reports,
+from tijori.services import (aliases, alerts, budgets, cards, loans, mcp_tokens, members, networth, ops, raw, recurring, reports,
                              sources, txn_edit, txns)
 from tijori.services.common import month_start_day, today_ist
 
@@ -238,6 +240,16 @@ def inbox_stats(db: MemberDep, month: Annotated[str, Query(pattern=MONTH_PATTERN
 @router.get("/rules", response_model=Rules)
 def get_rules(db: MemberDep) -> dict:
     return txns.list_rules(db.session, db.ctx)
+
+
+@router.get("/payee-aliases", response_model=PayeeAliases)
+def get_payee_aliases(db: MemberDep) -> dict:
+    return aliases.list_aliases(db.session, db.ctx.member_id)
+
+
+@router.get("/payees", response_model=PayeeMatches)
+def get_payees(db: MemberDep, q: Annotated[str, Query(min_length=1, max_length=120)]) -> dict:
+    return aliases.search_payees(db.session, db.ctx.member_id, q)
 
 
 @router.get("/networth/live", response_model=LiveNetWorth)

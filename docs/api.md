@@ -81,7 +81,8 @@ Every endpoint that returns transactions uses this shape.
 
 | Field | Notes |
 |---|---|
-| `merchant` | Normalised display name |
+| `merchant` | Normalised display name, or your own name for the payee (see Payee names) |
+| `named` | `true` when `merchant` is your name for the payee, so it wins over the UPI handle in lists |
 | `counterparty` | The payee as the bank printed it |
 | `vpa` | The UPI handle, in full (Jai's call, 2026-09-27: a member only ever reads their own data). Anything that sends data out of Tijori, such as MCP, must mask a person's handle itself |
 | `payee_key` | The stable payee identity used by the Inbox and payee memory. It can contain `:` and `\|`, so URL-encode it in paths |
@@ -251,7 +252,7 @@ One txn with everything behind it. Returns 404 when the txn doesn't exist or isn
 
 - `observations` lists every sighting behind the txn. Legacy-imported txns have none until their statement is uploaded.
 - `links` is empty in M0; the resolver fills it in M1.
-- `payee` gives this payee's totals in the same direction, and its 12 most recent txns. It is `null` without a `payee_key`.
+- `payee` gives this payee's totals in the same direction, and its 12 most recent txns. It is `null` without a `payee_key`. When you named the payee, every payee sharing the name counts: `alias` is `{"name", "original", "payee_keys"}`, where `original` is this payee's name before. Otherwise `alias` is `null`, and `suggest` is `{"name", "why", "like"}` when the payee's name matches one of your names (see Payee names), else `null`.
 
 ## `PATCH /api/transactions/{id}`
 
@@ -264,7 +265,7 @@ Body: `{"category_id": 1151, "scope": "this"}`. Name the category with **exactly
 | `scope` | Effect |
 |---|---|
 | `this` | Files this txn: `classified_by: "user"`, `rule_id: "user"`. That counts as a confirmation for payee memory |
-| `payee` | As `this`, and also creates a member rule. The rule matches the payee's UPI handle, or its merchant name when there is no handle, in this direction. It is applied at once to the payee's other txns in the same direction that you haven't filed by hand (`classified_by: "rule"`) |
+| `payee` | As `this`, and also creates a member rule. The rule matches the payee's UPI handle, or its merchant name when there is no handle, in this direction. For a payee you named, the rule matches that name and covers every payee sharing it. It is applied at once to the payee's (or the name's) other txns in the same direction that you haven't filed by hand (`classified_by: "rule"`) |
 
 Returns `{"updated": 1, "rule_id": null}`, or `{"updated": 4, "rule_id": "rule:12"}` for scope `payee`.
 
@@ -553,6 +554,35 @@ Body: `{"txn_ids": [int] (1–500), "rule_id"?: "rule:<id>"}`. Puts back txns th
 ```
 
 `PATCH /api/rules/rule:1` `{"enabled": false}` pauses one of the member's own rules. It returns `{"id", "enabled"}`, or 404 for a household rule or someone else's.
+
+## Payee names: `/api/payee-aliases`, `GET /api/payees`
+
+Your own name for a payee, e.g. a shop paid through its owner's UPI handle, or one store printed several ways. The name replaces `merchant` on every txn of the payee, now and at ingest, so payees given one name group as one merchant in Spending, trends and search. `payee_key` never changes. A merchant-name rule matches either the name or the name the payee had before.
+
+`POST /api/payee-aliases` `{"name": "Sharma Sweets", "payee_keys": ["vpa:ramesh1234"]}` names 1–50 payees. A name equal to an existing merchant name but for case takes that spelling. Returns `{"name", "payee_keys", "updated", "similar"}`: txns renamed, and how many other payees now match the name. 404 when a payee has no txns.
+
+`POST /api/payee-aliases/reset` `{"payee_keys": [...]}` drops the names; each payee's txns take back the name they had before the first rename. Returns `{"payee_keys", "restored"}`; 404 when none of them was named.
+
+`GET /api/payee-aliases` lists your names and the payees that match one:
+
+```json
+{"items": [{"payee_key": "vpa:ramesh1234", "name": "Sharma Sweets", "original": "Ramesh", "count": 3}],
+ "suggestions": [{"payee_key": "text:sharma sweets pune in", "merchant": "Sharma Sweets Pune In",
+                  "counterparty": null, "vpa": null, "count": 1, "total": "1200.00", "last_at": "2026-09-09",
+                  "suggest": {"name": "Sharma Sweets", "why": "prefix", "like": "Sharma Sweets"}}]}
+```
+
+A payee matches when any of its names (merchant or counterparty), compared on letters and digits only, matches a name or a named payee's old name (`like`):
+
+| `why` | Rule |
+|---|---|
+| `prefix` | 8+ leading characters in common, or one is the start of the other (5+ characters) |
+| `words` | At least half the words shared, one of 4+ letters. `pvt`, `ltd`, `store`, `traders` and the like don't count |
+| `spelling` | 6+ characters, similarity ratio ≥ 0.85 |
+
+`POST /api/payee-aliases/dismiss` `{"payee_key", "name"}` stops suggesting that name for that payee (the last 500 are kept).
+
+`GET /api/payees?q=Style%20Hub` finds up to 20 payees whose name contains `q` (ignoring case, spaces and punctuation, `why: "contains"`) or matches it by the rules above: the candidates to give one name. Each item is `{"payee_key", "merchant", "counterparty", "vpa", "alias", "why", "count", "total", "last_at"}`; `alias` is your name for it, if any.
 
 ## `GET /api/networth/live`
 
