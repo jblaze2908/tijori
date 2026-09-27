@@ -1013,6 +1013,15 @@ class McpTokenIn(BaseModel):
     name: Annotated[str, Field(min_length=1, max_length=60)]
 
 
+class BackupStatus(BaseModel):
+    configured: bool  # a backup has reported at least once
+    last_run_at: datetime | None
+    last_ok: bool
+    last_detail: str | None
+    last_ok_at: datetime | None
+    stale: bool  # no good backup in the last 2 days
+
+
 class NotifyTestOut(BaseModel):
     sent: bool
 

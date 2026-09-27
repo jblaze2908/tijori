@@ -872,6 +872,8 @@ Pushes go through ntfy (`TIJORI_NTFY_URL`, with `TIJORI_NTFY_TOKEN` when the ser
 - On Mondays from 09:00 IST, a digest of the week before: spend and count against the week before that, the top 3 categories, charges due in the next 7 days, budgets over, and the Inbox count. Figures only.
 - A failed post is logged and not retried, so nothing is sent twice.
 
+`GET /api/ops/backup` returns the nightly off-site backup's last report: `{configured, last_run_at, last_ok, last_detail, last_ok_at, stale}`. `stale` means no good backup in 2 days, which also raises a `backup_stale` alert.
+
 `POST /api/notify/test` sends a test push and returns `{"sent": true}`, or `false` when ntfy isn't configured or didn't answer. 422 without a topic.
 
 ## MCP (`POST /mcp`)

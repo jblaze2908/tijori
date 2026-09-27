@@ -86,6 +86,38 @@ export function NotifyRetention() {
           </option>
         ))}
       </select>
+      <Backup />
+    </>
+  );
+}
+
+interface BackupState {
+  configured: boolean;
+  last_run_at: string | null;
+  last_ok: boolean;
+  last_detail: string | null;
+  last_ok_at: string | null;
+  stale: boolean;
+}
+const backupOf = () => resource("/api/ops/backup", (r: BackupState) => r);
+const stamp = (iso: string) => new Date(iso).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" });
+
+/** The nightly off-site backup's last report (deploy/backup.sh writes it). */
+function Backup() {
+  const b = dataOf(read(backupOf()));
+  if (!b) return null;
+  return (
+    <>
+      <h3 className="mt" style={{ margin: "20px 0 4px", fontSize: 14 }}>
+        Off-site backup
+      </h3>
+      <p className={`sub${b.stale ? " bad-t" : ""}`}>
+        {!b.configured
+          ? "No backup has reported yet."
+          : b.last_ok_at
+            ? `Last good backup ${stamp(b.last_ok_at)} · ${b.last_ok ? b.last_detail ?? "" : `last run failed: ${b.last_detail ?? ""}`}`
+            : `No good backup yet · last run failed: ${b.last_detail ?? ""}`}
+      </p>
     </>
   );
 }

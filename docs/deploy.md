@@ -49,6 +49,7 @@ rm /var/lib/tijori/failed-commit          # retry a rejected commit
 - **Where:** restic, which encrypts again with `/etc/tijori/restic.pass`, to Google Drive through the rclone remote `tijori-drive`. The remote uses scope `drive.file`, so it sees only the folder it created.
 - **Kept:** 7 daily, 4 weekly and 12 monthly snapshots.
 - **Checked:** on the 1st (or with `VERIFY=1`), the latest dump is restored and must list its tables, and 5% of the repository is read back.
+- **Reported:** every run writes its result to `ops_event`. Settings → Notifications & retention shows the last good backup, and an alert (`backup_stale`) fires when there's none in 2 days.
 
 Two secrets live outside the backup: `TIJORI_MASTER_KEY` (in `/etc/tijori/tijori.env`) and the restic password. Keep both in a password manager. Without the master key, the restored vault and files can't be read. Without the restic password, the backup can't be opened.
 

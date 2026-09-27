@@ -12,6 +12,7 @@ from sqlalchemy import or_, select
 
 from tijori.app.deps import MemberDep
 from tijori.app.schemas import (
+    BackupStatus,
     LinkCandidates,
     LoanDetail,
     LoanPicker,
@@ -42,8 +43,8 @@ from tijori.app.schemas import (
 )
 from tijori.classify.taxonomy import KINDS
 from tijori.models import Category
-from tijori.services import (alerts, budgets, cards, loans, mcp_tokens, members, networth, raw, recurring, reports, sources,
-                             txn_edit, txns)
+from tijori.services import (alerts, budgets, cards, loans, mcp_tokens, members, networth, ops, raw, recurring, reports,
+                             sources, txn_edit, txns)
 from tijori.services.common import month_start_day, today_ist
 
 router = APIRouter(prefix="/api")
@@ -212,6 +213,11 @@ def loan_picker(db: MemberDep, txn_id: Annotated[int, Path(ge=1)]) -> dict:
 @router.get("/loans/{loan_id}", response_model=LoanDetail)
 def get_loan(db: MemberDep, loan_id: Annotated[int, Path(ge=1)]) -> dict:
     return loans.get_loan(db.session, db.ctx.member_id, loan_id)
+
+
+@router.get("/ops/backup", response_model=BackupStatus)
+def backup_status(db: MemberDep) -> dict:
+    return ops.backup_status(db.session)
 
 
 @router.get("/mcp/tokens", response_model=McpTokens)

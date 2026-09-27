@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 
-from tijori.services import budgets, recurring
+from tijori.services import budgets, ops, recurring
 
 
 def month_alerts(s: Session, member_id: int, month: str, month_start_day: int = 1) -> dict[str, Any]:
@@ -23,6 +23,12 @@ def month_alerts(s: Session, member_id: int, month: str, month_start_day: int = 
             "detail": f"₹{float(i['spent']):,.0f} of ₹{float(i['limit']):,.0f} by day {b['day']} of {b['days']}"
                       + ("" if over else f" · ₹{float(i['expected_by_today']):,.0f} expected"),
             "txn_ids": []})
+    bk = ops.backup_status(s)
+    if bk["stale"]:
+        when = bk["last_ok_at"].date().isoformat() if bk["last_ok_at"] else "never"
+        out["items"].append({"id": f"backup:{when}", "kind": "backup_stale", "severity": "bad", "title": "Off-site backup is stale",
+                             "detail": f"Last good backup: {when}" + (f" · last run: {bk['last_detail']}" if not bk["last_ok"] else ""),
+                             "txn_ids": []})
     return out
 
 

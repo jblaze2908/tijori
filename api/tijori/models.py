@@ -526,6 +526,18 @@ class Loan(Base):
     __table_args__ = (CheckConstraint("opening_amount >= 0", name="opening_non_negative"),)
 
 
+class OpsEvent(Base):
+    """A host job's report, such as one off-site backup run; written by the job as the owner, read by the app."""
+
+    __tablename__ = "ops_event"
+    id: Mapped[int] = _pk()
+    kind: Mapped[str] = mapped_column(String(40))
+    ok: Mapped[bool] = mapped_column(Boolean)
+    detail: Mapped[str | None] = mapped_column(Text)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (Index("ix_ops_event_kind_at", "kind", "at"),)
+
+
 class McpToken(Base):
     """A bearer token for the MCP endpoint; only its SHA-256 is stored."""
 
