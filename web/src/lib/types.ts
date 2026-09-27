@@ -256,6 +256,8 @@ export interface Account {
   last_txn_at: ISODate | null;
   last_statement: { period_start: ISODate; period_end: ISODate; reconciled: boolean; diff: Decimal } | null;
   has_statement_password: boolean;
+  /** A second code for the same account, e.g. the one chosen when requesting an SBI Quick e-statement. */
+  has_extra_statement_password: boolean;
   /** Balance printed after the newest statement line. */
   balance: { amount: Decimal; as_of: ISODate } | null;
   /** Last live alert; null until the collectors land (M1). */

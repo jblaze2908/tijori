@@ -461,6 +461,7 @@ class AccountOut(BaseModel):
     last_txn_at: date | None
     last_statement: StatementRef | None
     has_statement_password: bool
+    has_extra_statement_password: bool
     balance: "Balance | None"
     last_seen_at: datetime | None
     coverage_pct: float | None
@@ -622,6 +623,7 @@ class MailTestOut(BaseModel):
 class StatementPasswordIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     password: str = Field(min_length=1, max_length=256, repr=False)
+    slot: Literal["main", "extra"] = "main"
 
 
 

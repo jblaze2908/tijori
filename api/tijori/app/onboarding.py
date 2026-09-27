@@ -1,9 +1,9 @@
 """Onboarding endpoints: invites, onboarding state, classifier profile, IMAP mail sources and
 statement passwords. Secrets are write-only: no response ever carries one."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -141,17 +141,17 @@ def _own_account(db: MemberDep, account_id: int) -> None:
 @router.put("/accounts/{account_id}/statement-password", status_code=204, dependencies=JSON)
 def put_statement_password(request: Request, db: MemberDep, account_id: Id, body: StatementPasswordIn) -> Response:
     _own_account(db, account_id)
-    vault.put(db.session, db.ctx, _box(request), vault.statement_password_name(account_id), body.password)
-    audit(db.session, db.ctx, db.actor, "statement_password.set", f"account:{account_id}", {})
+    vault.put(db.session, db.ctx, _box(request), vault.statement_password_name(account_id, body.slot), body.password)
+    audit(db.session, db.ctx, db.actor, "statement_password.set", f"account:{account_id}", {"slot": body.slot})
     return Response(status_code=204)
 
 
 @router.delete("/accounts/{account_id}/statement-password", status_code=204)
-def delete_statement_password(db: MemberDep, account_id: Id) -> Response:
+def delete_statement_password(db: MemberDep, account_id: Id, slot: Annotated[Literal["main", "extra"], Query()] = "main") -> Response:
     _own_account(db, account_id)
-    if not vault.remove(db.session, db.ctx, vault.statement_password_name(account_id)):
+    if not vault.remove(db.session, db.ctx, vault.statement_password_name(account_id, slot)):
         raise NotFound("no statement password for this account")
-    audit(db.session, db.ctx, db.actor, "statement_password.delete", f"account:{account_id}", {})
+    audit(db.session, db.ctx, db.actor, "statement_password.delete", f"account:{account_id}", {"slot": slot})
     return Response(status_code=204)
 
 

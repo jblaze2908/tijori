@@ -211,12 +211,13 @@ export async function removeMailSource(id: number) {
   invalidate(["/api/mail-sources", "/api/onboarding"]);
 }
 
-export async function setStatementPassword(accountId: number, password: string) {
-  await request(`/api/accounts/${accountId}/statement-password`, "PUT", { password });
+export type PasswordSlot = "main" | "extra";
+export async function setStatementPassword(accountId: number, password: string, slot: PasswordSlot = "main") {
+  await request(`/api/accounts/${accountId}/statement-password`, "PUT", { password, slot });
   invalidate(["/api/accounts", "/api/onboarding"]);
 }
-export async function clearStatementPassword(accountId: number) {
-  await request(`/api/accounts/${accountId}/statement-password`, "DELETE");
+export async function clearStatementPassword(accountId: number, slot: PasswordSlot = "main") {
+  await request(`/api/accounts/${accountId}/statement-password?slot=${slot}`, "DELETE");
   invalidate(["/api/accounts", "/api/onboarding"]);
 }
 

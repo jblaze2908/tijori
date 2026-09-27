@@ -4,11 +4,11 @@ import { useToast } from "../../components/Toast";
 import { InlineState, Loading } from "../../components/ui";
 import { api, dataOf, read } from "../../lib/api";
 import { dayIST, dayShort, inr, plural, toPaise } from "../../lib/format";
-import { clearStatementPassword, createInvite, revokeInvite, setStatementPassword, setup, uploadStatement, type UploadResult } from "../../lib/setup";
+import { clearStatementPassword, createInvite, revokeInvite, setStatementPassword, setup, uploadStatement, type PasswordSlot, type UploadResult } from "../../lib/setup";
 import { useStore } from "../../lib/useStore";
 import type { Account } from "../../lib/types";
 
-/** Statement PDF passwords, one per account. Write-only: the page only ever learns whether one is saved. */
+/** Statement PDF passwords, two per account. Write-only: the page only ever learns whether one is saved. */
 export function StatementPasswords({ onContinue }: { onContinue?: () => void }) {
   useStore();
   const st = read(api.accounts());
@@ -44,32 +44,42 @@ export function StatementPasswords({ onContinue }: { onContinue?: () => void }) 
 }
 
 function PasswordRow({ a }: { a: Account }) {
+  return (
+    <div className="li li-col">
+      <b>{a.label}</b>
+      <PasswordSlotForm a={a} slot="main" saved={a.has_statement_password} name="Statement password" />
+      <PasswordSlotForm a={a} slot="extra" saved={a.has_extra_statement_password} name="Second password (e.g. an SBI Quick code)" />
+    </div>
+  );
+}
+
+function PasswordSlotForm({ a, slot, saved, name }: { a: Account; slot: PasswordSlot; saved: boolean; name: string }) {
   const toast = useToast();
   const [value, setValue] = useState("");
   const act = useAction();
+  const what = slot === "main" ? "statement password" : "second password";
   return (
     <form
-      className="li li-col"
+      className="li-col"
       onSubmit={async (e) => {
         e.preventDefault();
         if (!value) return;
-        const r = await act.run(() => setStatementPassword(a.id, value));
+        const r = await act.run(() => setStatementPassword(a.id, value, slot));
         setValue("");
-        if (r.ok) toast(`Saved the statement password for ${a.label}.`);
+        if (r.ok) toast(`Saved the ${what} for ${a.label}.`);
       }}
     >
       <div className="li-row">
         <div className="mid">
-          <b>{a.label}</b>
-          <small>{a.has_statement_password ? "Password saved" : "No password saved"}</small>
+          <small>{saved ? `${name}: saved` : `${name}: none saved`}</small>
         </div>
-        {a.has_statement_password && (
+        {saved && (
           <button
             type="button"
             className="linkish"
             disabled={act.busy}
             onClick={async () => {
-              if ((await act.run(() => clearStatementPassword(a.id))).ok) toast(`Removed the statement password for ${a.label}.`);
+              if ((await act.run(() => clearStatementPassword(a.id, slot))).ok) toast(`Removed the ${what} for ${a.label}.`);
             }}
           >
             Remove
@@ -77,9 +87,9 @@ function PasswordRow({ a }: { a: Account }) {
         )}
       </div>
       <div className="row-form">
-        <SecretInput value={value} onChange={setValue} placeholder={a.has_statement_password ? "Replace password" : "Statement password"} label={`Statement password for ${a.label}`} />
+        <SecretInput value={value} onChange={setValue} placeholder={saved ? "Replace password" : name} label={`${name} for ${a.label}`} />
         <button type="submit" className="btn ghost" disabled={act.busy || !value}>
-          {a.has_statement_password ? "Replace" : "Save"}
+          {saved ? "Replace" : "Save"}
         </button>
       </div>
       {act.error && (

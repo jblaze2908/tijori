@@ -23,8 +23,11 @@ def mail_source_name(source_id: int) -> str:
     return f"mail_source:{source_id}"
 
 
-def statement_password_name(account_id: int) -> str:
-    return f"statement_password:account:{account_id}"
+STATEMENT_SLOTS = ("main", "extra")  # extra: a second code, e.g. the one chosen for an SBI Quick e-statement
+
+
+def statement_password_name(account_id: int, slot: str = "main") -> str:
+    return f"statement_password:account:{account_id}" + ("" if slot == "main" else f":{slot}")
 
 
 def put(s: Session, ctx: MemberContext, box: SecretBox, name: str, plaintext: str) -> None:

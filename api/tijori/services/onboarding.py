@@ -26,6 +26,7 @@ GMAIL_SENDERS = (
     "cbsalerts.sbi@alerts.sbi.bank.in", "cbsalerts.sbi@alerts.sbi.co.in", "cbssbi.cas@alerts.sbi.bank.in",
     "cbssbi.cas@alerts.sbi.co.in", "cbssbi.info@alerts.sbi.bank.in", "neftinfo.itps@alerts.sbi.bank.in",
     "neftinfo.itps@alerts.sbi.co.in", "iphinfo.itps@alerts.sbi.bank.in",
+    "sbiquick@alerts.sbi.bank.in", "sbiquick@alerts.sbi.co.in",
     "credit_cards@icicibank.com", "credit_cards@icici.bank.in", "cards@icicibank.com",
     "no-reply@amazonpay.in", "protect@cred.club", "noreply@groww.in",
     "enq_p@camsonline.com", "enq_pp@camsonline.com", "enq_t@camsonline.com",
