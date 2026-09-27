@@ -199,22 +199,27 @@ def fetch_client_metadata(client_id: str) -> tuple[dict[str, Any], timedelta]:
             or p.path in ("", "/") or len(client_id) > 512):
         raise OAuthError("invalid_client", "a client_id URL must be https, with a path")
     try:
-        addrs = {ipaddress.ip_address(a[4][0]) for a in socket.getaddrinfo(p.hostname, 443, type=socket.SOCK_STREAM)}
+        infos = socket.getaddrinfo(p.hostname, 443, type=socket.SOCK_STREAM)
+        addrs = list(dict.fromkeys(ipaddress.ip_address(a[4][0]) for a in infos))
     except (OSError, ValueError):
         raise OAuthError("invalid_client", "the app's address could not be resolved") from None
     if not addrs or any(not a.is_global or a.is_multicast for a in addrs):
         raise OAuthError("invalid_client", "the app's metadata must be on a public address")
-    conn = _PinnedHTTPS(p.hostname, str(next(iter(addrs))), METADATA_TIMEOUT_S)
-    try:
-        conn.request("GET", (p.path or "/") + (f"?{p.query}" if p.query else ""),
-                     headers={"Accept": "application/json", "User-Agent": "Tijori-OAuth"})
-        r = conn.getresponse()
-        body = r.read(METADATA_MAX_BYTES + 1)
-        status, cache = r.status, r.getheader("cache-control") or ""
-    except (OSError, http.client.HTTPException, ssl.SSLError):
-        raise OAuthError("invalid_client", "the app's metadata could not be fetched") from None
-    finally:
-        conn.close()
+    # IPv4 first, then the rest: a host without an IPv6 route must not fail on the first AAAA answer.
+    status, body, cache = 0, b"", ""
+    for ip in sorted(addrs, key=lambda a: a.version):
+        conn = _PinnedHTTPS(p.hostname, str(ip), METADATA_TIMEOUT_S)
+        try:
+            conn.request("GET", (p.path or "/") + (f"?{p.query}" if p.query else ""),
+                         headers={"Accept": "application/json", "User-Agent": "Tijori-OAuth"})
+            r = conn.getresponse()
+            body = r.read(METADATA_MAX_BYTES + 1)
+            status, cache = r.status, r.getheader("cache-control") or ""
+            break
+        except (OSError, http.client.HTTPException, ssl.SSLError):
+            continue
+        finally:
+            conn.close()
     if status != 200 or len(body) > METADATA_MAX_BYTES:
         raise OAuthError("invalid_client", "the app's metadata could not be fetched")
     try:
@@ -226,7 +231,9 @@ def fetch_client_metadata(client_id: str) -> tuple[dict[str, Any], timedelta]:
     uris = doc.get("redirect_uris")
     if not isinstance(uris, list) or not 0 < len(uris) <= 10:
         raise OAuthError("invalid_client", "the app's metadata lists no redirect_uris")
-    if doc.get("token_endpoint_auth_method", "none") != "none":
+    # ChatGPT's document prefers private_key_jwt but lists none too: it then authenticates as a public client with PKCE.
+    methods = {doc.get("token_endpoint_auth_method", "none"), *(doc.get("token_endpoint_auth_methods_supported") or [])}
+    if "none" not in methods:
         raise OAuthError("invalid_client", "only public clients (token_endpoint_auth_method none) are supported")
     m = re.search(r"max-age=(\d+)", cache)
     ttl = timedelta(seconds=min(max(int(m[1]) if m else 3600, 300), 86400))

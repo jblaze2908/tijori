@@ -70,10 +70,24 @@ async def _form(request: Request, cap: int = 16 * 1024) -> dict[str, str]:
     return out
 
 
+def _assertion_subject(assertion: str | None) -> str | None:
+    """The client_id inside a private_key_jwt assertion (RFC 7523), read without checking the signature. Tijori
+    doesn't offer that method, so the assertion only names the client, as a public client's client_id does; PKCE
+    and the bound redirect URI still protect the code."""
+    parts = (assertion or "").split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        sub = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4))).get("sub")
+    except (ValueError, binascii.Error, AttributeError):
+        return None
+    return sub if isinstance(sub, str) else None
+
+
 def _client_credentials(request: Request, form: dict[str, str]) -> tuple[str | None, str | None]:
     auth = request.headers.get("authorization", "")
     if not auth.lower().startswith("basic "):
-        return form.get("client_id"), form.get("client_secret")
+        return form.get("client_id") or _assertion_subject(form.get("client_assertion")), form.get("client_secret")
     try:
         cid, _, secret = base64.b64decode(auth[6:].strip(), validate=True).decode().partition(":")
     except (binascii.Error, UnicodeDecodeError):
