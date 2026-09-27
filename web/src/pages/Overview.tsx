@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { NetWorthChart, ProgressChart } from "../components/charts";
 import { G } from "../components/Glyphs";
 import { ErrorState, Loading } from "../components/ui";
@@ -8,7 +8,7 @@ import { categoryColor, monogramColor } from "../lib/colors";
 import { compact, dayShort, daysBetween, inr, monthLong, monthShort, monthApos, plural, toPaise } from "../lib/format";
 import { within } from "../lib/insights";
 import { byKey, categoryOf, cumulative, largestCharge, normalByKey, normalCurve, NOTABLE, paidFrom, projection, spendOf } from "../lib/metrics";
-import { Link } from "../lib/router";
+import { Link, navigate, useLocation } from "../lib/router";
 import type { Transaction } from "../lib/types";
 
 export function Overview({ app, head }: { app: AppCtx; head: ReactNode }) {
@@ -139,7 +139,16 @@ function NeedsYou({ month }: { month: string }) {
 }
 
 function WhereItWent({ m, T, txns, back, dayN }: { m: MonthCtx; T: Transaction[]; txns: Transaction[]; back: MonthCtx[]; dayN: number }) {
-  const [mode, setMode] = useState<"category" | "merchant">("category");
+  // In the URL so Back from a drill-down keeps the toggle.
+  const { path, params } = useLocation();
+  const mode = params.get("by") === "merchant" ? "merchant" : "category";
+  const setMode = (k: typeof mode) => {
+    const p = new URLSearchParams(params);
+    if (k === "merchant") p.set("by", k);
+    else p.delete("by");
+    const q = p.toString();
+    navigate(`${path}${q ? `?${q}` : ""}`, { replace: true });
+  };
   const key = mode === "category" ? categoryOf : (t: Transaction) => t.merchant;
   const cur = byKey(T, key);
   const normal = normalByKey(txns, back.map((b) => b.period), dayN, key);

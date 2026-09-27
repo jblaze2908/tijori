@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Sparkline, StackedBars } from "../components/charts";
 import { ErrorState, Loading } from "../components/ui";
 import { prevCycles, txnsFor, type AppCtx } from "../ctx";
@@ -10,7 +10,7 @@ import { categoryColor, slotColor } from "../lib/colors";
 import { addDays, compact, dayShort, daysBetween, inr, monthShort, plural, toPaise } from "../lib/format";
 import { isExpense, within } from "../lib/insights";
 import { byKey, categoryOf, NOTABLE, normalByKey, paidFrom, projection, spendOf } from "../lib/metrics";
-import { Link, navigate } from "../lib/router";
+import { Link, navigate, useLocation } from "../lib/router";
 import type { ApiCards, ISODate, Transaction, TrendPoint } from "../lib/types";
 
 type Preset = "month" | "last" | "year" | "fy" | "custom";
@@ -40,10 +40,41 @@ function range(p: Preset, app: AppCtx, custom: { from: ISODate; to: ISODate }): 
   return { ...custom, label: `${dayShort(custom.from)} – ${dayShort(custom.to)}` };
 }
 
+const GROUPS = ["category", "merchant", "account"] as const;
+const isDate = (v: string | null): v is ISODate => !!v && /^\d{4}-\d{2}-\d{2}$/.test(v);
+type View = { preset: Preset; group: Group; custom: { from: ISODate; to: ISODate }; all: boolean };
+
+/** Kept in the URL so Back from a drill-down lands on the same period, grouping and expanded list. */
+function useView(app: AppCtx): [View, (patch: Partial<View>) => void] {
+  const { params } = useLocation();
+  const from = params.get("from");
+  const to = params.get("to");
+  const def = { from: addDays(app.asOf, -89), to: app.asOf };
+  const v: View = {
+    preset: PRESETS.find(([p]) => p === params.get("period"))?.[0] ?? "year",
+    group: GROUPS.find((g) => g === params.get("group")) ?? "category",
+    custom: { from: isDate(from) ? from : def.from, to: isDate(to) ? to : def.to },
+    all: params.get("all") === "1",
+  };
+  const set = (patch: Partial<View>) => {
+    const n = { ...v, ...patch };
+    const p = new URLSearchParams();
+    if (n.preset !== "year") p.set("period", n.preset);
+    // Kept under every preset so switching back to Custom restores the dates picked.
+    if (n.custom.from !== def.from || n.custom.to !== def.to) {
+      p.set("from", n.custom.from);
+      p.set("to", n.custom.to);
+    }
+    if (n.group !== "category") p.set("group", n.group);
+    if (n.all) p.set("all", "1");
+    const q = p.toString();
+    navigate(`/spending${q ? `?${q}` : ""}`, { replace: true });
+  };
+  return [v, set];
+}
+
 export function Spending({ app }: { app: AppCtx }) {
-  const [preset, setPreset] = useState<Preset>("year");
-  const [group, setGroup] = useState<Group>("category");
-  const [custom, setCustom] = useState({ from: addDays(app.asOf, -89), to: app.asOf });
+  const [{ preset, group, custom, all: showAll }, set] = useView(app);
   const r = range(preset, app, custom);
   const cur = app.cycle(app.asOf.slice(0, 7));
   const back = prevCycles(app, cur, 3);
@@ -60,16 +91,16 @@ export function Spending({ app }: { app: AppCtx }) {
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <div className="seg lg" role="group" aria-label="Period">
           {PRESETS.map(([p, l]) => (
-            <button key={p} type="button" className={preset === p ? "on" : ""} aria-pressed={preset === p} onClick={() => setPreset(p)}>
+            <button key={p} type="button" className={preset === p ? "on" : ""} aria-pressed={preset === p} onClick={() => set({ preset: p })}>
               {l}
             </button>
           ))}
         </div>
         {preset === "custom" ? (
           <label className="datefield">
-            <input type="date" aria-label="From" value={custom.from} max={custom.to} onChange={(e) => e.target.value && setCustom({ ...custom, from: e.target.value })} />
+            <input type="date" aria-label="From" value={custom.from} max={custom.to} onChange={(e) => e.target.value && set({ custom: { ...custom, from: e.target.value } })} />
             <span className="faint">→</span>
-            <input type="date" aria-label="To" value={custom.to} min={custom.from} max={app.asOf} onChange={(e) => e.target.value && setCustom({ ...custom, to: e.target.value })} />
+            <input type="date" aria-label="To" value={custom.to} min={custom.from} max={app.asOf} onChange={(e) => e.target.value && set({ custom: { ...custom, to: e.target.value } })} />
           </label>
         ) : (
           <span className="muted mono-n" style={{ fontSize: 13 }}>
@@ -81,8 +112,8 @@ export function Spending({ app }: { app: AppCtx }) {
           Group by
         </span>
         <div className="seg lg" role="group" aria-label="Group by">
-          {(["category", "merchant", "account"] as const).map((g) => (
-            <button key={g} type="button" className={group === g ? "on" : ""} aria-pressed={group === g} onClick={() => setGroup(g)}>
+          {GROUPS.map((g) => (
+            <button key={g} type="button" className={group === g ? "on" : ""} aria-pressed={group === g} onClick={() => set({ group: g })}>
               {g[0]!.toUpperCase() + g.slice(1)}
             </button>
           ))}
@@ -91,7 +122,7 @@ export function Spending({ app }: { app: AppCtx }) {
       {st.status === "loading" && <Loading />}
       {st.status === "error" && <ErrorState error={st.error} title="Couldn't load spending" onRetry={() => invalidate(["/api/transactions", "/api/trends"])} />}
       {st.status === "ready" && (
-        <Body app={app} preset={preset} r={r} group={group} txns={st.data[0]} trends={st.data[1]} recurringIds={new Set((dataOf(recurring) ?? []).map((x) => x.id.split("@")[0]!))} />
+        <Body app={app} preset={preset} r={r} group={group} txns={st.data[0]} trends={st.data[1]} recurringIds={new Set((dataOf(recurring) ?? []).map((x) => x.id.split("@")[0]!))} showAll={showAll} setShowAll={(all) => set({ all })} />
       )}
     </>
   );
@@ -100,7 +131,7 @@ export function Spending({ app }: { app: AppCtx }) {
 const keyFn = (g: Group) => (g === "category" ? categoryOf : g === "merchant" ? (t: Transaction) => t.merchant : (t: Transaction) => t.account);
 const colorFor = (g: Group, k: string, i: number) => (k === "Other" ? "var(--t3)" : g === "category" ? categoryColor(k === "Uncategorized" ? null : k) : slotColor(i + 1));
 
-function Body({ app, preset, r, group, txns, trends, recurringIds }: { app: AppCtx; preset: Preset; r: { from: ISODate; to: ISODate; label: string }; group: Group; txns: Transaction[]; trends: TrendPoint[] | null; recurringIds: Set<string> }) {
+function Body({ app, preset, r, group, txns, trends, recurringIds, showAll, setShowAll }: { app: AppCtx; preset: Preset; r: { from: ISODate; to: ISODate; label: string }; group: Group; txns: Transaction[]; trends: TrendPoint[] | null; recurringIds: Set<string>; showAll: boolean; setShowAll: (all: boolean) => void }) {
   const cur = app.cycle(app.asOf.slice(0, 7));
   const back = prevCycles(app, cur, 3);
   const dayN = daysBetween(cur.period.start, app.asOf) + 1;
@@ -117,7 +148,14 @@ function Body({ app, preset, r, group, txns, trends, recurringIds }: { app: AppC
   const points = trends ?? [];
   const starts = [...new Set(points.map((p) => p.start))].sort();
   const seriesTotals = new Map<string, number>();
-  for (const p of points) if (p.key) seriesTotals.set(p.key, (seriesTotals.get(p.key) ?? 0) + p.amount);
+  const at = new Map<string, number>();
+  for (const p of points) {
+    if (!p.key) continue;
+    seriesTotals.set(p.key, (seriesTotals.get(p.key) ?? 0) + p.amount);
+    at.set(`${p.start}|${p.key}`, p.amount);
+  }
+  // One lookup per (month, key): the table can list every row, and a scan per cell is rows × months × points.
+  const amt = (s: string, k: string) => at.get(`${s}|${k}`) ?? 0;
   const ranked = [...seriesTotals].sort((a, b) => b[1] - a[1]).map(([k]) => k);
   const shown = ranked.slice(0, TOP);
   const monthTotal = (s: string) => points.filter((p) => p.start === s).reduce((a, p) => a + p.amount, 0);
@@ -125,12 +163,13 @@ function Body({ app, preset, r, group, txns, trends, recurringIds }: { app: AppC
   const projected = projection(txns, cur.period, app.asOf);
   const normalMonth = back.length ? Math.round(back.reduce((a, b) => a + monthTotal(b.period.start), 0) / back.length) : null;
   const bars = starts.map((s) => {
-    const stacks = shown.map((k, i) => ({ key: k, color: colorFor(group, k, i), value: points.find((p) => p.start === s && p.key === k)?.amount ?? 0 }));
+    const stacks = shown.map((k, i) => ({ key: k, color: colorFor(group, k, i), value: amt(s, k) }));
     const other = points.filter((p) => p.start === s && p.key && !shown.includes(p.key)).reduce((a, p) => a + p.amount, 0);
     if (other) stacks.push({ key: "Other", color: "var(--t3)", value: other });
     return { label: s === starts[0] || s.endsWith("-01-01") ? `${monthShort(s.slice(0, 7))} '${s.slice(2, 4)}` : monthShort(s.slice(0, 7)), sub: compact(monthTotal(s)).replace("₹", ""), stacks, projected: s === curStart ? projected : null, now: s === curStart };
   });
-  const spark = (k: string) => starts.map((s) => points.find((p) => p.start === s && p.key === k)?.amount ?? 0);
+  // The server returns the top 50 series; rows past that have no monthly history to show.
+  const spark = (k: string) => (seriesTotals.has(k) ? starts.map((s) => amt(s, k)) : null);
 
   // Monthly average over the complete months inside the range.
   const fullMonths = starts.filter((s) => s >= r.from && s !== curStart);
@@ -141,11 +180,11 @@ function Body({ app, preset, r, group, txns, trends, recurringIds }: { app: AppC
   const curSpent = spendOf(C);
   const normalSpan = `${monthShort(back.at(-1)!.key)}–${monthShort(back[0]!.key)}`;
   // Per row, the same rule as the strip: full months inside the range only.
-  const rowAvg = (k: string) => (fullMonths.length ? Math.round(fullMonths.reduce((a, m) => a + (points.find((p) => p.start === m && p.key === k)?.amount ?? 0), 0) / fullMonths.length) : null);
+  const rowAvg = (k: string) => (fullMonths.length && seriesTotals.has(k) ? Math.round(fullMonths.reduce((a, m) => a + amt(m, k), 0) / fullMonths.length) : null);
   const curNormal = [...normal.values()].reduce((a, v) => a + v, 0);
 
   const rows = [...totals].map(([k, v]) => ({ k, ...v })).sort((a, b) => b.amount - a.amount);
-  const top = rows.slice(0, 12);
+  const top = showAll ? rows : rows.slice(0, 12);
   const rest = rows.slice(12);
   // Same identity as the server's series: payee_key, else the lower-cased merchant.
   const rec = R.filter((t) => isExpense(t) && t.bucket !== "card" && recurringIds.has(t.payee_key ?? t.merchant.toLowerCase()));
@@ -238,6 +277,8 @@ function Body({ app, preset, r, group, txns, trends, recurringIds }: { app: AppC
               const diff = c - n;
               const notable = n > 0 ? Math.abs(diff) > n * NOTABLE : c > 0;
               const color = colorFor(group, row.k, shown.indexOf(row.k) >= 0 ? shown.indexOf(row.k) : i);
+              const avg = rowAvg(row.k);
+              const sp = spark(row.k);
               return (
                 <tr key={row.k} className="click" onClick={() => navigate(href(row.k))}>
                   <td>
@@ -247,14 +288,14 @@ function Body({ app, preset, r, group, txns, trends, recurringIds }: { app: AppC
                     </Link>
                   </td>
                   <td className="r">{inr(row.amount)}</td>
-                  <td className="r muted">{rowAvg(row.k) != null ? inr(rowAvg(row.k)!) : "—"}</td>
+                  <td className="r muted">{avg != null ? inr(avg) : "—"}</td>
                   <td className="r">{inr(c)}</td>
                   <td className="r" style={notable ? { color: diff > 0 ? "var(--bad)" : "var(--in)", fontWeight: 500 } : { color: "var(--t3)" }}>
                     {n > 0 ? `${diff >= 0 ? "+" : "−"}${compact(Math.abs(diff))}` : c > 0 ? "new" : "—"}
                   </td>
                   <td className="r muted">{spent ? `${((row.amount / spent) * 100).toFixed(1)}%` : "—"}</td>
                   <td>
-                    <Sparkline values={spark(row.k)} color={color.startsWith("var(--c6") ? "#1fa31f" : color} lastOpen />
+                    {sp && <Sparkline values={sp} color={color.startsWith("var(--c6") ? "#1fa31f" : color} lastOpen />}
                   </td>
                   <td className="r muted">{row.count}</td>
                 </tr>
@@ -262,8 +303,12 @@ function Body({ app, preset, r, group, txns, trends, recurringIds }: { app: AppC
             })}
             {rest.length > 0 && (
               <tr>
-                <td className="muted">+ {plural(rest.length, "more")}</td>
-                <td className="r">{inr(rest.reduce((a, x) => a + x.amount, 0))}</td>
+                <td>
+                  <button type="button" className="linkish" style={{ marginLeft: 0 }} aria-expanded={showAll} onClick={() => setShowAll(!showAll)}>
+                    {showAll ? "Show top 12" : `+ ${plural(rest.length, "more")}`}
+                  </button>
+                </td>
+                <td className="r">{showAll ? null : inr(rest.reduce((a, x) => a + x.amount, 0))}</td>
                 <td colSpan={6} />
               </tr>
             )}
