@@ -132,6 +132,20 @@ def _clusters(txns: list[Any]) -> list[list[Any]]:
     return [sorted(g, key=lambda c: (c.occurred_at, c.id)) for g in groups if len(g) >= 2 and len(g) < len(txns)]
 
 
+def _renewal(cl: list[Any], loose: list[Any]) -> Any | None:
+    """A lone charge to the payee one cadence after the cluster's last: the plan renewed at a new price, which
+    the ±2% cluster can't hold. Nearest the due date wins; at most 2× up or down, so a small top-up never counts."""
+    cadence = _cadence(sorted({c.occurred_at for c in cl}))
+    if cadence is None:
+        return None
+    lo, hi = CADENCES[cadence]
+    last = cl[-1]
+    due = _next_due(last.occurred_at, cadence)
+    fits = [c for c in loose if lo <= (c.occurred_at - last.occurred_at).days <= hi
+            and last.amount / 2 <= c.amount <= last.amount * 2]
+    return min(fits, key=lambda c: (abs((c.occurred_at - due).days), abs(c.amount - last.amount)), default=None)
+
+
 def kind_of(key: str, category: str | None, bucket: str | None) -> str:
     if bucket == "invest":
         return "invest"
@@ -231,10 +245,20 @@ def detect(s: Session, member_id: int, today: date | None = None, *, include_dis
             out.append(whole)
             continue
         # Several fixed charges to one payee (four SIPs to one fund house) are separate series.
-        for cl in _clusters(txns):
-            amount = Decimal(median(c.amount for c in cl)).quantize(Decimal("1"))
+        clusters = _clusters(txns)
+        claimed = {c.id for cl in clusters for c in cl}
+        loose = [c for c in txns if c.id not in claimed]
+        for cl in clusters:
+            amount = Decimal(median(c.amount for c in cl)).quantize(Decimal("1"))  # the key stays the old price
             name = cl[-1].merchant_norm or k
             x = evaluate(f"{k}@{amount}", cl, f"{name} · ₹{amount:,}")
+            # A renewal only extends a series already past due; as a third charge it would make one out of any
+            # two equal grocery orders.
+            if x is not None and x.next_due <= today and (renewal := _renewal(cl, loose)) is not None:
+                extended = evaluate(f"{k}@{amount}", [*cl, renewal], f"{name} · ₹{amount:,}")
+                if extended is not None:
+                    loose.remove(renewal)
+                    x = extended
             if x is not None:
                 out.append(x)
     out.sort(key=lambda x: (x.next_due, x.merchant))
@@ -388,6 +412,7 @@ def _inr(v: Decimal) -> str:
 def alerts(s: Session, member_id: int, month: str, month_start_day: int = 1) -> dict[str, Any]:
     """Rule flags only. duplicate: same account, payee, amount and day, twice or more, in the month. Equal
     same-day investment debits are usually separate SIPs (one per fund), so those flag only on a repeated ref no.
+    Bank charges never flag: a card bills a fee and its GST per charge, so two equal ones mirror two charges.
     bounce_risk: a series due within 7 days whose account's last known balance is below the charge.
     price_increase: a steady-priced series whose latest charge is >5% above the one before.
     missed: a series whose charge is past due + grace in statements that already reach past it."""
@@ -399,8 +424,9 @@ def alerts(s: Session, member_id: int, month: str, month_start_day: int = 1) -> 
     dups = s.execute(
         select(pkey.label("k"), func.max(Txn.merchant_norm).label("merchant"), Txn.account_id, Txn.amount,
                Txn.occurred_at, func.count().label("n"), func.array_agg(Txn.id).label("ids"))
+        .outerjoin(Category, Category.id == Txn.category_id)
         .where(Txn.member_id == member_id, Txn.direction == "debit", Txn.occurred_at >= start, Txn.occurred_at < end,
-               Txn.bucket.is_distinct_from("excluded"), pkey.is_not(None))
+               Txn.bucket.is_distinct_from("excluded"), pkey.is_not(None), Category.name.is_distinct_from("Bank charges"))
         .group_by(pkey, Txn.account_id, Txn.amount, Txn.occurred_at, invest)
         .having(func.count() > 1, or_(~invest, func.count(Txn.ref_no) > func.count(Txn.ref_no.distinct())))
         .order_by(Txn.occurred_at.desc())
