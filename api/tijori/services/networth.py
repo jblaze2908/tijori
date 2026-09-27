@@ -18,6 +18,7 @@ from tijori.services import loans
 from tijori.services.recurring import balances
 
 COMPONENT_KEYS = ("sbi", "hdfc", "fd", "stocks", "mf", "ppf", "epf", "gold", "other")
+MANUAL_KEYS = ("epf", "gold", "other")  # no feed: the member sets these; the rest come from statements and prices
 LIQUID_KEYS = ("sbi", "hdfc", "fd")
 LABELS = {
     "sbi": ("SBI savings", "cash"), "hdfc": ("HDFC savings", "cash"), "fd": ("Fixed deposits", "deposits"),
@@ -294,7 +295,7 @@ def live(s: Session, member_id: int, today: date) -> dict[str, Any]:
         comps.append({"key": key, "label": label, "asset_class": asset_class, "amount": fmt(now[key]),
                       "share_pct": float(round(now[key] * 100 / total, 1)) if total else 0.0,
                       "source": source, "as_of": day, "stale": (today - day).days > STALE_DAYS and source != "estimate",
-                      "editable": True,
+                      "editable": key in MANUAL_KEYS,
                       "change_since": fmt(now[key] - base[key]) if base and key in base else None})
     for key, label, amount in (("loans_given", "Loans given", owed), ("loans_taken", "Loans taken", -owe)):
         if amount:

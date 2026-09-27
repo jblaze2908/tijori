@@ -560,7 +560,7 @@ The current net worth. Each component takes its **newest** dated value. The impo
 
 - **`statement`:** for `sbi` and `hdfc`, each statement's closing balance and the balance after the newest line. For others, a value read from a statement: the CAS month-end `stocks` and `mf`, PPF, FD, or an EPF passbook.
 - **`prices`:** `stocks` and `mf` at the newest daily price on the latest CAS holdings. That's NSE's closing price for shares and ETFs, and AMFI's NAV for funds. It's used only when the price is newer than the CAS.
-- **`manual`:** a value the member set (below).
+- **`manual`:** a value the member set (below). Only `epf`, `gold` and `other` can be set (`editable: true`); the rest have feeds, and `PUT` on them is a 422.
 - **`estimate`:** EPF after its newest value. The usual monthly credit (the commonest month-on-month rise over the last 6 months) is added on each 1st, for up to 6 months.
 - **Invested since:** money invested into a component after what its value includes is added at cost, until the next statement shows it. Examples: an SIP after the CAS date, or a PPF or FD deposit before the next statement. The component is picked by the payee label: SIP/NACH → `mf`, stocks → `stocks`, PPF → `ppf`, FD → `fd`.
 - **Gold and other** hold their first value before it was set, as a base.

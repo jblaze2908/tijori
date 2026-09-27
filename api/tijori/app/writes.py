@@ -46,7 +46,7 @@ from tijori.app.schemas import (
 )
 from tijori.services import budgets, loans, mcp_tokens, members, networth, notify, recurring, txn_edit, txns
 from tijori.services.common import today_ist
-from tijori.services.networth import COMPONENT_KEYS
+from tijori.services.networth import COMPONENT_KEYS, MANUAL_KEYS
 from tijori.services.errors import NotFound
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_json)])
@@ -83,6 +83,9 @@ _AMOUNT = re.compile(r"^\d{1,12}(\.\d{1,2})?$")
 def put_component(db: MemberDep, key: str, body: ComponentIn) -> dict:
     if key not in COMPONENT_KEYS:
         raise NotFound("unknown component")
+    if key not in MANUAL_KEYS:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT,
+                            [{"loc": ["path", "key"], "msg": "this comes from statements and daily prices, so it can't be set by hand"}])
     raw = str(body.amount)
     if not _AMOUNT.match(raw):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT,

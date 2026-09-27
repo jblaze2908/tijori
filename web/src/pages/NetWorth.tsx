@@ -205,7 +205,7 @@ function Allocation({ nw, total }: { nw: LiveNetWorth; total: number }) {
               {signed(sinceTotal)}
             </td>
             <td colSpan={2} className="foot" style={{ fontWeight: 400 }}>
-              Values older than 30 days are flagged. Edit sets today's value by hand.
+              Values older than 30 days are flagged. EPF, gold and other are set by you; the rest come from statements and daily prices.
             </td>
           </tr>
         </tbody>
