@@ -257,14 +257,20 @@ export interface Account {
   first_txn_at: ISODate | null;
   last_txn_at: ISODate | null;
   last_statement: { period_start: ISODate; period_end: ISODate; reconciled: boolean; diff: Decimal } | null;
+  /** Saved PDF passwords, oldest first: which ones, never their values. */
+  statement_passwords: StatementPasswordRef[];
   has_statement_password: boolean;
-  /** A second code for the same account, e.g. the one chosen when requesting an SBI Quick e-statement. */
   has_extra_statement_password: boolean;
   /** Balance printed after the newest statement line. */
   balance: { amount: Decimal; as_of: ISODate } | null;
   /** Last live alert; null until the collectors land (M1). */
   last_seen_at: string | null;
   coverage_pct: number | null;
+}
+export interface StatementPasswordRef {
+  slot: string;
+  label: string | null;
+  updated_at: string;
 }
 export interface Me {
   name: string;

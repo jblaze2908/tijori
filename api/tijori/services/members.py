@@ -13,7 +13,7 @@ from tijori.money import fmt
 from tijori.services.common import account_label, audit
 from tijori.services.errors import Invalid, NotFound
 from tijori.services.recurring import balances
-from tijori.services.secrets import STATEMENT_SLOTS, names, remove, statement_password_name
+from tijori.services.secrets import account_passwords, remove_account_passwords
 
 DEFAULT_MONTH_START_DAY = 1
 DEFAULT_RETENTION_DAYS = 0  # keep forever until the member picks a window: purging is irreversible
@@ -76,7 +76,7 @@ def accounts(s: Session, member_id: int) -> dict[str, Any]:
         .outerjoin(latest, true())
         .where(Account.member_id == member_id).order_by(Account.institution, Account.id)
     ).all()
-    with_password = names(s, member_id, "statement_password:account:")
+    passwords = account_passwords(s, member_id)
     bal = balances(s, member_id)
     return {"items": [
         {"id": a.id, "institution": a.institution, "name": a.name, "kind": a.kind, "mask": a.mask,
@@ -85,8 +85,9 @@ def accounts(s: Session, member_id: int) -> dict[str, Any]:
          "last_statement": None if pe is None else {"period_start": ps, "period_end": pe,
                                                     "reconciled": rat is not None,
                                                     "diff": fmt(diff) if diff is not None else None},
-         "has_statement_password": statement_password_name(a.id) in with_password,
-         "has_extra_statement_password": statement_password_name(a.id, "extra") in with_password,
+         "statement_passwords": passwords.get(a.id, []),
+         "has_statement_password": any(p["slot"] == "main" for p in passwords.get(a.id, [])),
+         "has_extra_statement_password": any(p["slot"] == "extra" for p in passwords.get(a.id, [])),
          "balance": {"amount": fmt(bal[a.id][0]), "as_of": bal[a.id][1]} if a.id in bal else None,
          "last_seen_at": None, "coverage_pct": None}
         for a, n, first, last, ps, pe, rat, diff in rows]}
@@ -127,8 +128,7 @@ def delete_account(s: Session, ctx: MemberContext, actor: str, account_id: int) 
     used += s.scalar(select(func.count()).select_from(Statement).where(Statement.account_id == account_id)) or 0
     if used:
         raise Invalid("this account has transactions or statements; it can't be deleted")
-    for slot in STATEMENT_SLOTS:
-        remove(s, ctx, statement_password_name(account_id, slot))
+    remove_account_passwords(s, ctx, account_id)
     s.delete(acct)
     audit(s, ctx, actor, "account.delete", f"account:{account_id}", {})
 

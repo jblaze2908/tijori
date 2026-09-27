@@ -211,13 +211,13 @@ export async function removeMailSource(id: number) {
   invalidate(["/api/mail-sources", "/api/onboarding"]);
 }
 
-export type PasswordSlot = "main" | "extra";
-export async function setStatementPassword(accountId: number, password: string, slot: PasswordSlot = "main") {
-  await request(`/api/accounts/${accountId}/statement-password`, "PUT", { password, slot });
+/** Adds one more PDF password to the account; every saved one is tried on a locked statement. */
+export async function addStatementPassword(accountId: number, password: string, label?: string) {
+  await request(`/api/accounts/${accountId}/statement-passwords`, "POST", { password, ...(label ? { label } : {}) });
   invalidate(["/api/accounts", "/api/onboarding"]);
 }
-export async function clearStatementPassword(accountId: number, slot: PasswordSlot = "main") {
-  await request(`/api/accounts/${accountId}/statement-password?slot=${slot}`, "DELETE");
+export async function removeStatementPassword(accountId: number, slot: string) {
+  await request(`/api/accounts/${accountId}/statement-passwords/${encodeURIComponent(slot)}`, "DELETE");
   invalidate(["/api/accounts", "/api/onboarding"]);
 }
 

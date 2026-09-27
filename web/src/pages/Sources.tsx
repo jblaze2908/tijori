@@ -118,7 +118,7 @@ export function Sources() {
                 </td>
                 <td className="r">{a.balance ? <>{inr(toPaise(a.balance.amount))}<br /><small>{dayShort(a.balance.as_of)}</small></> : "—"}</td>
                 <td className="r muted">{a.coverage_pct != null ? `${Math.round(a.coverage_pct)}%` : "—"}</td>
-                <td className="r muted" style={{ fontFamily: "inherit" }}>{a.has_statement_password || a.has_extra_statement_password ? `✓ ${Number(a.has_statement_password) + Number(a.has_extra_statement_password)} saved` : "—"}</td>
+                <td className="r muted" style={{ fontFamily: "inherit" }}>{a.statement_passwords?.length ? `✓ ${a.statement_passwords.length} saved` : "—"}</td>
               </tr>
             ))}
           </tbody>

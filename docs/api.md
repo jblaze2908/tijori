@@ -140,7 +140,7 @@ Month cycles that contain at least one txn, oldest first. `start` and `end` are 
             "label": "HDFC ••9876", "currency": "INR", "txn_count": 8,
             "first_txn_at": "2026-04-01", "last_txn_at": "2026-04-30",
             "last_statement": {"period_start": "2026-04-01", "period_end": "2026-04-30", "reconciled": true, "diff": "0.00"},
-            "has_statement_password": false, "has_extra_statement_password": false, "balance": {"amount": "184500.00", "as_of": "2026-08-31"},
+            "statement_passwords": [], "has_statement_password": false, "has_extra_statement_password": false, "balance": {"amount": "184500.00", "as_of": "2026-08-31"},
             "last_seen_at": null, "coverage_pct": null}]}
 ```
 
@@ -784,10 +784,12 @@ It applies to statements uploaded after the change.
 
 | Endpoint | Behaviour |
 |---|---|
-| `PUT /api/accounts/{id}/statement-password` `{"password", "slot"?}` | Write-only; 204. 404 if the account isn't yours. `slot` is `main` (default) or `extra` |
-| `DELETE /api/accounts/{id}/statement-password?slot=main\|extra` | 204, or 404 when none is saved |
+| `POST /api/accounts/{id}/statement-passwords` `{"password", "label"?}` | Adds one; 201 `{"slot", "label", "updated_at"}`. `label` (≤ 40 chars) names it, e.g. `"SBI Quick code"`. 422 past 10 per account, 404 if the account isn't yours |
+| `DELETE /api/accounts/{id}/statement-passwords/{slot}` | 204, or 404 when there's no such password |
+| `PUT /api/accounts/{id}/statement-password` `{"password", "slot"?}` | Older form: sets or replaces slot `main` (default) or `extra`; 204 |
+| `DELETE /api/accounts/{id}/statement-password?slot=main\|extra` | Older form: 204, or 404 when none is saved |
 
-Each account holds two passwords: `main`, and `extra` for a second code on the same account (the 4-digit code chosen in an SBI Quick `ESTMT` request). `GET /api/accounts` shows `has_statement_password` and `has_extra_statement_password`. The collector and uploads try every saved password on a locked PDF.
+An account holds up to 10 passwords, write-only. `GET /api/accounts` lists them per account as `statement_passwords: [{"slot", "label", "updated_at"}]`, `main` first then oldest first, never a value; `has_statement_password` and `has_extra_statement_password` still report the `main` and `extra` slots. The collector and uploads try every saved password on a locked PDF.
 
 ### Where secrets live
 

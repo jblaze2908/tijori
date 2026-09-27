@@ -27,7 +27,9 @@ from tijori.app.schemas import (
     MeIn,
     OnboardingIn,
     OnboardingOut,
+    StatementPasswordAddIn,
     StatementPasswordIn,
+    StatementPasswordOut,
 )
 from tijori.db import MemberContext
 from tijori.models import Account
@@ -35,7 +37,7 @@ from tijori.secretbox import SecretBox
 from tijori.services import mail, members, onboarding
 from tijori.services import secrets as vault
 from tijori.services.common import audit
-from tijori.services.errors import NotFound
+from tijori.services.errors import Invalid, NotFound
 
 router = APIRouter(prefix="/api")
 public = APIRouter(prefix="/api")
@@ -151,6 +153,32 @@ def delete_statement_password(db: MemberDep, account_id: Id, slot: Annotated[Lit
     _own_account(db, account_id)
     if not vault.remove(db.session, db.ctx, vault.statement_password_name(account_id, slot)):
         raise NotFound("no statement password for this account")
+    audit(db.session, db.ctx, db.actor, "statement_password.delete", f"account:{account_id}", {"slot": slot})
+    return Response(status_code=204)
+
+
+@router.post("/accounts/{account_id}/statement-passwords", status_code=201, response_model=StatementPasswordOut,
+             dependencies=JSON)
+def add_statement_password(request: Request, db: MemberDep, account_id: Id, body: StatementPasswordAddIn) -> dict:
+    """One more password for this account; the collector and uploads try them all on a locked PDF."""
+    _own_account(db, account_id)
+    have = vault.account_passwords(db.session, db.ctx.member_id, account_id).get(account_id, [])
+    if len(have) >= vault.MAX_STATEMENT_PASSWORDS:
+        raise Invalid(f"an account holds at most {vault.MAX_STATEMENT_PASSWORDS} passwords")
+    slot = "main" if not any(p["slot"] == "main" for p in have) else vault.new_slot()
+    label = " ".join((body.label or "").split()) or None
+    vault.put(db.session, db.ctx, _box(request), vault.statement_password_name(account_id, slot), body.password, label)
+    audit(db.session, db.ctx, db.actor, "statement_password.set", f"account:{account_id}", {"slot": slot})
+    return next(p for p in vault.account_passwords(db.session, db.ctx.member_id, account_id)[account_id]
+                if p["slot"] == slot)
+
+
+@router.delete("/accounts/{account_id}/statement-passwords/{slot}", status_code=204)
+def remove_statement_password(db: MemberDep, account_id: Id,
+                              slot: Annotated[str, Path(pattern=vault.SLOT.pattern)]) -> Response:
+    _own_account(db, account_id)
+    if not vault.remove(db.session, db.ctx, vault.statement_password_name(account_id, slot)):
+        raise NotFound("no such statement password for this account")
     audit(db.session, db.ctx, db.actor, "statement_password.delete", f"account:{account_id}", {"slot": slot})
     return Response(status_code=204)
 

@@ -432,6 +432,7 @@ class Secret(Base):
     key_nonce: Mapped[bytes] = mapped_column(LargeBinary)
     nonce: Mapped[bytes] = mapped_column(LargeBinary)
     ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    label: Mapped[str | None] = mapped_column(String(40))  # the member's name for it; never part of the secret
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     __table_args__ = (UniqueConstraint("member_id", "name"),)

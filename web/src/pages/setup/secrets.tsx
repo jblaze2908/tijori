@@ -4,11 +4,11 @@ import { useToast } from "../../components/Toast";
 import { InlineState, Loading } from "../../components/ui";
 import { api, dataOf, read } from "../../lib/api";
 import { dayIST, dayShort, inr, plural, toPaise } from "../../lib/format";
-import { clearStatementPassword, createInvite, revokeInvite, setStatementPassword, setup, uploadStatement, type PasswordSlot, type UploadResult } from "../../lib/setup";
+import { addStatementPassword, createInvite, removeStatementPassword, revokeInvite, setup, uploadStatement, type UploadResult } from "../../lib/setup";
 import { useStore } from "../../lib/useStore";
-import type { Account } from "../../lib/types";
+import type { Account, StatementPasswordRef } from "../../lib/types";
 
-/** Statement PDF passwords, two per account. Write-only: the page only ever learns whether one is saved. */
+/** Statement PDF passwords, any number per account. Write-only: the page learns which ones exist, never a value. */
 export function StatementPasswords({ onContinue }: { onContinue?: () => void }) {
   useStore();
   const st = read(api.accounts());
@@ -43,53 +43,86 @@ export function StatementPasswords({ onContinue }: { onContinue?: () => void }) 
   );
 }
 
+const passwordName = (p: StatementPasswordRef) => p.label ?? (p.slot === "main" ? "Statement password" : "Password");
+
+/** One account's saved passwords, each removable, and a form to add one with an optional label. */
 function PasswordRow({ a }: { a: Account }) {
+  const toast = useToast();
+  const act = useAction();
+  const [adding, setAdding] = useState(false);
+  const list = a.statement_passwords ?? [];
   return (
     <div className="li li-col">
-      <b>{a.label}</b>
-      <PasswordSlotForm a={a} slot="main" saved={a.has_statement_password} name="Statement password" />
-      <PasswordSlotForm a={a} slot="extra" saved={a.has_extra_statement_password} name="Second password (e.g. an SBI Quick code)" />
+      <div className="li-row">
+        <b>{a.label}</b>
+        <small className="faint" style={{ marginLeft: "auto" }}>
+          {list.length ? plural(list.length, "password") : "No password"}
+        </small>
+      </div>
+      {list.map((p) => (
+        <div key={p.slot} className="li-row">
+          <div className="mid">
+            <small>
+              {passwordName(p)} · saved {dayShort(p.updated_at.slice(0, 10))}
+            </small>
+          </div>
+          <button
+            type="button"
+            className="linkish"
+            disabled={act.busy}
+            onClick={async () => {
+              if ((await act.run(() => removeStatementPassword(a.id, p.slot))).ok) toast(`Removed ${passwordName(p)} for ${a.label}.`);
+            }}
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+      {adding ? (
+        <AddPasswordForm a={a} onDone={() => setAdding(false)} />
+      ) : (
+        list.length < 10 && (
+          <button type="button" className="linkish" style={{ alignSelf: "flex-start", marginLeft: 0 }} onClick={() => setAdding(true)}>
+            + Add password
+          </button>
+        )
+      )}
+      {act.error && (
+        <div className="result bad" role="alert">
+          {act.error}
+        </div>
+      )}
     </div>
   );
 }
 
-function PasswordSlotForm({ a, slot, saved, name }: { a: Account; slot: PasswordSlot; saved: boolean; name: string }) {
+function AddPasswordForm({ a, onDone }: { a: Account; onDone: () => void }) {
   const toast = useToast();
   const [value, setValue] = useState("");
+  const [label, setLabel] = useState("");
   const act = useAction();
-  const what = slot === "main" ? "statement password" : "second password";
   return (
     <form
       className="li-col"
       onSubmit={async (e) => {
         e.preventDefault();
         if (!value) return;
-        const r = await act.run(() => setStatementPassword(a.id, value, slot));
+        const r = await act.run(() => addStatementPassword(a.id, value, label.trim() || undefined));
         setValue("");
-        if (r.ok) toast(`Saved the ${what} for ${a.label}.`);
+        if (r.ok) {
+          toast(`Saved a password for ${a.label}.`);
+          onDone();
+        }
       }}
     >
-      <div className="li-row">
-        <div className="mid">
-          <small>{saved ? `${name}: saved` : `${name}: none saved`}</small>
-        </div>
-        {saved && (
-          <button
-            type="button"
-            className="linkish"
-            disabled={act.busy}
-            onClick={async () => {
-              if ((await act.run(() => clearStatementPassword(a.id, slot))).ok) toast(`Removed the ${what} for ${a.label}.`);
-            }}
-          >
-            Remove
-          </button>
-        )}
-      </div>
       <div className="row-form">
-        <SecretInput value={value} onChange={setValue} placeholder={saved ? "Replace password" : name} label={`${name} for ${a.label}`} />
+        <SecretInput value={value} onChange={setValue} placeholder="Password" label={`New password for ${a.label}`} />
+        <input className="inp" style={{ flex: "0 1 200px" }} value={label} maxLength={40} placeholder="Label (optional)" aria-label={`Label for the new password for ${a.label}`} onChange={(e) => setLabel(e.target.value)} />
         <button type="submit" className="btn ghost" disabled={act.busy || !value}>
-          {saved ? "Replace" : "Save"}
+          Save
+        </button>
+        <button type="button" className="linkish" onClick={onDone}>
+          Cancel
         </button>
       </div>
       {act.error && (

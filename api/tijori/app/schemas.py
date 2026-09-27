@@ -475,7 +475,8 @@ class AccountOut(BaseModel):
     first_txn_at: date | None
     last_txn_at: date | None
     last_statement: StatementRef | None
-    has_statement_password: bool
+    statement_passwords: list["StatementPasswordOut"] = []
+    has_statement_password: bool  # the "main" slot; kept for older clients
     has_extra_statement_password: bool
     balance: "Balance | None"
     last_seen_at: datetime | None
@@ -639,6 +640,19 @@ class StatementPasswordIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     password: str = Field(min_length=1, max_length=256, repr=False)
     slot: Literal["main", "extra"] = "main"
+
+
+class StatementPasswordAddIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    password: str = Field(min_length=1, max_length=256, repr=False)
+    label: Annotated[str, Field(max_length=40)] | None = None
+
+
+class StatementPasswordOut(BaseModel):
+    """Which passwords an account holds; the value is never returned."""
+    slot: str
+    label: str | None
+    updated_at: datetime
 
 
 
