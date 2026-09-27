@@ -26,7 +26,7 @@ from email.message import EmailMessage
 from email.utils import parseaddr, parsedate_to_datetime
 from typing import Any
 
-from sqlalchemy import select, text, update
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
@@ -213,7 +213,7 @@ def _statement(s: Session, ctx: MemberContext, settings: Settings, sender: str, 
     if CAS.match(Message(text=text_)):
         cas = CAS.parse(Message(text=text_))
         _components(s, ctx, cas.components, cas.as_of)
-        return _holdings(s, ctx, cas.lines, "cdsl_cas")
+        return _holdings(s, ctx, cas.lines, "cdsl_cas", replace=True)
     if CAMS.match(Message(text=text_)):
         return _holdings(s, ctx, CAMS.parse_holdings(Message(text=text_)))
     parser = route(Message(text=text_, sender=sender, filename=att.filename))
@@ -253,8 +253,20 @@ def _components(s: Session, ctx: MemberContext, values: tuple[tuple[str, Any], .
         s.execute(cv.on_conflict_do_update(constraint="uq_component_value_member_id_key_as_of", set_={"amount": cv.excluded.amount}))
 
 
-def _holdings(s: Session, ctx: MemberContext, lines: list[Any], source: str = "cams") -> str:
-    """Units per scheme as of the statement's NAV date, and that NAV as a price point. Idempotent."""
+def _holdings(s: Session, ctx: MemberContext, lines: list[Any], source: str = "cams", replace: bool = False) -> str:
+    """Units per scheme as of the statement's NAV date, and that NAV as a price point. Idempotent. `replace`: the
+    statement is complete for its date (a CAS), so a re-read swaps that date's rows; a fund held both as a folio
+    and in demat keeps both rows."""
+    if replace:
+        for as_of in {h.as_of for h in lines}:
+            s.execute(delete(Holding).where(Holding.member_id == ctx.member_id, Holding.as_of == as_of,
+                                            Holding.source == source))
+        for h in lines:
+            s.add(Holding(member_id=ctx.member_id, isin=h.isin, name=h.name, units=h.units, as_of=h.as_of, source=source))
+            if h.isin:
+                s.execute(pg_insert(Price).values(isin_or_symbol=h.isin, date=h.as_of, close=h.nav, source=source[:16])
+                          .on_conflict_do_nothing())
+        return "parsed"
     for h in lines:
         q = select(Holding).where(Holding.member_id == ctx.member_id, Holding.as_of == h.as_of, Holding.source == source)
         seen = s.scalars(q.where(Holding.isin == h.isin) if h.isin else q.where(Holding.name == h.name)).first()
