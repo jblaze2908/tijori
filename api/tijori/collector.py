@@ -386,6 +386,10 @@ def main() -> None:
             sealed = encrypt_existing(settings.blob_dir, ctx.member_id, box)
             if sealed:
                 log.info("member=%s sealed %s stored files", ctx.member_id, sealed)
+    for ctx in _members(engine):  # a deploy may bring a new matching rule: apply it to history once
+        with member_session(engine, ctx) as s:
+            if n := cards.link_card_payments(s, ctx.member_id):
+                log.info("member=%s matched %d card bill payments", ctx.member_id, n)
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
     while not stop:

@@ -169,7 +169,7 @@ These definitions match the 2026-09-26 report exactly. That was checked on the r
 
 | Field | Meaning |
 |---|---|
-| `everyday`, `oneoff`, `card` | Sum of **debits** in that bucket. `card` is bill payments from a bank account (CRED, BillDesk) that still stand in for card spend: the card statement they pay isn't parsed. A payment matched to the card's "payment received" line moves to `excluded` (see [`/api/cards`](#get-apicards)), and the card's purchases count instead |
+| `everyday`, `oneoff`, `card` | Sum of **debits** in that bucket. `card` is bill payments from a bank account (CRED, BillDesk) that still stand in for card spend: the card statement they pay isn't parsed. A payment matched to the card's "payment received" line or to the statement it pays moves to `excluded` (see [`/api/cards`](#get-apicards)), and the card's purchases count instead |
 | `uncategorized` | Debits with no category yet (the Inbox) |
 | `expense` | `everyday + oneoff + card + uncategorized`: the one spend definition |
 | `invest` | Debits in the `invest` bucket |
@@ -491,7 +491,12 @@ Recurring series (the Subscriptions page), detected from the member's own histor
 
 ## `GET /api/cards`
 
-Card accounts and their bill payments. A card purchase is spend on the card. A bank-side bill payment is matched to the card's own "payment received" credit: same amount, within ±4 days. When matched, both legs become `excluded` transfers, linked as `card_payment`. The match only happens if the statement the payment settles is on file: the latest card statement that closed before the payment, and no more than 45 days before it. Otherwise the bank payment stays in the `card` bucket and stands in for the card's purchases. Matching runs after every statement upload.
+Card accounts and their bill payments. A card purchase is spend on the card. A bank-side bill payment becomes an `excluded` transfer in either of two ways, and only if the statement it settles is on file (the card's latest statement that closed before the payment, no more than 45 days before it):
+
+1. **Its card line:** the card's own "payment received" credit within ±4 days, the same amount. For a CRED payment (`cred.club`) the card may be credited up to max(₹25, 1%) more, since CRED pays part of the bill from its rewards; a payment made on the bank's own site must match exactly. Exact matches are made first. Both legs are linked as `card_payment`.
+2. **Its statement:** a payment of that statement's total (CRED: up to the same slack less), on exactly one card, for a statement not already paid. The card line only arrives with the next statement, so this counts the payment as a transfer straight away; its `rule_id` is `stmt:<statement id>`, and the card line is still linked when it comes.
+
+Anything else stays in the `card` bucket and stands in for the card's purchases. Matching runs after every ingest (statements, alerts, uploads) and once when the collector starts, so a deploy applies a changed rule to history.
 
 ```json
 {"items": [{"account": {"id": 3, "label": "HDFC Platinum ••4242"},
