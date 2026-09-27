@@ -7,10 +7,14 @@ import type { Bucket, ISODate, Paise, Period, Recurring, ServerAlert, Snapshot, 
 // ---------- classification: the same rules as docs/api.md's summary totals ----------
 
 const EXPENSE_BUCKETS: ReadonlySet<Bucket | null> = new Set<Bucket | null>(["everyday", "oneoff", "card"]);
-export const isExpense = (t: Transaction) => t.direction === "debit" && (t.category_id == null || EXPENSE_BUCKETS.has(t.bucket));
+/** A refund linked to its purchase carries the purchase's spend bucket and subtracts from spend. */
+const isNettedRefund = (t: Transaction) => t.direction === "credit" && t.kind === "refund" && EXPENSE_BUCKETS.has(t.bucket);
+export const isExpense = (t: Transaction) => (t.direction === "debit" && (t.category_id == null || EXPENSE_BUCKETS.has(t.bucket))) || isNettedRefund(t);
+/** What a txn adds to spend: sum this, not `amount`, under isExpense. */
+export const spendAmount = (t: Transaction) => (isNettedRefund(t) ? -t.amount : t.amount);
 export const isIncome = (t: Transaction) => t.direction === "credit" && t.bucket === "income";
 export const isInvest = (t: Transaction) => t.direction === "debit" && t.bucket === "invest";
-export const isRefund = (t: Transaction) => t.direction === "credit" && t.kind === "refund";
+export const isRefund = (t: Transaction) => t.direction === "credit" && t.kind === "refund" && t.bucket === "income";
 
 export const within = (txns: Transaction[], from: ISODate, to: ISODate) => txns.filter((t) => t.date >= from && t.date <= to);
 
@@ -23,7 +27,7 @@ export function summarize(txns: Transaction[]): Totals {
 }
 const emptyTotals = (): Totals => ({ expense: 0, income: 0, invest: 0, card: 0, refunds: 0 });
 function addTo(t: Totals, x: Transaction) {
-  if (isExpense(x)) t.expense += x.amount;
+  if (isExpense(x)) t.expense += spendAmount(x);
   if (x.direction === "debit" && x.bucket === "card") t.card += x.amount;
   if (isIncome(x)) t.income += x.amount;
   if (isInvest(x)) t.invest += x.amount;
@@ -47,7 +51,7 @@ export function cumulative(txns: Transaction[], start: ISODate, days: number): P
   for (const t of txns) {
     if (!isExpense(t)) continue;
     const d = daysBetween(start, t.date) + 1;
-    if (d >= 1 && d <= days) byDay[d] = (byDay[d] ?? 0) + t.amount;
+    if (d >= 1 && d <= days) byDay[d] = (byDay[d] ?? 0) + spendAmount(t);
   }
   const out: Point[] = [];
   let acc = 0;
@@ -125,8 +129,8 @@ export function periodStats(txns: Transaction[], periods: Period[]): PeriodStat[
     addTo(s.totals, t);
     if (isExpense(t)) {
       const c = t.category ?? UNCATEGORIZED;
-      s.byCategory.set(c, (s.byCategory.get(c) ?? 0) + t.amount);
-      s.byMerchant.set(t.merchant, (s.byMerchant.get(t.merchant) ?? 0) + t.amount);
+      s.byCategory.set(c, (s.byCategory.get(c) ?? 0) + spendAmount(t));
+      s.byMerchant.set(t.merchant, (s.byMerchant.get(t.merchant) ?? 0) + spendAmount(t));
     }
   }
   return stats;
@@ -210,7 +214,7 @@ export function merchantsBefore(txns: Transaction[], before: ISODate): Set<strin
 // Move server-side in M2 (spend_by weekday / day).
 export function dailySpend(txns: Transaction[], from: ISODate, to: ISODate): Map<ISODate, Paise> {
   const m = new Map<ISODate, Paise>();
-  for (const t of txns) if (t.date >= from && t.date <= to && isExpense(t)) m.set(t.date, (m.get(t.date) ?? 0) + t.amount);
+  for (const t of txns) if (t.date >= from && t.date <= to && isExpense(t)) m.set(t.date, (m.get(t.date) ?? 0) + spendAmount(t));
   return m;
 }
 
@@ -244,8 +248,8 @@ export function committedSplit(txns: Transaction[], recurring: Recurring[] | nul
   let discretionary = 0;
   for (const t of txns) {
     if (!isExpense(t)) continue;
-    if ((t.category && COMMITTED_CATEGORIES.has(t.category)) || t.sources.includes("expected") || payees.has(t.merchant)) committed += t.amount;
-    else discretionary += t.amount;
+    if ((t.category && COMMITTED_CATEGORIES.has(t.category)) || t.sources.includes("expected") || payees.has(t.merchant)) committed += spendAmount(t);
+    else discretionary += spendAmount(t);
   }
   return { committed, discretionary };
 }

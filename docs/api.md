@@ -14,7 +14,7 @@ This is the contract the web UI is built against. Examples come from synthetic s
 | Currency | INR everywhere (`"currency": "INR"`). |
 | Dates and times | Dates are `YYYY-MM-DD`; months are `YYYY-MM`; timestamps are ISO 8601 with an offset. "Today" is taken in Asia/Kolkata. |
 | Months are cycles | Every month parameter and bucket follows the member's `month_start_day` (default 1). This covers `/api/summary`, `/api/months`, `/api/transactions?month=`, `/api/budgets` and `/api/trends`. A month runs from that day to the day before it in the next month. It is **labelled by the calendar month it starts in**: with day 25, `2026-04` is 25 Apr – 24 May. With day 1 it is the calendar month |
-| Spend | **One definition everywhere:** debits in the `everyday`, `oneoff` and `card` buckets, plus uncategorized (Inbox) debits. Refunds are reported separately and never netted. A txn's `bucket` comes from its category; the people categories (Family, Friends, Social circle) have a `credit_bucket` of `income`, so money sent counts as spend and money received as income. `/api/summary` `expense` and the `/api/trends` totals use exactly this rule, so a headline number always equals its trend bar |
+| Spend | **One definition everywhere:** debits in the `everyday`, `oneoff` and `card` buckets, plus uncategorized (Inbox) debits, less refunds linked to their purchase. A linked refund takes its purchase's merchant, category and bucket and counts negative, so a returned order nets out of its category. Other refunds stay in `income`, reported separately. A txn's `bucket` comes from its category; the people categories (Family, Friends, Social circle) have a `credit_bucket` of `income`, so money sent counts as spend and money received as income. `/api/summary` `expense` and the `/api/trends` totals use exactly this rule, so a headline number always equals its trend bar |
 | Paging | `page` starts at 1. `page_size` runs 1–200 (default 50). Paged responses carry `page`, `page_size` and `total`. |
 | Ordering | Transaction lists are newest first (`occurred_at` desc, then `id` desc). |
 | Nulls | Optional fields are present and set to `null`. They are never omitted. |
@@ -174,7 +174,7 @@ These definitions match the 2026-09-26 report exactly. That was checked on the r
 | `expense` | `everyday + oneoff + card + uncategorized`: the one spend definition |
 | `invest` | Debits in the `invest` bucket |
 | `income` | **Credits** in the `income` bucket: salary, interest, dividends, other income and refunds |
-| `refunds` | The refund part of `income`. Refunds are **not** netted against spend here |
+| `refunds` | The refund part of `income`: refunds not linked to a purchase. Linked refunds net against `expense` instead |
 | `salary` | Credits in the `Salary` category |
 | `salary_minus_expense` | `salary − expense` |
 | `txn_count` | Every txn in the month, any bucket |
@@ -370,12 +370,12 @@ Spend over time. Aggregation happens in SQL, bucketed by `date_trunc`.
 
 The member's `month_start_day` shifts month, quarter and FY boundaries. For example, day 25 gives months running 25th to 24th. Weeks ignore it.
 
-- **Spend** uses the one definition (see Conventions): debits in `everyday`, `oneoff` and `card` plus uncategorized debits, with refunds not netted. A month's `total` equals `/api/summary` `expense` for the same month cycle, and `income`/`invested` equal its `income`/`invest`.
+- **Spend** uses the one definition (see Conventions): debits in `everyday`, `oneoff` and `card` plus uncategorized debits, less linked refunds. A month's `total` equals `/api/summary` `expense` for the same month cycle, and `income`/`invested` equal its `income`/`invest`.
 - **`group_by=total`** returns six series, all on the summary's rules:
   - `total`: spend.
   - `committed` + `discretionary`: spend split by whether the payee has a live recurring series (see [`/api/recurring`](#get-apirecurring)).
   - `income`: credits in the `income` bucket.
-  - `refunds`: the refund part of income.
+  - `refunds`: the refund part of income (unlinked refunds).
   - `invested`: debits in the `invest` bucket.
 - **`group_by=category|merchant|account`** splits `total` (spend) into series.
 - **`group_by=kind`** is a different view. It includes every kind, each measured in its natural direction: credits for `income` and `refund`, debits for the rest. The opposite direction subtracts.
@@ -517,7 +517,7 @@ Rule flags for the month cycle. Every one is computed from data; none is written
 
 | `kind` | `severity` | Rule |
 |---|---|---|
-| `duplicate` | `bad` | Two or more debits with the same account, payee, amount and day |
+| `duplicate` | `bad` | Two or more debits with the same account, payee, amount and day. Investments flag only when a ref no repeats: equal same-day SIPs are usually separate funds |
 | `bounce_risk` | `warn` | A recurring series due in the next 7 days, whose account's last known `balance` is below the charge |
 | `price_increase` | `warn` | A steady-priced series whose latest charge, this month, is more than 5% above the one before |
 | `missed` | `warn` | A series in state `late` (see [`/api/recurring`](#get-apirecurring)), in the current cycle |
@@ -876,9 +876,10 @@ The `worker` service (`python -m tijori.collector`) polls each connected mailbox
 
 - `transfer` and `pass_through` take both legs out of spend and income.
 - `dup` takes the linked (second) txn out.
-- `refund` only records the link.
+- `refund` joins a credit to the debit it returns (either order; two debits or two credits are a 422). The credit takes the debit's merchant and category and nets against its spend (see Conventions: Spend). If the debit isn't spend (Inbox, investment, excluded) the credit goes to Refunds. A credit can refund one payment; a payment can have several partial refunds. When the debit is recategorised by hand, its refunds follow. Removing the link puts the credit back where the classifier files it, and it isn't auto-linked again.
+- Refunds are also linked automatically after every ingest: a credit with the same 12-digit UPI ref as an earlier debit of at least its amount on the same account is that payment coming back. Credits filed by hand are left alone.
 - `card_payment` links are made automatically (see [`/api/cards`](#get-apicards)). They can be removed, which puts the bill payment back to standing in for card spend, but not added by hand.
-- `link-candidates` lists up to 8 txns within 10 days: the same amount the other way (`suggest: "transfer"`), or the same way on the same day (`suggest: "dup"`).
+- `link-candidates` lists up to 8 txns: first any txn the other way with the same UPI ref, at any amount or distance (`suggest: "refund"`), then within 10 days the same amount the other way (`suggest: "transfer"`), or the same way on the same day (`suggest: "dup"`).
 
 ## `GET /api/transactions/{id}/sources` and `GET /api/raw/attachments/{id}`
 

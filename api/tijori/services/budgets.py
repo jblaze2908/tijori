@@ -14,13 +14,13 @@ from tijori.models import Budget, Category, Txn
 from tijori.money import ZERO, fmt
 from tijori.services.common import audit, cycle_bounds, today_ist
 from tijori.services.errors import Invalid, NotFound
-from tijori.services.reports import is_expense
+from tijori.services.reports import expense_amount, is_expense
 
 AHEAD = Decimal("1.10")  # spend more than 10% above the straight-line share of the limit is "ahead of pace"
 
 
 def _spent(s: Session, member_id: int, start: date, end: date) -> dict[int, Decimal]:
-    return dict(s.execute(select(Txn.category_id, func.sum(Txn.amount)).where(
+    return dict(s.execute(select(Txn.category_id, func.sum(expense_amount())).where(
         Txn.member_id == member_id, is_expense(), Txn.occurred_at >= start, Txn.occurred_at < end,
         Txn.category_id.is_not(None)).group_by(Txn.category_id)).all())
 

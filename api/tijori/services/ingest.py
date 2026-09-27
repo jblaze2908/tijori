@@ -35,7 +35,7 @@ from tijori.money import fmt
 from tijori.parsers import Observation as Line
 from tijori.parsers import Statement as ParsedStatement
 from tijori.parsers import reconcile
-from tijori.services import cards
+from tijori.services import cards, txn_edit
 from tijori.services.common import account_ref, audit
 
 
@@ -284,9 +284,10 @@ def ingest_statement(s: Session, ctx: MemberContext, actor: str, st: ParsedState
         s.execute(cv.on_conflict_do_update(constraint="uq_component_value_member_id_key_as_of",
                                            set_={"amount": cv.excluded.amount}))
     linked = cards.link_card_payments(s, ctx.member_id)
+    refunds = txn_edit.link_refunds_by_ref(s, ctx)
     audit(s, ctx, actor, "statement.upload", f"statement:{statement_id}",
           {"parser": st.parser, "lines": len(st.lines), "created": len(created), "ok": rec.ok,
-           "soft_matched": len(soft), "card_payments_linked": linked})
+           "soft_matched": len(soft), "card_payments_linked": linked, "refunds_linked": refunds})
     return {
         "statement_id": statement_id, "raw_message_id": msg.id, "duplicate": False,
         "parser": st.parser, "parser_version": st.parser_version, "institution": st.institution,

@@ -14,7 +14,7 @@ from decimal import Decimal
 from statistics import median
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.orm import Session
 
@@ -386,7 +386,8 @@ def _inr(v: Decimal) -> str:
 
 
 def alerts(s: Session, member_id: int, month: str, month_start_day: int = 1) -> dict[str, Any]:
-    """Rule flags only. duplicate: same account, payee, amount and day, twice or more, in the month.
+    """Rule flags only. duplicate: same account, payee, amount and day, twice or more, in the month. Equal
+    same-day investment debits are usually separate SIPs (one per fund), so those flag only on a repeated ref no.
     bounce_risk: a series due within 7 days whose account's last known balance is below the charge.
     price_increase: a steady-priced series whose latest charge is >5% above the one before.
     missed: a series whose charge is past due + grace in statements that already reach past it."""
@@ -394,13 +395,14 @@ def alerts(s: Session, member_id: int, month: str, month_start_day: int = 1) -> 
     today = today_ist()
     items: list[dict[str, Any]] = []
     pkey = payee_key_expr()
+    invest = or_(Txn.bucket.is_not_distinct_from("invest"), Txn.kind == "investment")  # never NULL: it is negated
     dups = s.execute(
         select(pkey.label("k"), func.max(Txn.merchant_norm).label("merchant"), Txn.account_id, Txn.amount,
                Txn.occurred_at, func.count().label("n"), func.array_agg(Txn.id).label("ids"))
         .where(Txn.member_id == member_id, Txn.direction == "debit", Txn.occurred_at >= start, Txn.occurred_at < end,
                Txn.bucket.is_distinct_from("excluded"), pkey.is_not(None))
-        .group_by(pkey, Txn.account_id, Txn.amount, Txn.occurred_at)
-        .having(func.count() > 1)
+        .group_by(pkey, Txn.account_id, Txn.amount, Txn.occurred_at, invest)
+        .having(func.count() > 1, or_(~invest, func.count(Txn.ref_no) > func.count(Txn.ref_no.distinct())))
         .order_by(Txn.occurred_at.desc())
     ).all()
     for d in dups:

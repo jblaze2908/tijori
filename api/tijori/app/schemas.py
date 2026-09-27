@@ -187,7 +187,7 @@ class LinkCandidate(BaseModel):
     direction: str
     merchant: str | None
     account_id: int | None
-    suggest: Literal["transfer", "dup"]
+    suggest: Literal["transfer", "dup", "refund"]
 
 
 class LinkCandidates(BaseModel):

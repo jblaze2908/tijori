@@ -568,7 +568,7 @@ export interface LinkCandidate {
   direction: Direction;
   merchant: string | null;
   account_id: number | null;
-  suggest: "transfer" | "dup";
+  suggest: "transfer" | "dup" | "refund";
 }
 export interface RawSource {
   raw_message_id: number;

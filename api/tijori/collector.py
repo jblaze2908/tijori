@@ -41,7 +41,7 @@ from tijori.parsers.cdsl_cas import CdslCasParser
 from tijori.parsers import Message, ParseError, route
 from tijori.parsers.alerts import AlertParser
 from tijori.pdf import PdfError, is_pdf, pdf_to_text
-from tijori.services import cards, loans, notify, prices, retention
+from tijori.services import cards, loans, notify, prices, retention, txn_edit
 from tijori.services import secrets as vault
 from tijori.services.ingest import ingest_alert, ingest_statement, load_classifier
 from tijori.settings import Settings, get_settings
@@ -148,6 +148,7 @@ def _route(s: Session, ctx: MemberContext, settings: Settings, rm: RawMessage, m
         for obs in ALERTS.parse(m):
             ingest_alert(s, ctx, clf, obs, rm, ALERTS.name, ALERTS.version)
         cards.link_card_payments(s, ctx.member_id)
+        txn_edit.link_refunds_by_ref(s, ctx)
         status = "parsed"
     for att, data in atts:
         status = _statement(s, ctx, settings, rm.sender or "", rm, att, data) or status
@@ -390,6 +391,8 @@ def main() -> None:
         with member_session(engine, ctx) as s:
             if n := cards.link_card_payments(s, ctx.member_id):
                 log.info("member=%s matched %d card bill payments", ctx.member_id, n)
+            if n := txn_edit.link_refunds_by_ref(s, ctx):
+                log.info("member=%s linked %d refunds by UPI ref", ctx.member_id, n)
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
     while not stop:

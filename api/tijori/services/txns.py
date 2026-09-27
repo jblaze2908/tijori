@@ -16,7 +16,7 @@ from tijori.money import ZERO, fmt
 from tijori.services import aliases, cards, txn_edit
 from tijori.services.common import audit, category_by_ref, cycle_bounds, txn_out, txn_query
 from tijori.services.errors import Invalid, NotFound
-from tijori.services.reports import is_expense
+from tijori.services.reports import expense_amount, is_expense
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,7 +106,7 @@ def list_txns(s: Session, member_id: int, f: TxnFilter, page: int, page_size: in
     measure = _measure().label("measure")
     card = (Txn.bucket == "card").label("card")
     on_card = Txn.account_id.in_(_card_ids(member_id)).label("on_card")
-    groups = s.execute(select(measure, card, on_card, func.count().label("n"), func.sum(Txn.amount).label("amount"))
+    groups = s.execute(select(measure, card, on_card, func.count().label("n"), func.sum(expense_amount()).label("amount"))
                        .where(where).group_by(measure, card, on_card)).all()
     # card: bill payments standing in for card spend; on_card: spend on card accounts. Both subsets of spend.
     totals = {k: {"amount": ZERO, "count": 0} for k in ("spend", "income", "invest", "excluded", "card", "on_card")}
@@ -301,7 +301,7 @@ def set_category(s: Session, ctx: MemberContext, actor: str, txn_id: int, *, cat
     if t is None:
         raise NotFound("transaction not found")
     s.execute(update(Txn).where(Txn.id == txn_id).values(**_filed_values(cat, "user", "user")))
-    updated, rule_ref = 1, None
+    touched, rule_ref = [txn_id], None
     if scope == "payee":
         alias, _, keys = aliases.group_of(s, ctx.member_id, t.payee_key) if t.payee_key else (None, None, set())
         rule = _create_payee_rule(s, ctx, cat, t.vpa, t.merchant_norm, t.direction, alias)
@@ -314,10 +314,11 @@ def set_category(s: Session, ctx: MemberContext, actor: str, txn_id: int, *, cat
         ).all()
         if others:
             s.add_all(RuleHit(rule_id=rule.id, txn_id=i, member_id=ctx.member_id) for i in others)
-        updated += len(others)
+        touched += others
+    txn_edit.follow_purchases(s, ctx, touched)
     audit(s, ctx, actor, "txn.categorize", f"txn:{txn_id}",
-          {"category_id": cat.id, "scope": scope, "rule_id": rule_ref, "updated": updated})
-    return {"updated": updated, "rule_id": rule_ref}
+          {"category_id": cat.id, "scope": scope, "rule_id": rule_ref, "updated": len(touched)})
+    return {"updated": len(touched), "rule_id": rule_ref}
 
 
 def file_inbox(s: Session, ctx: MemberContext, actor: str, payee_key: str, *, category_id: int | None,
@@ -337,6 +338,7 @@ def file_inbox(s: Session, ctx: MemberContext, actor: str, payee_key: str, *, ca
                       .returning(Txn.id, Txn.vpa, Txn.merchant_norm, Txn.direction)).all()
     if not filed:
         raise NotFound("no Inbox items for this payee")
+    txn_edit.follow_purchases(s, ctx, [f.id for f in filed])
     rule_ref = None
     if remember:
         directions = {f.direction for f in filed}
@@ -399,6 +401,7 @@ def unfile(s: Session, ctx: MemberContext, actor: str, txn_ids: list[int], rule_
         back = sorted({*back, *restored})
         rule_removed = s.execute(delete(Rule).where(Rule.id == rule_pk, Rule.member_id == ctx.member_id)
                                  .returning(Rule.id)).first() is not None
+    txn_edit.follow_purchases(s, ctx, list(back))
     audit(s, ctx, actor, "inbox.undo", f"txns:{len(back)}", {"rule_id": rule_id, "rule_removed": rule_removed})
     return {"restored": len(back), "rule_removed": rule_removed}
 

@@ -265,7 +265,7 @@ function Body({ id }: { id: string }) {
             </span>
           </div>
         )}
-        <LinksBlock id={id} links={d.links} />
+        <LinksBlock id={id} links={d.links} credit={credit} />
         <SplitBlock t={t} parts={d.split_parts ?? []} categories={categories} />
         {!credit && <RecurringBlock t={t} />}
         {d.payee && (
@@ -563,7 +563,7 @@ function SourceItems({ id }: { id: string }) {
 const LINK_LABEL: Record<string, string> = { transfer: "Transfer between your accounts", refund: "Refund of", dup: "Duplicate of", pass_through: "Passed through", card_payment: "Card bill payment", reversal: "Reversal" };
 
 /** Existing links (removable) and the likely other leg: same amount, the other way, within 10 days. */
-function LinksBlock({ id, links }: { id: string; links: { kind: string; txn_id: number }[] }) {
+function LinksBlock({ id, links, credit }: { id: string; links: { kind: string; txn_id: number }[]; credit: boolean }) {
   const [adding, setAdding] = useState(false);
   const [kind, setKind] = useState<LinkKind>("transfer");
   const toast = useToast();
@@ -588,7 +588,7 @@ function LinksBlock({ id, links }: { id: string; links: { kind: string; txn_id: 
         <div key={`${l.kind}${l.txn_id}`} className="obs">
           {G.link}
           <button type="button" className="mid linkish-row" onClick={() => openTxn(String(l.txn_id))}>
-            <span>{LINK_LABEL[l.kind] ?? l.kind}</span>
+            <span>{l.kind === "refund" && !credit ? "Refunded by" : (LINK_LABEL[l.kind] ?? l.kind)}</span>
             <small>transaction {l.txn_id}</small>
           </button>
           <button type="button" className="iconbtn" aria-label="Remove link" title="Remove link" onClick={() => act(l.txn_id, l.kind as LinkKind, true)}>
@@ -614,7 +614,7 @@ function LinksBlock({ id, links }: { id: string; links: { kind: string; txn_id: 
 function LinkPicker({ id, pick }: { id: string; pick: (other: number) => void }) {
   const cands = read(api.linkCandidates(id));
   if (cands.status === "loading") return <small className="faint">Looking for the other leg…</small>;
-  if (cands.status === "error" || !cands.data.length) return <small className="faint">No transaction of the same amount within 10 days.</small>;
+  if (cands.status === "error" || !cands.data.length) return <small className="faint">No transaction of the same amount within 10 days, or with the same UPI ref.</small>;
   return (
     <>
       {cands.data.map((c) => (
@@ -625,7 +625,7 @@ function LinkPicker({ id, pick }: { id: string; pick: (other: number) => void })
                     {inr(toPaise(c.amount))}
                   </span>
                   <small>
-                    {dayShort(c.occurred_at)} · {c.suggest === "dup" ? "same day, same way" : "the other way"}
+                    {dayShort(c.occurred_at)} · {c.suggest === "refund" ? "same UPI ref" : c.suggest === "dup" ? "same day, same way" : "the other way"}
                   </small>
                 </span>
                 {G.right}

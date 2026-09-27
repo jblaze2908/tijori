@@ -2,6 +2,7 @@
 only folds the already-aggregated rows."""
 
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
@@ -18,6 +19,17 @@ from tijori.services.common import cycle_bounds, previous_month, today_ist
 SUMMARY_BUCKETS = ("everyday", "card", "oneoff", "invest", "income")
 
 
+def _spend_sign(r: Any) -> int:
+    """is_expense() over grouped rows: 1 for spend, -1 for a netted refund, 0 for neither."""
+    if r.direction == "debit":
+        return 1 if r.category_id is None or r.bucket in EXPENSE_BUCKETS else 0
+    return -1 if r.kind == "refund" and r.bucket in EXPENSE_BUCKETS else 0
+
+
+def _income_sign(r: Any) -> int:
+    return 1 if r.direction == "credit" and r.bucket == "income" and r.category_id is not None else 0
+
+
 def _totals(rows: list[Any]) -> dict[str, Any]:
     t: dict[str, Decimal] = defaultdict(lambda: ZERO)
     count = 0
@@ -28,6 +40,8 @@ def _totals(rows: list[Any]) -> dict[str, Any]:
                 t["uncategorized"] += r.amount
             elif r.bucket in (*EXPENSE_BUCKETS, "invest"):
                 t[r.bucket] += r.amount
+        elif _spend_sign(r):
+            t[r.bucket] -= r.amount
         else:
             if r.bucket == "income":
                 t["income"] += r.amount
@@ -44,23 +58,18 @@ def _totals(rows: list[Any]) -> dict[str, Any]:
     }
 
 
-def _category_lines(rows: list[Any], direction: str, buckets: tuple[str, ...],
-                    with_uncategorized: bool) -> list[dict[str, Any]]:
+def _category_lines(rows: list[Any], sign: Callable[[Any], int]) -> list[dict[str, Any]]:
     acc: dict[int | None, dict[str, Any]] = {}
     for r in rows:
-        if r.direction != direction:
-            continue
-        if r.category_id is None and not with_uncategorized:
-            continue
-        if r.category_id is not None and r.bucket not in buckets:
+        if not (k := sign(r)):
             continue
         line = acc.setdefault(r.category_id, {"name": r.name or "Uncategorized", "bucket": r.bucket,
                                               "cur": ZERO, "prev": ZERO, "n": 0})
         if r.period == "cur":
-            line["cur"] += r.amount
+            line["cur"] += k * r.amount
             line["n"] += r.n
         else:
-            line["prev"] += r.amount
+            line["prev"] += k * r.amount
     lines = [
         {"category_id": cid, "name": v["name"], "bucket": v["bucket"], "amount": fmt(v["cur"]),
          "previous_amount": fmt(v["prev"]), "change": fmt(v["cur"] - v["prev"]), "txn_count": v["n"]}
@@ -97,8 +106,8 @@ def summary(s: Session, member_id: int, month: str, month_start_day: int = 1) ->
         "period": {"start": cur_start, "end": cur_end - timedelta(days=1)},
         "totals": totals, "previous_totals": prev_totals,
         "buckets": buckets,
-        "categories": _category_lines(rows, "debit", EXPENSE_BUCKETS, with_uncategorized=True),
-        "income_categories": _category_lines(rows, "credit", ("income",), with_uncategorized=False),
+        "categories": _category_lines(rows, _spend_sign),
+        "income_categories": _category_lines(rows, _income_sign),
         "loans": loans.month_lines(s, member_id, cur_start, cur_end),
     }
 
@@ -174,10 +183,22 @@ def _committed(keys: set[str]) -> Any:
     return recurring.payee_key_expr().in_(keys) if keys else false()
 
 
+def is_netted_refund() -> Any:
+    """A refund linked to its purchase carries the purchase's spend bucket (txn_edit._net). Other refunds sit in
+    the income bucket, reported apart."""
+    return and_(Txn.direction == "credit", Txn.kind == "refund", Txn.bucket.in_(EXPENSE_BUCKETS))
+
+
 def is_expense() -> Any:
-    """The one spend definition, shared with /api/summary: debits in the everyday, one-off and
-    card buckets, plus uncategorized debits. Refund credits are reported apart, never netted."""
-    return and_(Txn.direction == "debit", or_(Txn.bucket.in_(EXPENSE_BUCKETS), Txn.category_id.is_(None)))
+    """The one spend definition, shared with /api/summary: debits in the everyday, one-off and card buckets,
+    plus uncategorized debits, less netted refunds. Sum expense_amount(), not Txn.amount, under it."""
+    return or_(and_(Txn.direction == "debit", or_(Txn.bucket.in_(EXPENSE_BUCKETS), Txn.category_id.is_(None))),
+               is_netted_refund())
+
+
+def expense_amount() -> Any:
+    """Txn.amount, negative for a netted refund; every other row keeps its sign, so it is safe in mixed sums."""
+    return case((is_netted_refund(), -Txn.amount), else_=Txn.amount)
 
 
 def _measure() -> Any:
@@ -206,7 +227,7 @@ def trends(s: Session, member_id: int, *, granularity: str, periods: int, group_
     if group_by == "total":
         committed = _committed(recurring.committed_keys(recurring.detect(s, member_id)))
         base = (select(period, _measure().label("measure"), committed.label("committed"),
-                       (Txn.kind == "refund").label("refund"), Txn.amount)
+                       (Txn.kind == "refund").label("refund"), expense_amount().label("amount"))
                 .where(in_range).subquery())
         rows = s.execute(
             select(base.c.period_start, base.c.measure, base.c.committed, base.c.refund,
@@ -230,7 +251,7 @@ def trends(s: Session, member_id: int, *, granularity: str, periods: int, group_
                           and_(Txn.kind.not_in(("income", "refund")), Txn.direction == "debit"))
             amount, where, key = case((natural, Txn.amount), else_=-Txn.amount), true(), Txn.kind
         else:
-            amount, where = Txn.amount, is_expense()
+            amount, where = expense_amount(), is_expense()
             if group_by == "category":
                 key = func.coalesce(Category.name, literal_column("'Uncategorized'"))
             elif group_by == "account":

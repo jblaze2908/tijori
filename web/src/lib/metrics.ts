@@ -1,6 +1,6 @@
 // Screen maths for UI v1. Every figure is a fixed rule over transactions, and each rule is stated on screen.
 import { addDays, daysBetween, minDate } from "./format";
-import { isExpense, within } from "./insights";
+import { isExpense, spendAmount, within } from "./insights";
 import type { ISODate, Paise, Period, Transaction } from "./types";
 
 /** A single charge above this is a one-off: left out of the projection's daily pace (₹5,000). */
@@ -10,7 +10,7 @@ export const PACE_DAYS = 14;
 /** A category's difference from normal is coloured only past this share of normal. */
 export const NOTABLE = 0.15;
 
-export const spendOf = (txns: Transaction[]) => txns.reduce((a, t) => (isExpense(t) ? a + t.amount : a), 0);
+export const spendOf = (txns: Transaction[]) => txns.reduce((a, t) => (isExpense(t) ? a + spendAmount(t) : a), 0);
 
 /** Cumulative spend for each day of [start, start + days), as of the end of that day. */
 export function cumulative(txns: Transaction[], start: ISODate, days: number): Paise[] {
@@ -18,7 +18,7 @@ export function cumulative(txns: Transaction[], start: ISODate, days: number): P
   for (const t of txns) {
     if (!isExpense(t)) continue;
     const i = daysBetween(start, t.date);
-    if (i >= 0 && i < days) daily[i]! += t.amount;
+    if (i >= 0 && i < days) daily[i]! += spendAmount(t);
   }
   let acc = 0;
   return daily.map((v) => (acc += v));
@@ -43,7 +43,7 @@ export function projection(txns: Transaction[], period: Period, through: ISODate
   if (left <= 0) return spent;
   const from = addDays(through, -(PACE_DAYS - 1)) < period.start ? period.start : addDays(through, -(PACE_DAYS - 1));
   const days = daysBetween(from, through) + 1;
-  const pace = within(txns, from, through).reduce((a, t) => (isExpense(t) && t.amount <= ONE_OFF ? a + t.amount : a), 0) / days;
+  const pace = within(txns, from, through).reduce((a, t) => (isExpense(t) && t.amount <= ONE_OFF ? a + spendAmount(t) : a), 0) / days;
   return Math.round(spent + pace * left);
 }
 
@@ -53,7 +53,7 @@ export function byKey(txns: Transaction[], key: (t: Transaction) => string): Map
     if (!isExpense(t)) continue;
     const k = key(t);
     const e = out.get(k) ?? { amount: 0, count: 0 };
-    e.amount += t.amount;
+    e.amount += spendAmount(t);
     e.count += 1;
     out.set(k, e);
   }
@@ -78,7 +78,7 @@ export function normalByKey(txns: Transaction[], previous: Period[], dayN: numbe
 
 export function largestCharge(txns: Transaction[]): Transaction | null {
   let best: Transaction | null = null;
-  for (const t of txns) if (isExpense(t) && t.amount > ONE_OFF && (!best || t.amount > best.amount)) best = t;
+  for (const t of txns) if (isExpense(t) && t.direction === "debit" && t.amount > ONE_OFF && (!best || t.amount > best.amount)) best = t;
   return best;
 }
 
@@ -100,7 +100,7 @@ export function paidFrom(txns: Transaction[]): PaidFrom[] {
     const stand = t.bucket === "card";
     const id = stand ? "standin" : (t.account_id ?? "none");
     const e = out.get(id) ?? { id, label: stand ? "Card bills, not itemised" : t.account, kind: stand ? "standin" : t.account_kind, amount: 0, count: 0 };
-    e.amount += t.amount;
+    e.amount += spendAmount(t);
     e.count += 1;
     out.set(id, e);
   }

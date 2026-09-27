@@ -8,7 +8,7 @@ import { LoanLines } from "../components/Loans";
 import { G } from "../components/Glyphs";
 import { categoryColor, lineInk, slotColor } from "../lib/colors";
 import { addDays, compact, dayShort, daysBetween, inr, monthShort, monthYear, plural, toPaise } from "../lib/format";
-import { isExpense, within } from "../lib/insights";
+import { isExpense, spendAmount, within } from "../lib/insights";
 import { byKey, groupKey, NOTABLE, normalByKey, paidFrom, projection, spendOf, type Group } from "../lib/metrics";
 import { Link, navigate, useLocation } from "../lib/router";
 import type { ApiCards, ISODate, Transaction, TrendPoint } from "../lib/types";
@@ -188,7 +188,7 @@ function Body({ app, preset, r, group, txns, trends, recurringIds, showAll, setS
   const rest = rows.slice(12);
   // Same identity as the server's series: payee_key, else the lower-cased merchant.
   const rec = R.filter((t) => isExpense(t) && t.bucket !== "card" && recurringIds.has(t.payee_key ?? t.merchant.toLowerCase()));
-  const recurringSpent = rec.reduce((a, t) => a + t.amount, 0);
+  const recurringSpent = rec.reduce((a, t) => a + spendAmount(t), 0);
   const recurringCount = rec.length;
   const href = (k: string) => detailHref(group, k);
 

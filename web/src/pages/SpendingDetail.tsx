@@ -6,7 +6,7 @@ import { prevCycles, txnsFor, type AppCtx, type MonthCtx } from "../ctx";
 import { invalidate } from "../lib/api";
 import { categoryColor, lineInk, OTHER, slotColor } from "../lib/colors";
 import { addDays, addMonths, changeText, compact, dayShort, daysBetween, inr, monthApos, monthShort, monthYear, plural } from "../lib/format";
-import { isExpense, within } from "../lib/insights";
+import { isExpense, spendAmount, within } from "../lib/insights";
 import { categoryOf, cumulative, groupKey, normalByKey, normalCurve, NOTABLE, type Group } from "../lib/metrics";
 import { Link, navigate, useLocation } from "../lib/router";
 import type { Paise, Transaction } from "../lib/types";
@@ -85,9 +85,9 @@ function Body(o: { app: AppCtx; group: Group; name: string; vs: string[]; span: 
       const k = key(t);
       let e = out.get(k);
       if (!e) out.set(k, (e = { values: new Array<number>(n).fill(0), counts: new Array<number>(n).fill(0), total: 0 }));
-      e.values[i]! += t.amount;
+      e.values[i]! += spendAmount(t);
       e.counts[i]! += 1;
-      e.total += t.amount;
+      e.total += spendAmount(t);
     }
     return out;
   }, [txns, group, sig]);

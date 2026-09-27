@@ -21,7 +21,7 @@ from tijori.models import Alert, Category, Member, Txn
 from tijori.services import budgets, recurring
 from tijori.services.alerts import month_alerts
 from tijori.services.common import month_start_day, today_ist
-from tijori.services.reports import is_expense
+from tijori.services.reports import expense_amount, is_expense
 from tijori.settings import Settings
 
 log = logging.getLogger("tijori.notify")
@@ -68,14 +68,14 @@ def digest(s: Any, member_id: int, today: date) -> tuple[str, str]:
     end = today - timedelta(days=today.weekday())  # this Monday
     start, prev = end - timedelta(days=7), end - timedelta(days=14)
     def spent(a: date, b: date) -> tuple[Decimal, int]:
-        amt, n = s.execute(select(func.coalesce(func.sum(Txn.amount), 0), func.count()).where(
+        amt, n = s.execute(select(func.coalesce(func.sum(expense_amount()), 0), func.count()).where(
             Txn.member_id == member_id, is_expense(), Txn.occurred_at >= a, Txn.occurred_at < b)).one()
         return Decimal(amt), n
     week, n = spent(start, end)
     last, _ = spent(prev, start)
-    top = s.execute(select(Category.name, func.sum(Txn.amount)).join(Category, Category.id == Txn.category_id).where(
+    top = s.execute(select(Category.name, func.sum(expense_amount())).join(Category, Category.id == Txn.category_id).where(
         Txn.member_id == member_id, is_expense(), Txn.occurred_at >= start, Txn.occurred_at < end)
-        .group_by(Category.name).order_by(func.sum(Txn.amount).desc()).limit(3)).all()
+        .group_by(Category.name).order_by(func.sum(expense_amount()).desc()).limit(3)).all()
     due = [x for x in recurring.detect(s, member_id, today) if x.active and today <= x.next_due <= today + timedelta(days=7)]
     msd = month_start_day(s, member_id)
     over = [i for i in budgets.budgets(s, member_id, _cycle(today, msd), msd, today)["items"] if i["state"] == "over"]
