@@ -110,7 +110,7 @@ Needs no auth and returns no personal data.
 
 ## `GET /api/settings` and `PATCH /api/settings`
 
-`GET` returns `{"month_start_day": 1, "local_shop_cap": "500.00"}`.
+`GET` returns `{"month_start_day": 1, "local_shop_cap": "500.00", "raw_retention_days": 365, "notify_topic": null, "notify_enabled": false}`.
 
 `PATCH` takes a JSON body with at least one of the fields below, and returns the new settings. It is audit-logged.
 
@@ -118,6 +118,9 @@ Needs no auth and returns no personal data.
 |---|---|---|
 | `month_start_day` | integer 1–28 | The salary-cycle start. It moves every month boundary: summary, months, the transactions `month` filter, budgets, and trend months, quarters and FYs |
 | `local_shop_cap` | money string (`"750.00"`) or integer, 0–1,00,000 | A merchant-QR payment up to this amount auto-files as Local shops. It applies to statements uploaded after the change |
+| `raw_retention_days` | `0`, `90`, `180`, `365` (default), `730` | How long stored mail and files are kept. `0` keeps them forever. See [Retention](#retention) |
+| `notify_topic` | 12–64 of `A-Z a-z 0-9 _ -`, or `null` | The ntfy topic pushes go to. `null` removes it and turns notifications off. See [Notifications](#notifications) |
+| `notify_enabled` | bool | Send pushes. Has no effect without a topic |
 
 ## `GET /api/months`
 
@@ -333,11 +336,24 @@ Errors: 404 when the group has no Inbox txns, or isn't yours. The call is audit-
 ## `GET /api/budgets?month=YYYY-MM`
 
 ```json
-{"month": "2026-04", "items": [{"category_id": 5, "category": "Groceries", "amount": "8000.00",
-                                "spent": "1372.00", "remaining": "6628.00", "rollover": false}]}
+{"month": "2026-09", "day": 27, "days": 30,
+ "items": [{"category_id": 2, "category": "Eating out", "amount": "3000.00", "carry": "0.00", "limit": "3000.00",
+            "spent": "5596.00", "remaining": "-2596.00", "expected_by_today": "2700.00", "projected": "6217.78",
+            "state": "over", "rollover": true}],
+ "totals": {"limit": "3000.00", "spent": "5596.00"}}
 ```
 
-`spent` covers the month cycle. `items` is empty until budgets can be set (M4).
+- `spent` is the month cycle's spend in that category, on the summary's rules (see Conventions).
+- `day` and `days` place today in the cycle; for a past cycle `day` equals `days`.
+- `limit` = `amount` + `carry`. With `rollover` on, `carry` is what the previous cycle left unspent (never negative).
+- `expected_by_today` = `limit` × `day` / `days`. `projected` = `spent` × `days` / `day`.
+- `state`: `over` when `spent` > `limit`; `ahead` when `spent` > 1.10 × `expected_by_today`; else `ok`.
+
+## `PUT /api/budgets/{category_id}`
+
+`{"amount": "3000.00" | null, "rollover": false}`. It sets the monthly budget for an `everyday` or `oneoff` category. An `amount` of `null` or `"0"` removes the budget. Returns `{"category_id", "amount", "rollover"}`, with `amount` null when removed. It is audit-logged.
+
+Errors: 404 for a category that isn't yours; 422 for another bucket or a bad amount.
 
 ## `GET /api/trends`
 
@@ -499,6 +515,8 @@ Rule flags for the month cycle. Every one is computed from data; none is written
 | `bounce_risk` | `warn` | A recurring series due in the next 7 days, whose account's last known `balance` is below the charge |
 | `price_increase` | `warn` | A steady-priced series whose latest charge, this month, is more than 5% above the one before |
 | `missed` | `warn` | A series in state `late` (see [`/api/recurring`](#get-apirecurring)), in the current cycle |
+| `budget_over` | `bad` | A budget's `state` is `over` (see [`/api/budgets`](#get-apibudgetsmonthyyyy-mm)) |
+| `budget_pace` | `warn` | A budget's `state` is `ahead` |
 
 ```json
 {"month": "2026-09", "items": [{"id": "dup:579", "kind": "duplicate", "severity": "bad",
@@ -746,6 +764,12 @@ App passwords and statement passwords are sealed by SecretBox (AES-256-GCM envel
 - The AAD is `<member_id>:<name>`, which binds each row to its member and purpose.
 - Secrets never appear in a response, a log, or an error.
 
+Stored mail and files (`TIJORI_BLOB_DIR`) are sealed the same way:
+
+- Each file starts with `TJB1`, then a JSON header (wrapped data key, key name, nonce), then the AES-GCM ciphertext. The AAD is `<member_id>:blob:<sha256>`.
+- The file name stays the SHA-256 of the plaintext, so dedupe still works.
+- At start-up the worker seals any plaintext files left from before, in place. Reads accept both forms.
+
 ---
 
 ## Same-origin UI
@@ -820,11 +844,56 @@ The `worker` service (`python -m tijori.collector`) polls each connected mailbox
 
 The emails and files a txn was read from.
 
-- `sources` returns `[{raw_message_id, kind: "email"|"file", sender, subject, received_at, text, files: [{id, filename}]}]`. `text` is the email's plain text (HTML is stripped and never rendered), up to 20,000 characters.
-- `raw/attachments/{id}` downloads the original file (`Content-Disposition: attachment`, `nosniff`, `no-store`).
+- `sources` returns `[{raw_message_id, kind: "email"|"file", sender, subject, received_at, text, purged, files: [{id, filename}]}]`. `text` is the email's plain text (HTML is stripped and never rendered), up to 20,000 characters. Once [retention](#retention) has removed a message, `purged` is true and `text` is empty.
+- `raw/attachments/{id}` downloads the original file (`Content-Disposition: attachment`, `nosniff`, `no-store`). It returns 404 once the file has been removed.
 
 ## `GET /api/recurring`: candidates
 
 `candidates` lists subscription-like payees (a known subscription brand, or Bills & subscriptions) charged only once or twice in the last 400 days. `PUT /api/recurring/{id}` with `confirmed` tracks one. A payee with several fixed charges (four SIPs to one fund house) gets one series per amount, with the id `payee@amount`.
 
-Not built yet: MCP.
+## Retention
+
+Stored mail and files are not kept forever. Once a day the worker removes those older than the member's `raw_retention_days`:
+
+- A message that was `parsed` or `ignored` goes after N days. One still waiting (`failed`, `parser_needed`, `needs_password`) gets 2N days, so a later parser or password can still read it.
+- The row stays, with `purged_at` set. Its txns, statements and holdings are untouched: only the email and the files go.
+- A file is deleted only when no unremoved message or attachment still points at it.
+- `0` turns retention off.
+
+## Notifications
+
+Pushes go through ntfy (`TIJORI_NTFY_URL`, with `TIJORI_NTFY_TOKEN` when the server needs one) to the member's `notify_topic`.
+
+- Each [alert](#get-apialertsmonthyyyy-mm) of the current cycle is pushed once, when it first appears. `bad` alerts go at high priority. Sent ids are kept as `alert` rows of kind `push`.
+- The first run after notifications are turned on records what is already open without sending it.
+- On Mondays from 09:00 IST, a digest of the week before: spend and count against the week before that, the top 3 categories, charges due in the next 7 days, budgets over, and the Inbox count. Figures only.
+- A failed post is logged and not retried, so nothing is sent twice.
+
+`POST /api/notify/test` sends a test push and returns `{"sent": true}`, or `false` when ntfy isn't configured or didn't answer. 422 without a topic.
+
+## MCP (`POST /mcp`)
+
+A Model Context Protocol server (protocol `2025-06-18`), so Claude can read your data. It speaks JSON-RPC 2.0 over HTTP POST, one JSON response per request; notifications get 202 with no body.
+
+- **Auth:** `Authorization: Bearer tjm_…` only; the site cookie is not accepted. A missing or unknown token gets 401. The token binds row-level security like a web session.
+- **Methods:** `initialize`, `ping`, `tools/list`, `tools/call`.
+- **Masking:** person UPI handles come back as `ra***@okaxis`, since the output leaves Tijori. Merchant QR handles are kept.
+- **Errors:** a tool's bad argument or missing row returns `isError: true` with a short message.
+
+| Tool | Arguments | Returns |
+|---|---|---|
+| `get_month_summary` | `month` (default: this cycle) | The [summary](#get-apisummary) plus spend by category |
+| `list_transactions` | `from`, `to`, `q`, `min`, `max`, `sort`, `limit` ≤ 100 | A page of txns and the totals of the whole filtered set |
+| `list_subscriptions` | none | Recurring series: cost per month, next due date, state |
+| `get_net_worth` | none | Live net worth by component and class, with month, year and FY changes |
+| `list_alerts` | `month` | [Alerts](#get-apialertsmonthyyyy-mm), budgets included |
+| `list_inbox` | none | Payees waiting to be filed, with their payments |
+| `categorize` | `txn_id`, `category` (name), `scope` `this` \| `payee` | Files the txn. `payee` also files that payee's future payments. Audit-logged as `mcp:<token id>` |
+
+### Tokens: `GET /api/mcp/tokens`, `POST /api/mcp/tokens`, `POST /api/mcp/tokens/{id}/revoke`
+
+- `POST` `{"name": "Claude"}` creates a token and returns it once, in `token`; only its SHA-256 is stored. A member can have at most 10 live tokens.
+- `GET` lists `[{id, name, created_at, last_used_at, revoked, token: null}]`.
+- `revoke` stops a token at once. It is audit-logged.
+
+Not built yet: OAuth for MCP (tokens are pasted by hand).

@@ -3,6 +3,7 @@ import { Sparkline, StackedBars } from "../components/charts";
 import { ErrorState, Loading } from "../components/ui";
 import { prevCycles, txnsFor, type AppCtx } from "../ctx";
 import { all, api, dataOf, invalidate, read } from "../lib/api";
+import { BudgetsPanel } from "../components/BudgetsPanel";
 import { G } from "../components/Glyphs";
 import { categoryColor, slotColor } from "../lib/colors";
 import { addDays, compact, dayShort, daysBetween, inr, monthShort, plural, toPaise } from "../lib/format";
@@ -329,6 +330,8 @@ function Body({ app, preset, r, group, txns, trends, recurringIds }: { app: AppC
           page: 3 or more charges to one payee on a steady cadence (2 for yearly), or one you marked. Card bills and investments are left out.
         </span>
       </section>
+
+      <BudgetsPanel month={cur.key} />
 
       <Cards R={R} label={r.label} />
     </>

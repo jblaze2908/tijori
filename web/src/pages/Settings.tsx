@@ -5,6 +5,7 @@ import { signOut } from "../lib/setup";
 import { MailSources } from "./setup/mail";
 import { ProfileForm } from "./setup/profile";
 import { HouseholdPanel, StatementPasswords } from "./setup/secrets";
+import { McpTokens, NotifyRetention } from "./Prefs";
 import { Rules, Sources } from "./Sources";
 
 export const SECTIONS = [
@@ -14,6 +15,8 @@ export const SECTIONS = [
   ["passwords", "Statement passwords"],
   ["household", "Household"],
   ["rules", "Categories & rules"],
+  ["notify", "Notifications & retention"],
+  ["claude", "Claude (MCP)"],
 ] as const;
 export type Section = (typeof SECTIONS)[number][0] | "accounts" | "upload";
 
@@ -74,6 +77,18 @@ export function Settings({ section }: { section: Section }) {
           </>
         )}
 
+        {section === "notify" && (
+          <>
+            <CardHead title="Notifications & retention" />
+            <NotifyRetention />
+          </>
+        )}
+        {section === "claude" && (
+          <>
+            <CardHead title="Claude (MCP)" x="read + categorize" />
+            <McpTokens />
+          </>
+        )}
         {section === "household" && (
           <>
             <CardHead title="Household" />

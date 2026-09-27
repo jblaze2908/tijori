@@ -584,3 +584,21 @@ main { padding: 24px 40px 56px; display: flex; flex-direction: column; gap: 24px
 @media (max-width: 820px) {
   .subrow.cand .c-cand { order: 5; width: 100%; padding-left: 40px; flex-wrap: wrap }
 }
+.budgets { display: flex; flex-direction: column }
+.brow { display: flex; align-items: center; gap: 14px; height: 44px; border-bottom: 1px solid var(--line) }
+.brow .nm { width: 180px; flex: none; display: flex; align-items: center; gap: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.brow .bar { position: relative; flex: 1; height: 8px; border-radius: 4px; background: var(--track); min-width: 60px }
+.brow .bar i { position: absolute; left: 0; top: 0; height: 8px; border-radius: 4px; background: var(--c3) }
+.brow.ahead .bar i { background: var(--warn) }
+.brow.over .bar i { background: var(--bad) }
+.brow .bar .tick { position: absolute; top: -3px; width: 2px; height: 14px; background: var(--t1); border-radius: 1px }
+.brow .mono-n { width: 150px; text-align: right; flex: none }
+.brow .st { width: 130px }
+.brow .pr { width: 90px }
+@media (max-width: 820px) {
+  .brow { flex-wrap: wrap; height: auto; padding: 8px 0; gap: 4px 10px }
+  .brow .nm { width: auto; flex: 1 }
+  .brow .bar { order: 5; flex-basis: 100% }
+  .brow .mono-n { width: auto }
+  .brow .pr { display: none }
+}

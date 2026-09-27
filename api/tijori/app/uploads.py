@@ -95,7 +95,7 @@ async def upload(request: Request, identity: AuthDep) -> JSONResponse:
     statement, parse_error = await run_in_threadpool(_parse, Message(text=text, filename=filename))
 
     def work(s: Session, ctx: MemberContext, actor: str) -> tuple[int, dict[str, Any]]:
-        digest, blob_ref = store_blob(settings.blob_dir, ctx.member_id, data)
+        digest, blob_ref = store_blob(settings.blob_dir, ctx.member_id, data, settings.secret_box())
         dup = ingest.find_duplicate(s, ctx.member_id, digest)
         if dup is not None:
             payload: dict[str, Any] = {"duplicate": True, **dup}

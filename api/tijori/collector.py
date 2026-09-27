@@ -31,7 +31,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from tijori.blobs import store_blob
+from tijori.blobs import encrypt_existing, read_blob, store_blob
 from tijori.db import MemberContext, make_engine, member_session
 from tijori.imap_check import TIMEOUT_S, _public_only, normalize_password, quote_mailbox
 from tijori.mailtext import body_text
@@ -41,7 +41,7 @@ from tijori.parsers.cdsl_cas import CdslCasParser
 from tijori.parsers import Message, ParseError, route
 from tijori.parsers.alerts import AlertParser
 from tijori.pdf import PdfError, is_pdf, pdf_to_text
-from tijori.services import cards, prices
+from tijori.services import cards, notify, prices, retention
 from tijori.services import secrets as vault
 from tijori.services.ingest import ingest_alert, ingest_statement, load_classifier
 from tijori.settings import Settings, get_settings
@@ -122,7 +122,7 @@ def process(s: Session, ctx: MemberContext, settings: Settings, source_id: int, 
     msg: EmailMessage = email.message_from_bytes(raw, policy=policy.default)  # type: ignore[assignment]
     sender = parseaddr(msg.get("From", ""))[1].lower()
     subject = re.sub(r"\s+", " ", str(msg.get("Subject", "")))[:500]
-    _, ref = store_blob(settings.blob_dir, ctx.member_id, raw)
+    _, ref = store_blob(settings.blob_dir, ctx.member_id, raw, settings.secret_box())
     rm = RawMessage(member_id=ctx.member_id, received_at=_received(msg), message_id=(msg.get("Message-ID") or "")[:998] or None,
                     sender=sender, subject=subject, sha256=sha, blob_ref=ref, parse_status="pending",
                     mail_source_id=source_id, mail_uid=uid)
@@ -130,7 +130,7 @@ def process(s: Session, ctx: MemberContext, settings: Settings, source_id: int, 
     s.flush()
     atts = []
     for name, data in _pdfs(msg):
-        digest, bref = store_blob(settings.blob_dir, ctx.member_id, data)
+        digest, bref = store_blob(settings.blob_dir, ctx.member_id, data, settings.secret_box())
         att = RawAttachment(member_id=ctx.member_id, raw_message_id=rm.id, filename=name[:300], sha256=digest, blob_ref=bref)
         s.add(att)
         atts.append((att, data))
@@ -159,6 +159,8 @@ NOT_TRANSACTIONS = re.compile(r"Contract Note|Statement of Accounts? (?:for|of) 
                               r"Processing of (Additional )?Purchase|Year End Statement|Fixed Deposit Advice|Amazon ?Pay|"
                               r"Transaction Confirmation|Transaction request is processed|Holding Statement|"
                               r"Quarterly settlement|Refund initiated|Add Money|Margin Statement|AGTS Report|Welcome to", re.I)
+DAY_S = 86400
+_last_purge: dict[int, float] = {}
 RETRY_S = 3600
 RETRY = ("failed", "parser_needed", "needs_password")
 _last_retry: dict[int, float] = {}
@@ -174,15 +176,16 @@ def retry_stored(engine: Engine, ctx: MemberContext, settings: Settings) -> dict
         unreconciled = (select(RawAttachment.raw_message_id).join(Statement, Statement.raw_attachment_id == RawAttachment.id)
                         .where(Statement.member_id == ctx.member_id, Statement.reconciled_at.is_(None)))
         ids = list(s.scalars(select(RawMessage.id).where(
-            RawMessage.member_id == ctx.member_id, RawMessage.mail_source_id.is_not(None),
+            RawMessage.member_id == ctx.member_id, RawMessage.mail_source_id.is_not(None), RawMessage.purged_at.is_(None),
             RawMessage.parse_status.in_(RETRY) | RawMessage.id.in_(unreconciled))))
     counts: dict[str, int] = {}
     for rid in ids:
         with member_session(engine, ctx) as s:
             try:
                 rm = s.get(RawMessage, rid)
-                msg = email.message_from_bytes((settings.blob_dir / rm.blob_ref).read_bytes(), policy=policy.default)
-                atts = [(a, (settings.blob_dir / a.blob_ref).read_bytes()) for a in s.scalars(
+                box = settings.secret_box()
+                msg = email.message_from_bytes(read_blob(settings.blob_dir, ctx.member_id, rm.blob_ref, box), policy=policy.default)
+                atts = [(a, read_blob(settings.blob_dir, ctx.member_id, a.blob_ref, box)) for a in s.scalars(
                     select(RawAttachment).where(RawAttachment.member_id == ctx.member_id, RawAttachment.raw_message_id == rid))]
                 st = _route(s, ctx, settings, rm, msg, atts)  # type: ignore[arg-type]
                 if st != rm.parse_status:
@@ -237,7 +240,7 @@ def _store_failed(engine: Engine, ctx: MemberContext, settings: Settings, source
         if s.scalar(select(RawMessage.id).where(RawMessage.member_id == ctx.member_id, RawMessage.sha256 == sha)):
             return
         msg = email.message_from_bytes(raw, policy=policy.default)
-        _, ref = store_blob(settings.blob_dir, ctx.member_id, raw)
+        _, ref = store_blob(settings.blob_dir, ctx.member_id, raw, settings.secret_box())
         s.add(RawMessage(member_id=ctx.member_id, received_at=_received(msg), sender=parseaddr(msg.get("From", ""))[1].lower(),
                          subject=re.sub(r"\s+", " ", str(msg.get("Subject", "")))[:500], sha256=sha, blob_ref=ref,
                          parse_status="failed", mail_source_id=source_id, mail_uid=uid))
@@ -334,6 +337,17 @@ def run_once(engine: Engine, settings: Settings) -> None:
         again = retry_stored(engine, ctx, settings)
         if again:
             log.info("member=%s retried %s", ctx.member_id, again)
+        if time.monotonic() - _last_purge.get(ctx.member_id, -DAY_S) >= DAY_S:
+            _last_purge[ctx.member_id] = time.monotonic()
+            with member_session(engine, ctx) as s:
+                gone = retention.purge(s, ctx, settings.blob_dir)
+                s.commit()
+            if gone:
+                log.info("member=%s retention %s", ctx.member_id, gone)
+    try:
+        notify.run(engine, _members(engine), settings)
+    except Exception:  # notifications never block collection
+        log.exception("notify failed")
 
 
 def main() -> None:
@@ -346,6 +360,12 @@ def main() -> None:
         nonlocal stop
         stop = True
 
+    box = settings.secret_box()
+    if box is not None:  # files written before encryption at rest existed are sealed once, in place
+        for ctx in _members(engine):
+            sealed = encrypt_existing(settings.blob_dir, ctx.member_id, box)
+            if sealed:
+                log.info("member=%s sealed %s stored files", ctx.member_id, sealed)
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
     while not stop:

@@ -13,6 +13,7 @@ from sqlalchemy import or_, select
 from tijori.app.deps import MemberDep
 from tijori.app.schemas import (
     LinkCandidates,
+    McpTokens,
     RawSources,
     Accounts,
     Alerts,
@@ -38,7 +39,7 @@ from tijori.app.schemas import (
 )
 from tijori.classify.taxonomy import KINDS
 from tijori.models import Category
-from tijori.services import cards, members, networth, raw, recurring, reports, sources, txn_edit, txns
+from tijori.services import alerts, budgets, cards, mcp_tokens, members, networth, raw, recurring, reports, sources, txn_edit, txns
 from tijori.services.common import month_start_day, today_ist
 
 router = APIRouter(prefix="/api")
@@ -114,13 +115,15 @@ def link_candidates(db: MemberDep, txn_id: Annotated[int, Path(ge=1)]) -> dict:
 
 @router.get("/transactions/{txn_id}/sources", response_model=RawSources)
 def txn_sources(request: Request, db: MemberDep, txn_id: Annotated[int, Path(ge=1)]) -> dict:
-    return {"items": raw.sources_of(db.session, db.ctx.member_id, request.app.state.settings.blob_dir, txn_id)}
+    return {"items": raw.sources_of(db.session, db.ctx.member_id, request.app.state.settings.blob_dir, txn_id,
+                                  request.app.state.settings.secret_box())}
 
 
 @router.get("/raw/attachments/{attachment_id}")
 def raw_attachment(request: Request, db: MemberDep, attachment_id: Annotated[int, Path(ge=1)]) -> Response:
     """The original statement file, as a download (never rendered inline)."""
-    name, data = raw.attachment(db.session, db.ctx.member_id, request.app.state.settings.blob_dir, attachment_id)
+    name, data = raw.attachment(db.session, db.ctx.member_id, request.app.state.settings.blob_dir, attachment_id,
+                                request.app.state.settings.secret_box())
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", name)[:120] or "statement.pdf"
     return Response(data, media_type="application/pdf" if data[:5] == b"%PDF-" else "application/octet-stream",
                     headers={"Content-Disposition": f'attachment; filename="{safe}"', "X-Content-Type-Options": "nosniff",
@@ -178,7 +181,7 @@ def trends(
 
 @router.get("/budgets", response_model=Budgets)
 def get_budgets(db: MemberDep, month: Annotated[str, Query(pattern=MONTH_PATTERN)]) -> dict:
-    return reports.budgets(db.session, db.ctx.member_id, month, month_start_day(db.session, db.ctx.member_id))
+    return budgets.budgets(db.session, db.ctx.member_id, month, month_start_day(db.session, db.ctx.member_id))
 
 
 @router.get("/recurring", response_model=RecurringList)
@@ -191,9 +194,14 @@ def get_cards(db: MemberDep) -> dict:
     return cards.card_status(db.session, db.ctx.member_id)
 
 
+@router.get("/mcp/tokens", response_model=McpTokens)
+def get_mcp_tokens(db: MemberDep) -> dict:
+    return {"items": mcp_tokens.list_tokens(db.session, db.ctx.member_id)}
+
+
 @router.get("/alerts", response_model=Alerts)
 def get_alerts(db: MemberDep, month: Annotated[str, Query(pattern=MONTH_PATTERN)]) -> dict:
-    return recurring.alerts(db.session, db.ctx.member_id, month, month_start_day(db.session, db.ctx.member_id))
+    return alerts.month_alerts(db.session, db.ctx.member_id, month, month_start_day(db.session, db.ctx.member_id))
 
 
 @router.get("/inbox/stats", response_model=FilingStats)

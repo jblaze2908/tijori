@@ -54,6 +54,9 @@ services:
       # SecretBox master key (base64 of 32 bytes); _OLD only while rotating.
       TIJORI_MASTER_KEY: ${TIJORI_MASTER_KEY:?set in the env file}
       TIJORI_MASTER_KEY_OLD: ${TIJORI_MASTER_KEY_OLD:-}
+      # Member notifications go to the self-hosted ntfy the deploy alerts already use.
+      TIJORI_NTFY_URL: ${NTFY_URL:-}
+      TIJORI_NTFY_TOKEN: ${NTFY_OPS_TOKEN:-}
     depends_on:
       db:
         condition: service_healthy
@@ -96,6 +99,9 @@ services:
       TIJORI_OIDC_CLIENT_SECRET: ${TIJORI_OIDC_CLIENT_SECRET:?set in the env file}
       TIJORI_MASTER_KEY: ${TIJORI_MASTER_KEY:?set in the env file}
       TIJORI_MASTER_KEY_OLD: ${TIJORI_MASTER_KEY_OLD:-}
+      # Member notifications go to the self-hosted ntfy the deploy alerts already use.
+      TIJORI_NTFY_URL: ${NTFY_URL:-}
+      TIJORI_NTFY_TOKEN: ${NTFY_OPS_TOKEN:-}
     depends_on:
       db:
         condition: service_healthy

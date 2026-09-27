@@ -190,6 +190,7 @@ class RawSource(BaseModel):
     subject: str | None
     received_at: datetime
     text: str | None
+    purged: bool = False  # the stored file was deleted under the retention setting
     files: list[RawFile]
 
 
@@ -338,14 +339,39 @@ class BudgetLine(BaseModel):
     category_id: int
     category: str
     amount: Money
+    carry: Money
+    limit: Money
     spent: Money
     remaining: Money
+    expected_by_today: Money
+    projected: Money
+    state: Literal["ok", "ahead", "over"]
     rollover: bool
+
+
+class BudgetTotals(BaseModel):
+    limit: Money
+    spent: Money
 
 
 class Budgets(BaseModel):
     month: str
+    day: int
+    days: int
     items: list[BudgetLine]
+    totals: BudgetTotals
+
+
+class BudgetIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    amount: Annotated[str, Field(pattern=r"^\d{1,12}(\.\d{1,2})?$")] | None
+    rollover: bool = False
+
+
+class BudgetOut(BaseModel):
+    category_id: int
+    amount: Money | None
+    rollover: bool
 
 
 class Period(BaseModel):
@@ -378,16 +404,23 @@ class Trends(BaseModel):
 class SettingsOut(BaseModel):
     month_start_day: int
     local_shop_cap: Money
+    raw_retention_days: int
+    notify_topic: str | None
+    notify_enabled: bool
 
 
 class SettingsIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     month_start_day: int | None = Field(default=None, ge=1, le=28, strict=True)
     local_shop_cap: str | int | None = None
+    raw_retention_days: Literal[0, 90, 180, 365, 730] | None = None
+    # An ntfy topic: long and unguessable, since anyone who knows it can read the pushes.
+    notify_topic: Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{12,64}$")] | None = None
+    notify_enabled: bool | None = None
 
     @model_validator(mode="after")
     def _something(self) -> "SettingsIn":
-        if self.month_start_day is None and self.local_shop_cap is None:
+        if not self.model_fields_set:
             raise ValueError("nothing to update")
         return self
 
@@ -958,3 +991,25 @@ class ParseQueue(BaseModel):
     collected: dict[str, int]  # collector messages by parse_status
     unparsed: list[Unparsed]
     uploads: list[UploadOut]
+
+
+class McpTokenOut(BaseModel):
+    id: int
+    name: str
+    created_at: datetime
+    last_used_at: datetime | None
+    revoked: bool
+    token: str | None = None  # only in the create response
+
+
+class McpTokens(BaseModel):
+    items: list[McpTokenOut]
+
+
+class McpTokenIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: Annotated[str, Field(min_length=1, max_length=60)]
+
+
+class NotifyTestOut(BaseModel):
+    sent: bool

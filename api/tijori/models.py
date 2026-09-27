@@ -135,6 +135,7 @@ class RawMessage(Base):
     )
     mail_source_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("mail_source.id", ondelete="SET NULL"))
     mail_uid: Mapped[int | None] = mapped_column(BigInteger)
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # file deleted under retention
     __table_args__ = (UniqueConstraint("member_id", "sha256"),)
 
 
@@ -146,6 +147,7 @@ class RawAttachment(Base):
     filename: Mapped[str | None] = mapped_column(Text)
     sha256: Mapped[str] = mapped_column(String(64))
     blob_ref: Mapped[str] = mapped_column(Text)
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Observation(Base):
@@ -502,3 +504,16 @@ class ComponentValue(Base):
     created_at: Mapped[datetime] = _created()
     source: Mapped[str | None] = mapped_column(String(16))  # null or "manual": set by hand; "statement": read from one
     __table_args__ = (UniqueConstraint("member_id", "key", "as_of"),)
+
+
+class McpToken(Base):
+    """A bearer token for the MCP endpoint; only its SHA-256 is stored."""
+
+    __tablename__ = "mcp_token"
+    id: Mapped[int] = _pk()
+    member_id: Mapped[int] = _member_fk()
+    name: Mapped[str] = mapped_column(String(60))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    created_at: Mapped[datetime] = _created()
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

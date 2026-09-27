@@ -5,7 +5,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
 
 from tijori.app.deps import MemberDep, require_json
 from tijori.app.schemas import (
@@ -13,6 +13,11 @@ from tijori.app.schemas import (
     CategorizeOut,
     ComponentIn,
     ComponentOut,
+    BudgetIn,
+    BudgetOut,
+    McpTokenIn,
+    McpTokenOut,
+    NotifyTestOut,
     LinkIn,
     LinkResult,
     RecurringDecision,
@@ -32,7 +37,7 @@ from tijori.app.schemas import (
     SettingsIn,
     SettingsOut,
 )
-from tijori.services import members, networth, recurring, txn_edit, txns
+from tijori.services import budgets, mcp_tokens, members, networth, notify, recurring, txn_edit, txns
 from tijori.services.common import today_ist
 from tijori.services.networth import COMPONENT_KEYS
 from tijori.services.errors import NotFound
@@ -82,6 +87,31 @@ def put_component(db: MemberDep, key: str, body: ComponentIn) -> dict:
 
 
 # :path because a payee key may contain "/" (keys built from narration text).
+@router.post("/mcp/tokens", response_model=McpTokenOut)
+def create_mcp_token(db: MemberDep, body: McpTokenIn) -> dict:
+    return mcp_tokens.create(db.session, db.ctx, db.actor, body.name.strip())
+
+
+@router.post("/mcp/tokens/{token_id}/revoke", response_model=McpTokenOut)
+def revoke_mcp_token(db: MemberDep, token_id: Annotated[int, Path(ge=1)]) -> dict:
+    mcp_tokens.revoke(db.session, db.ctx, db.actor, token_id)
+    return next(t for t in mcp_tokens.list_tokens(db.session, db.ctx.member_id) if t["id"] == token_id)
+
+
+@router.post("/notify/test", response_model=NotifyTestOut)
+def notify_test(request: Request, db: MemberDep) -> dict:
+    cfg = members.get_settings(db.session, db.ctx.member_id)
+    if not cfg["notify_topic"]:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "set a notification topic first")
+    return {"sent": notify.send(request.app.state.settings, cfg["notify_topic"], "Tijori", "Test notification: pushes reach this device.")}
+
+
+@router.put("/budgets/{category_id}", response_model=BudgetOut)
+def put_budget(db: MemberDep, category_id: Annotated[int, Path(ge=1)], body: BudgetIn) -> dict:
+    amount = Decimal(body.amount) if body.amount is not None else None
+    return budgets.set_budget(db.session, db.ctx, db.actor, category_id, amount, body.rollover)
+
+
 @router.post("/transactions/{txn_id}/split", response_model=SplitOut)
 def split_txn(db: MemberDep, txn_id: Annotated[int, Path(ge=1)], body: SplitIn) -> dict:
     return txn_edit.split(db.session, db.ctx, db.actor, txn_id, [p.model_dump() for p in body.parts])
@@ -134,8 +164,12 @@ def patch_settings(db: MemberDep, body: SettingsIn) -> dict:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT,
                                 [{"loc": ["body", "local_shop_cap"], "msg": "must be an amount from 0 to 100000"}])
         cap = Decimal(raw)
+    extra = {k: v for k, v in (("raw_retention_days", body.raw_retention_days), ("notify_topic", body.notify_topic),
+                               ("notify_enabled", body.notify_enabled)) if v is not None}
+    if "notify_topic" in body.model_fields_set and body.notify_topic is None:  # explicit null clears the topic
+        extra |= {"notify_topic": None, "notify_enabled": False}
     return members.update_settings(db.session, db.ctx, db.actor, month_start_day=body.month_start_day,
-                                   local_shop_cap=cap)
+                                   local_shop_cap=cap, extra=extra)
 
 
 @router.patch("/networth/snapshots/{day}", response_model=RemarkOut)

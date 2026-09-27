@@ -16,12 +16,16 @@ from tijori.services.recurring import balances
 from tijori.services.secrets import names, remove, statement_password_name
 
 DEFAULT_MONTH_START_DAY = 1
+DEFAULT_RETENTION_DAYS = 365  # stored emails and PDFs; 0 keeps them forever
 
 
 def _settings(settings: dict[str, Any], classify_config: dict[str, Any]) -> dict[str, Any]:
     return {
         "month_start_day": int(settings.get("month_start_day", DEFAULT_MONTH_START_DAY)),
         "local_shop_cap": fmt(Decimal(str(classify_config.get("local_shop_cap", DEFAULT_LOCAL_SHOP_CAP)))),
+        "raw_retention_days": int(settings.get("raw_retention_days", DEFAULT_RETENTION_DAYS)),
+        "notify_topic": settings.get("notify_topic"),
+        "notify_enabled": bool(settings.get("notify_enabled", False)),
     }
 
 
@@ -31,7 +35,10 @@ def get_settings(s: Session, member_id: int) -> dict[str, Any]:
 
 
 def update_settings(s: Session, ctx: MemberContext, actor: str, *, month_start_day: int | None,
-                    local_shop_cap: Decimal | None) -> dict[str, Any]:
+                    local_shop_cap: Decimal | None, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    for key, value in (extra or {}).items():  # validated by the route: retention, notification topic and switch
+        s.execute(update(Member).where(Member.id == ctx.member_id)
+                  .values(settings=Member.settings.op("||")(func.jsonb_build_object(key, value))))
     if month_start_day is not None:
         s.execute(update(Member).where(Member.id == ctx.member_id)
                   .values(settings=Member.settings.op("||")(func.jsonb_build_object("month_start_day",
@@ -41,7 +48,8 @@ def update_settings(s: Session, ctx: MemberContext, actor: str, *, month_start_d
                   .values(classify_config=Member.classify_config.op("||")(
                       func.jsonb_build_object("local_shop_cap", str(local_shop_cap)))))
     audit(s, ctx, actor, "settings.update", f"member:{ctx.member_id}",
-          {"month_start_day": month_start_day, "local_shop_cap": str(local_shop_cap) if local_shop_cap else None})
+          {"month_start_day": month_start_day, "local_shop_cap": str(local_shop_cap) if local_shop_cap else None,
+           "fields": sorted(extra or {})})
     return get_settings(s, ctx.member_id)
 
 

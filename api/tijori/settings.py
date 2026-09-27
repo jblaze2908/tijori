@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     # SecretBox master key: base64 of 32 random bytes. _OLD is only for rotation.
     master_key: SecretStr | None = None
     master_key_old: SecretStr | None = None
+    # Self-hosted ntfy for member notifications (the worker posts; members pick a topic in Settings).
+    ntfy_url: str | None = None
+    ntfy_token: SecretStr | None = None
 
     @field_validator("allowed_emails", mode="before")
     @classmethod

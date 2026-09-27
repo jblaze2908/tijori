@@ -9,6 +9,7 @@ from tijori.app.auth import build_auth
 from tijori.app.oidc import router as oidc_router
 from tijori.app.onboarding import public as public_router
 from tijori.app.onboarding import router as onboarding_router
+from tijori.app.mcp import router as mcp_router
 from tijori.app.routes import router
 from tijori.app.uploads import router as uploads_router
 from tijori.app.web import SecurityHeaders, SpaFiles
@@ -38,6 +39,7 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     app.include_router(uploads_router)
     app.include_router(writes_router)
     app.include_router(onboarding_router)
+    app.include_router(mcp_router)
     app.include_router(public_router)
 
     @app.exception_handler(NotFound)

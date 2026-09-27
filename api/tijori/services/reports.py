@@ -118,25 +118,6 @@ def months(s: Session, member_id: int, month_start_day: int = 1) -> dict[str, An
     return {"as_of": as_of, "month_start_day": month_start_day, "items": items}
 
 
-def budgets(s: Session, member_id: int, month: str, month_start_day: int = 1) -> dict[str, Any]:
-    start, end = cycle_bounds(month, month_start_day)
-    spent = (select(Txn.category_id, func.sum(Txn.amount).label("spent"))
-             .where(Txn.member_id == member_id, Txn.direction == "debit", Txn.occurred_at >= start,
-                    Txn.occurred_at < end)
-             .group_by(Txn.category_id).subquery())
-    rows = s.execute(
-        select(Budget.category_id, Category.name, Budget.amount, Budget.rollover,
-               func.coalesce(spent.c.spent, 0).label("spent"))
-        .join(Category, Category.id == Budget.category_id)
-        .outerjoin(spent, spent.c.category_id == Budget.category_id)
-        .where(Budget.member_id == member_id, Budget.period == "monthly")
-        .order_by(Category.sort_order, Category.name)
-    ).all()
-    return {"month": month, "items": [
-        {"category_id": r.category_id, "category": r.name, "amount": fmt(r.amount), "spent": fmt(r.spent),
-         "remaining": fmt(r.amount - r.spent), "rollover": r.rollover} for r in rows]}
-
-
 # --- trends --------------------------------------------------------------------------------
 
 GRANULARITIES = ("week", "month", "quarter", "fy")
