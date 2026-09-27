@@ -14,6 +14,7 @@ from tijori.parsers.hdfc_email_statement import HdfcEmailStatementParser
 from tijori.parsers.hdfc_savings_statement import HdfcSavingsStatementParser
 from tijori.parsers.icici_card_statement import IciciCardStatementParser
 from tijori.parsers.sbi_estatement import SbiEstatementParser
+from tijori.parsers.sbi_quick_statement import SbiQuickStatementParser
 from tijori.parsers.reconcile import Reconciliation, reconcile
 from tijori.parsers.sbi_statement import SbiStatementParser
 
@@ -41,6 +42,7 @@ register(HdfcCardStatementParser())
 register(IciciCardStatementParser())
 register(HdfcEmailStatementParser())
 register(SbiEstatementParser())
+register(SbiQuickStatementParser())
 register(SbiStatementParser())
 register(HdfcSavingsStatementParser())
 
