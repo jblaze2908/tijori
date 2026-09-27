@@ -1,4 +1,4 @@
-import { dayIST, dayLong, inr, monthEnd, toPaise } from "./format";
+import { monthEnd, toPaise } from "./format";
 import type {
   Account,
   ApiInboxGroup,
@@ -17,7 +17,6 @@ import type {
   ApiSnapshot,
   ApiSummary,
   ApiTotals,
-  ApiTransactionDetail,
   ApiTrends,
   ApiTxn,
   ApiTxnDetail,
@@ -31,7 +30,6 @@ import type {
   Rule,
   TxnPage,
   TxnQuery,
-  Budgets,
   Category,
   Component,
   Inbox,
@@ -46,7 +44,6 @@ import type {
   Snapshot,
   Totals,
   Transaction,
-  TransactionDetail,
   TrendPoint,
   TxnSource,
 } from "./types";
@@ -105,12 +102,15 @@ export type ResourceState<T> = { status: "loading" } | { status: "ready"; data: 
 export interface Resource<T> {
   key: string;
   load: () => Promise<T>;
+  /** Dev only: the mapper's source, to catch one key cached in two shapes. */
+  sig?: string;
 }
 
 interface Entry {
   state: ResourceState<unknown>;
   stale: boolean;
   inflight: boolean;
+  sig?: string;
 }
 
 const store = new Map<string, Entry>();
@@ -138,8 +138,10 @@ export const getVersion = () => version;
 export function read<T>(r: Resource<T>): ResourceState<T> {
   let e = store.get(r.key);
   if (!e) {
-    e = { state: { status: "loading" }, stale: true, inflight: false };
+    e = { state: { status: "loading" }, stale: true, inflight: false, sig: r.sig };
     store.set(r.key, e);
+  } else if (import.meta.env.DEV && r.sig && e.sig && r.sig !== e.sig) {
+    console.error(`Cache key ${r.key} is read with two different mappers; give one a tag.`);
   }
   if (e.stale && !e.inflight) {
     const entry = e;
@@ -191,19 +193,25 @@ export function all<T extends unknown[]>(...rs: { [K in keyof T]: ResourceState<
   return { status: "ready", data: rs.map((r) => (r as { data: unknown }).data) as T };
 }
 
-export function resource<W, T>(key: string, map: (w: W) => T): Resource<T> {
-  return { key, load: () => request<W>(key).then(map) };
+// The cache holds mapped data, so a path read in two shapes needs a `tag`: it keys the entry, not the request,
+// and prefix invalidation still reaches it.
+const keyOf = (path: string, tag?: string) => (tag ? `${path}#${tag}` : path);
+const sigOf = (map: (w: never) => unknown) => (import.meta.env.DEV ? map.toString() : undefined);
+
+export function resource<W, T>(path: string, map: (w: W) => T, tag?: string): Resource<T> {
+  return { key: keyOf(path, tag), load: () => request<W>(path).then(map), sig: sigOf(map) };
 }
 
 /** Endpoints not in docs/api.md yet: a 404/405 resolves to null so the UI hides that section. */
-export function optional<W, T>(key: string, map: (w: W) => T): Resource<T | null> {
+export function optional<W, T>(path: string, map: (w: W) => T, tag?: string): Resource<T | null> {
   return {
-    key,
+    key: keyOf(path, tag),
     load: () =>
-      request<W>(key).then(map, (e: unknown) => {
+      request<W>(path).then(map, (e: unknown) => {
         if (e instanceof ApiError && (e.status === 404 || e.status === 405)) return null;
         throw e;
       }),
+    sig: sigOf(map),
   };
 }
 
@@ -406,20 +414,6 @@ export const api = {
       const d = Number(r.month_start_day);
       return { monthStartDay: Number.isInteger(d) && d >= 1 && d <= 28 ? d : 1 };
     }),
-  transaction: (id: string) =>
-    optional(`/api/transactions/${encodeURIComponent(id)}`, (d: ApiTransactionDetail): TransactionDetail => ({
-      payee: d.payee ? { count: d.payee.count, total: toPaise(d.payee.total) } : null,
-      observations: d.observations.map((o) => ({
-        label: [SOURCE_LABEL[o.source] ?? o.source, o.parser].filter(Boolean).join(" · "),
-        detail: [o.received_at ? `received ${dayLong(dayIST(o.received_at))}` : null, o.balance_after ? `balance after ${inr(toPaise(o.balance_after))}` : null]
-          .filter(Boolean)
-          .join(" · "),
-      })),
-    })),
-  budgets: (month: MonthKey) =>
-    optional(`/api/budgets?${qs({ month })}`, (r: { items: { category: string; amount: string }[] }): Budgets =>
-      new Map(r.items.map((b) => [b.category, toPaise(b.amount)])),
-    ),
   /** Spend by category per period, server-side (docs/api.md); `limit` high enough that the UI does its own "Other". */
   trends: (granularity: Granularity, periods: number, end: string) =>
     optional(`/api/trends?${qs({ granularity, periods, end, group_by: "category", limit: 50 })}`, flattenTrends),
@@ -427,7 +421,7 @@ export const api = {
   trendTotals: (granularity: Granularity, periods: number, end: string) =>
     optional(`/api/trends?${qs({ granularity, periods, end, group_by: "total" })}`, flattenTrends),
   /** Active series only: what Spending counts as recurring. */
-  recurring: () => optional("/api/recurring", (r: ApiRecurringList): Recurring[] => mapRecurring(r).items.filter((x) => x.active)),
+  recurring: () => optional("/api/recurring", (r: ApiRecurringList): Recurring[] => mapRecurring(r).items.filter((x) => x.active), "active"),
   subscriptions: () => resource("/api/recurring", mapRecurring),
   cards: () => resource("/api/cards", (r: ApiCards) => r),
   linkCandidates: (id: string) => resource(`/api/transactions/${encodeURIComponent(id)}/link-candidates`, (r: { items: LinkCandidate[] }) => r.items),

@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { G, Keyhole } from "./components/Glyphs";
-import { Empty } from "./components/ui";
+import { Empty, PageBoundary } from "./components/ui";
 import { AppProvider, buildCtx, type AppCtx } from "./ctx";
 import { api, dataOf, read, retryFailed } from "./lib/api";
 import { initials, monthYear, plural, todayIST } from "./lib/format";
@@ -179,7 +179,9 @@ export function App() {
               </Link>
             </div>
           )}
-          <section className="view">{page}</section>
+          <section className="view">
+            <PageBoundary key={path}>{page}</PageBoundary>
+          </section>
         </main>
       </div>
       <nav className="tabbar" aria-label="Main">

@@ -15,7 +15,7 @@ interface Token {
   revoked: boolean;
   token?: string | null;
 }
-const prefs = () => resource("/api/settings", (r: Prefs) => r);
+const prefs = () => resource("/api/settings", (r: Prefs) => r, "prefs");
 const tokens = () => resource("/api/mcp/tokens", (r: { items: Token[] }) => r.items);
 const RETENTION: [number, string][] = [
   [90, "90 days"],

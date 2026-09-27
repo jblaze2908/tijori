@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from "react";
+import { Component, type CSSProperties, type ReactNode } from "react";
 import type { ApiError } from "../lib/api";
 import { categoryColor, monogramColor } from "../lib/colors";
 
@@ -109,3 +109,28 @@ export const CardHead = ({ title, x }: { title: ReactNode; x?: ReactNode }) => (
     {x ? <span className="x">{x}</span> : null}
   </h3>
 );
+
+/** Contains a page's render error to that page; App keys it by path, so navigating away recovers without a reload. */
+export class PageBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  componentDidCatch(error: unknown) {
+    console.error(error);
+  }
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <div className="card empty" role="alert">
+        <b>This page hit an error</b>
+        Other pages still work.
+        <div style={{ marginTop: 14 }}>
+          <button type="button" className="btn ghost" onClick={() => location.reload()}>
+            Reload
+          </button>
+        </div>
+      </div>
+    );
+  }
+}
