@@ -35,7 +35,7 @@ async def _pdf_text(request: Request, identity: Identity, data: bytes, password:
         box = request.app.state.secret_box
         if password is not None or box is None:
             raise
-    saved = await run_in_threadpool(run_as_member, request.app.state.engine, identity,
+    saved = await run_in_threadpool(run_as_member, request.app.state, identity,
                                     lambda s, ctx, _a: vault.get_many(s, ctx, box, "statement_password:"))
     for candidate in saved:
         try:
@@ -111,7 +111,7 @@ async def upload(request: Request, identity: AuthDep) -> JSONResponse:
         return 201, ingest.ingest_statement(s, ctx, actor, statement, filename=filename,
                                             sha256=digest, blob_ref=blob_ref)
 
-    code, payload = await run_in_threadpool(run_as_member, request.app.state.engine, identity, work)
+    code, payload = await run_in_threadpool(run_as_member, request.app.state, identity, work)
     return JSONResponse(jsonable_encoder(payload), status_code=code)
 
 
@@ -128,6 +128,6 @@ async def import_sheet(request: Request, identity: AuthDep) -> JSONResponse:
     except (UnicodeDecodeError, ValueError, KeyError, StopIteration) as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT,
                             "not a net-worth sheet export (needs a 'Month' header row)") from exc
-    n = await run_in_threadpool(run_as_member, request.app.state.engine, identity,
+    n = await run_in_threadpool(run_as_member, request.app.state, identity,
                                 lambda s, ctx, _actor: networth.upsert_sheet(s, ctx.member_id, rows))
     return JSONResponse({"snapshots_upserted": n})

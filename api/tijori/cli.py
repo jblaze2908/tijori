@@ -86,6 +86,36 @@ def cmd_rotate_master_key(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_lock_to_owner(args: argparse.Namespace) -> int:
+    """End every session, token, connected app and invite not held by TIJORI_OWNER_EMAIL. Other members' data
+    stays; deps.bind already refuses them, this just removes what they hold. Runs on the owner connection."""
+    from sqlalchemy import text
+    from sqlalchemy.orm import Session
+
+    from tijori.db import make_engine
+    from tijori.settings import get_settings
+
+    owner = get_settings().owner_email
+    if owner is None:
+        print("set TIJORI_OWNER_EMAIL first", file=sys.stderr)
+        return 2
+    others = "SELECT id FROM member WHERE lower(email) <> :owner"
+    with Session(make_engine(get_settings().admin_url())) as s, s.begin():
+        if s.execute(text("SELECT 1 FROM member WHERE lower(email) = :owner"), {"owner": owner}).first() is None:
+            print("the owner has no member yet; sign in once first", file=sys.stderr)
+            return 2
+        n = {k: s.execute(text(q), {"owner": owner}).rowcount for k, q in (
+            ("sessions", f"DELETE FROM auth_session WHERE member_id IN ({others})"),
+            ("oauth_tokens", f"DELETE FROM oauth_token WHERE member_id IN ({others})"),
+            ("oauth_codes", f"DELETE FROM oauth_code WHERE member_id IN ({others})"),
+            ("mcp_grants", f"UPDATE mcp_token SET revoked_at = now() WHERE revoked_at IS NULL AND member_id IN ({others})"),
+            ("invites", "DELETE FROM invite"),
+        )}
+        n["other_members"] = s.scalar(text(f"SELECT count(*) FROM ({others}) o"), {"owner": owner})
+    print(json.dumps(n))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="tijori")
     sub = p.add_subparsers(dest="command", required=True)
@@ -111,6 +141,9 @@ def main(argv: list[str] | None = None) -> int:
 
     rk = sub.add_parser("rotate-master-key", help="re-wrap all secrets under a new TIJORI_MASTER_KEY")
     rk.set_defaults(func=cmd_rotate_master_key)
+
+    lo = sub.add_parser("lock-to-owner", help="end all access held by anyone but TIJORI_OWNER_EMAIL")
+    lo.set_defaults(func=cmd_lock_to_owner)
 
     args = p.parse_args(argv)
     return args.func(args)

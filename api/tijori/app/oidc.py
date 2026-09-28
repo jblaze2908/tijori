@@ -27,7 +27,6 @@ from tijori.bootstrap import seed_categories
 from tijori.db import MemberContext, bind_member_by_email, bind_member_by_session, set_member_context
 from tijori.models import AuthSession, OAuthState
 from tijori.services.common import audit, sha256_hex
-from tijori.services.onboarding import register_by_invite
 from tijori.settings import Settings
 
 router = APIRouter(prefix="/auth")
@@ -134,8 +133,7 @@ def _fail(settings: Settings, reason: str) -> RedirectResponse:
 
 
 @router.get("/login")
-def login(request: Request, invite: Annotated[str | None, Query(max_length=128)] = None,
-          return_to: Annotated[str | None, Query(max_length=200)] = None) -> RedirectResponse:
+def login(request: Request, return_to: Annotated[str | None, Query(max_length=200)] = None) -> RedirectResponse:
     settings: Settings = request.app.state.settings
     if not (settings.oidc_client_id and settings.oidc_client_secret):
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Google sign-in is not configured")
@@ -148,7 +146,7 @@ def login(request: Request, invite: Annotated[str | None, Query(max_length=128)]
         if pending >= MAX_PENDING_LOGINS:
             raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many sign-ins in progress; try again soon")
         s.add(OAuthState(state_hash=sha256_hex(state), browser_hash=sha256_hex(browser), nonce=nonce,
-                         code_verifier=verifier, invite_hash=sha256_hex(invite) if invite else None,
+                         code_verifier=verifier,
                          return_to=_safe_return_to(return_to), expires_at=now + STATE_TTL))
     query = urlencode({
         "client_id": settings.oidc_client_id, "redirect_uri": redirect_uri(settings), "response_type": "code",
@@ -162,21 +160,16 @@ def login(request: Request, invite: Annotated[str | None, Query(max_length=128)]
     return resp
 
 
-def _resolve_member(s: Session, settings: Settings, email: str, name: str,
-                    invite_hash: str | None) -> MemberContext | None:
-    """Existing member; else a valid invite for this exact email joins the inviting household;
-    else an allowlisted email becomes the admin of a new household. Categories are seeded for
-    a new household (idempotent for an existing one)."""
+def _resolve_member(s: Session, settings: Settings, email: str, name: str) -> MemberContext | None:
+    """Only the owner gets in: their member, created with a new household on first sign-in (categories
+    seeded, idempotent). Invites no longer register anyone."""
+    if settings.owner_email is None or email != settings.owner_email:
+        return None
     ctx = bind_member_by_email(s, email)
     if ctx is not None:
         return ctx
-    registered = register_by_invite(s, email, name, invite_hash) if invite_hash else None
-    if registered is None:
-        if email not in settings.allowed_emails:
-            return None
-        row = s.execute(text("SELECT * FROM auth_register_member(:email, :name)"),
-                        {"email": email, "name": name}).one()
-        registered = MemberContext(row.member_id, row.household_id)
+    row = s.execute(text("SELECT * FROM auth_register_member(:email, :name)"), {"email": email, "name": name}).one()
+    registered = MemberContext(row.member_id, row.household_id)
     set_member_context(s, registered)
     seed_categories(s, registered.household_id)
     return registered
@@ -207,7 +200,7 @@ def callback(request: Request, code: Annotated[str | None, Query(max_length=2048
     token = secrets.token_urlsafe(32)
     cookie = session_cookie_name(settings)
     with Session(request.app.state.engine) as s, s.begin():
-        ctx = _resolve_member(s, settings, email, name, pending.invite_hash)
+        ctx = _resolve_member(s, settings, email, name)
         if ctx is None:
             return _fail(settings, "not_invited")
         old = request.cookies.get(cookie)

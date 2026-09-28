@@ -56,20 +56,7 @@ PROFILE_KEYS = ("own_names", "own_vpas", "own_account_masks", "investment_accoun
 # --- invites --------------------------------------------------------------------------------
 
 def create_invite(s: Session, ctx: MemberContext, actor: str, email: str, public_url: str) -> dict[str, Any]:
-    role = s.scalar(select(Member.role).where(Member.id == ctx.member_id))
-    if role != "admin":
-        raise PermissionError("only the household admin can invite")
-    email = email.strip().lower()
-    if s.execute(text("SELECT 1 FROM auth_member_by_email(:e)"), {"e": email}).first():
-        raise Invalid("that email already belongs to a Tijori member")
-    token = secrets.token_urlsafe(32)
-    now = datetime.now(UTC)
-    s.add(Invite(household_id=ctx.household_id, email=email, token_hash=sha256_hex(token),
-                 created_by=ctx.member_id, expires_at=now + INVITE_TTL))
-    audit(s, ctx, actor, "invite.create", f"invite:{email}", {})
-    # The token is returned once; only its hash is stored.
-    return {"email": email, "token": token, "url": f"{public_url.rstrip('/')}/invite/{token}",
-            "expires_at": now + INVITE_TTL}
+    raise PermissionError("invites are off: Tijori is private to its owner")
 
 
 def lookup_invite(s: Session, token: str) -> dict[str, Any]:
@@ -78,12 +65,6 @@ def lookup_invite(s: Session, token: str) -> dict[str, Any]:
         raise NotFound("invite not found")
     status = "used" if row.used else "expired" if row.expires_at <= datetime.now(UTC) else "valid"
     return {"email": row.email, "household": row.household, "expires_at": row.expires_at, "status": status}
-
-
-def register_by_invite(s: Session, email: str, name: str, invite_hash: str) -> MemberContext | None:
-    row = s.execute(text("SELECT * FROM auth_register_invited(:e, :n, :h)"),
-                    {"e": email, "n": name, "h": invite_hash}).first()
-    return MemberContext(row.member_id, row.household_id) if row else None
 
 
 # --- onboarding state ------------------------------------------------------------------------

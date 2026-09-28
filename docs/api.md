@@ -709,10 +709,10 @@ Uploads one bank statement. The api stores the raw file, then parses → resolve
 
 | Endpoint | Behaviour |
 |---|---|
-| `POST /api/invites` `{"email"}` | Household admin only (403 otherwise). 422 if the email is already a member. Returns 201 `{"email", "token", "url", "expires_at"}`. The token is shown **once**; only its SHA-256 is stored. Invites last 7 days and are single use |
+| `POST /api/invites` `{"email"}` | Off: always 403. Tijori is private to `TIJORI_OWNER_EMAIL`, and sign-in no longer registers invitees |
 | `GET /api/invites/{token}` | **No sign-in needed** (the landing page at `/invite/<token>` calls it). Returns `{"email", "household", "expires_at", "status": "valid"\|"used"\|"expired"}`, or 404 |
 
-The landing page sends the invitee to `/auth/login?invite=<token>`. Sign-in must use exactly the invited email.
+Invites made before the owner lock no longer register anyone; `lock-to-owner` deletes them.
 
 | Endpoint | Behaviour |
 |---|---|
@@ -829,16 +829,13 @@ Browser flow: OIDC authorization code with PKCE (S256), `state` and `nonce`, sco
 
 | Endpoint | Behaviour |
 |---|---|
-| `GET /auth/login?return_to=/path&invite=<token>` | 302 to Google. `return_to` must be a relative path (anything else falls back to `/`). `invite` is optional, from an invite link. Sets a short-lived `tijori_login` cookie (10 minutes, path `/auth`) that ties the callback to this browser. 503 when sign-in isn't configured; 429 when too many sign-ins are pending |
+| `GET /auth/login?return_to=/path` | 302 to Google. `return_to` must be a relative path (anything else falls back to `/`). Sets a short-lived `tijori_login` cookie (10 minutes, path `/auth`) that ties the callback to this browser. 503 when sign-in isn't configured; 429 when too many sign-ins are pending |
 | `GET /auth/callback` | Google redirects here. On success: 302 to `return_to` (default `/`) and sets the session cookie. On failure: 302 to `/?auth_error=<reason>` |
 | `POST /auth/logout` | Needs a same-origin `Origin`. Ends the session server-side and clears the cookie. 204 |
 
 - **ID token checks:** `iss` is Google; `aud` is our client id (`azp` too when `aud` is a list); `exp` and `iat` hold, with 60 s of skew; `nonce` matches; `email_verified` is true.
-- **Who gets in:**
-  - An email that is already a member signs in.
-  - Otherwise, a valid [invite](#invites) for that exact email (sign in via `/auth/login?invite=<token>`) makes it a member of the inviting household.
-  - Otherwise, an email in `TIJORI_ALLOWED_EMAILS` is registered as the admin of a new household, with the default categories.
-  - Anyone else gets `auth_error=not_invited`.
+- **Who gets in:** only `TIJORI_OWNER_EMAIL`. On first sign-in it becomes the admin of a new household, with the default categories. Anyone else gets `auth_error=not_invited`, even an existing member.
+- **Every request** (cookie, pasted token or OAuth grant) is refused with 403 unless it belongs to the owner. `python -m tijori.cli lock-to-owner` ends what other members still hold. Invites are off: `POST /api/invites` answers 403.
 - **`auth_error` values:** `cancelled`, `bad_request`, `state_invalid` (expired, reused, or opened in another browser), `exchange_failed`, `token_invalid`, `token_expired`, `email_unverified`, `not_invited`.
 - **Session cookie:**
   - Named `__Host-tijori_session` when `TIJORI_PUBLIC_URL` is https (`tijori_session` on plain-http dev).

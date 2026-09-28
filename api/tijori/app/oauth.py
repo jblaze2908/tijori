@@ -234,7 +234,7 @@ def _consent(s: Session, request: Request, rid: str) -> Response:
     ctx = None
     if identity is not None:
         try:
-            ctx, _ = bind(s, identity)
+            ctx, _ = bind(s, identity, request.app.state.settings.owner_email)
         except HTTPException:
             ctx = None
     if ctx is None:
@@ -266,7 +266,7 @@ async def decide(request: Request) -> Response:
                             form.get("write") == "on")
 
     try:
-        d = await run_in_threadpool(run_as_member, request.app.state.engine, identity, work)
+        d = await run_in_threadpool(run_as_member, request.app.state, identity, work)
     except (OAuthError, HTTPException) as exc:
         return _page("Can't connect this app", exc.description if isinstance(exc, OAuthError) else "Sign in again.")
     if d.code is None:
@@ -328,7 +328,7 @@ def _consent_page(client: OAuthClient, row: OAuthRequest, rid: str, csrf: str, m
     where, target, warn = _destination(row.redirect_uri)
     who = (f"Identified by <span class=host>{html.escape(urlsplit(client.client_id).netloc)}</span>."
            if client.kind == "metadata" else "This app registered itself, so Tijori can't confirm who made it.")
-    write = (f"<label><input type=checkbox name=write checked> <span>Also let it make changes: file transactions, edit "
+    write = (f"<label><input type=checkbox name=write> <span>Also let it make changes: file transactions, edit "
              f"loans, budgets, accounts and settings, and upload statements.</span></label>"
              if WRITE_SCOPE in row.scope.split() else "")
     body = (f"<h1>Connect <span class=app>{name}</span>?</h1>"

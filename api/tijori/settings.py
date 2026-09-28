@@ -1,11 +1,12 @@
 """Runtime configuration from TIJORI_* environment variables."""
 
+import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Literal
 
 from pydantic import SecretStr, field_validator, model_validator
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from tijori.secretbox import SecretBox, parse_master_key
 
@@ -28,8 +29,8 @@ class Settings(BaseSettings):
     public_url: str = "http://localhost:8310"
     oidc_client_id: str | None = None
     oidc_client_secret: SecretStr | None = None
-    # Comma-separated. These emails may register on first sign-in without an invite.
-    allowed_emails: Annotated[tuple[str, ...], NoDecode] = ()
+    # The one Google account that may sign in. Every request is refused for any other member (deps.bind).
+    owner_email: str | None = None
     # SecretBox master key: base64 of 32 random bytes. _OLD is only for rotation.
     master_key: SecretStr | None = None
     master_key_old: SecretStr | None = None
@@ -37,11 +38,14 @@ class Settings(BaseSettings):
     ntfy_url: str | None = None
     ntfy_token: SecretStr | None = None
 
-    @field_validator("allowed_emails", mode="before")
+    @field_validator("owner_email")
     @classmethod
-    def _split_emails(cls, v: object) -> object:
-        if isinstance(v, str):
-            return tuple(e.strip().lower() for e in v.split(",") if e.strip())
+    def _owner_shape(cls, v: str | None) -> str | None:
+        v = (v or "").strip().lower()
+        if not v:
+            return None
+        if "," in v or not re.fullmatch(r"[^@\s]{1,64}@[^@\s]{1,255}", v):
+            raise ValueError("must be exactly one email address")
         return v
 
     @field_validator("max_upload_bytes")
@@ -65,6 +69,8 @@ class Settings(BaseSettings):
         if self.env == "prod":
             if self.master_key is None:
                 raise ValueError("prod needs TIJORI_MASTER_KEY (base64 of 32 bytes)")
+            if self.owner_email is None:
+                raise ValueError("prod needs TIJORI_OWNER_EMAIL (the one account that may sign in)")
             if not (self.oidc_client_id and self.oidc_client_secret):
                 raise ValueError("prod needs TIJORI_OIDC_CLIENT_ID and TIJORI_OIDC_CLIENT_SECRET")
             if not self.public_url.startswith("https://"):

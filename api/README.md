@@ -37,7 +37,7 @@ All configuration comes from `TIJORI_*` variables, validated at startup. Errors 
 | `TIJORI_ADMIN_DATABASE_URL` | Owner role, used by migrations and the CLI |
 | `TIJORI_PUBLIC_URL` | E.g. `https://tijori.example.com`. The OAuth redirect is `{this}/auth/callback` |
 | `TIJORI_OIDC_CLIENT_ID`, `TIJORI_OIDC_CLIENT_SECRET` | The Google OAuth client. Required in prod |
-| `TIJORI_ALLOWED_EMAILS` | Comma-separated. These register on first sign-in without an invite |
+| `TIJORI_OWNER_EMAIL` | The one Google account that may sign in. Required in prod. Every other member is refused on every request; invites are off |
 | `TIJORI_MASTER_KEY` | SecretBox key, base64 of 32 bytes. Required in prod. `TIJORI_MASTER_KEY_OLD` is only needed while rotating |
 | `TIJORI_BLOB_DIR`, `TIJORI_WEB_DIST`, `TIJORI_MAX_UPLOAD_BYTES` | Raw upload store, built UI, upload cap. The image sets the first two |
 
@@ -77,6 +77,7 @@ TIJORI_MASTER_KEY=<new> TIJORI_MASTER_KEY_OLD=<current> uv run python -m tijori.
 ```
 
 - **import-legacy** is idempotent. With `--statement`, txns get the same line identity an upload gives them, so uploading those statements later matches rather than duplicates.
+- **lock-to-owner** ends every session, pasted token, connected app and invite held by anyone but `TIJORI_OWNER_EMAIL`. Other members' data is kept. Runs on the owner connection.
 - **rotate-master-key** re-wraps every data key under the new master key; the secrets themselves aren't re-encrypted. It runs on the owner (superuser) connection. Afterwards, drop `TIJORI_MASTER_KEY_OLD`.
 - **Real data** (statements, labels, profiles) never enters git. Keep those files outside the repo.
 

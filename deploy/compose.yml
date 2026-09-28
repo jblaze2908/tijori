@@ -50,7 +50,8 @@ services:
       TIJORI_PUBLIC_URL: ${TIJORI_PUBLIC_URL:-https://tijori.example.com}
       TIJORI_OIDC_CLIENT_ID: ${TIJORI_OIDC_CLIENT_ID:?set in the env file}
       TIJORI_OIDC_CLIENT_SECRET: ${TIJORI_OIDC_CLIENT_SECRET:?set in the env file}
-      TIJORI_ALLOWED_EMAILS: ${TIJORI_ALLOWED_EMAILS:-}
+      # The one account that may sign in; every other member is refused.
+      TIJORI_OWNER_EMAIL: ${TIJORI_OWNER_EMAIL:?set in the env file}
       # SecretBox master key (base64 of 32 bytes); _OLD only while rotating.
       TIJORI_MASTER_KEY: ${TIJORI_MASTER_KEY:?set in the env file}
       TIJORI_MASTER_KEY_OLD: ${TIJORI_MASTER_KEY_OLD:-}

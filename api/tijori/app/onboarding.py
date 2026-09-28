@@ -119,7 +119,7 @@ async def test_mail_source(request: Request, identity: AuthDep, source_id: Id) -
     """Three steps so no transaction stays open across the (up to 10 s) IMAP round-trip:
     read the source and its password, test outside the database, record the outcome."""
     box = _box(request)
-    engine = request.app.state.engine
+    state = request.app.state
 
     def load(s: Session, ctx: MemberContext, actor: str) -> tuple[str, int, str, str, str]:
         if not MAIL_TESTS.allow(str(ctx.member_id)):
@@ -127,10 +127,10 @@ async def test_mail_source(request: Request, identity: AuthDep, source_id: Id) -
         src, password = mail.load_for_test(s, ctx, box, source_id)
         return src.host, src.port, src.username, src.label, password
 
-    host, port, username, label, password = await run_in_threadpool(run_as_member, engine, identity, load)
+    host, port, username, label, password = await run_in_threadpool(run_as_member, state, identity, load)
     result = await run_in_threadpool(mail.run_test, host, port, username, password, label)
     del password
-    return await run_in_threadpool(run_as_member, engine, identity,
+    return await run_in_threadpool(run_as_member, state, identity,
                                    lambda s, ctx, actor: mail.record_test(s, ctx, actor, source_id, result))
 
 
@@ -217,7 +217,7 @@ async def test_new_mail_source(request: Request, identity: AuthDep, body: MailSo
         return mail.check_inputs(body.provider, body.host, body.port, body.email, body.app_password, body.label)
 
     try:
-        host, port = await run_in_threadpool(run_as_member, request.app.state.engine, identity, gate)
+        host, port = await run_in_threadpool(run_as_member, request.app.state, identity, gate)
     except Invalid as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     result = await run_in_threadpool(mail.run_test, host, port, body.email, body.app_password, body.label)
