@@ -98,6 +98,7 @@ services:
       TIJORI_PUBLIC_URL: ${TIJORI_PUBLIC_URL:-https://tijori.example.com}
       TIJORI_OIDC_CLIENT_ID: ${TIJORI_OIDC_CLIENT_ID:?set in the env file}
       TIJORI_OIDC_CLIENT_SECRET: ${TIJORI_OIDC_CLIENT_SECRET:?set in the env file}
+      TIJORI_OWNER_EMAIL: ${TIJORI_OWNER_EMAIL:?set in the env file}
       TIJORI_MASTER_KEY: ${TIJORI_MASTER_KEY:?set in the env file}
       TIJORI_MASTER_KEY_OLD: ${TIJORI_MASTER_KEY_OLD:-}
       # Member notifications go to the self-hosted ntfy the deploy alerts already use.
