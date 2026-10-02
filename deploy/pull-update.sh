@@ -3,6 +3,8 @@ set -euo pipefail
 
 # Pull-based deploy, same model as nullframe: the server pulls with a read-only deploy key,
 # so nothing outside host ever holds server access. Run by deploy/tijori.timer every 2 min.
+# Under scale0 a stopped api is asleep, not down: the rollout goes through `scale0 restart tijori`
+# and the health check through the address scale0 holds, which wakes it. db and worker stay always on.
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/tijori}"
 ENV_FILE="${TIJORI_ENV_FILE:-/etc/tijori/tijori.env}"
 BRANCH="${DEPLOY_BRANCH:-main}"
@@ -18,6 +20,16 @@ exec 9>"$STATE_DIR/deploy.lock"
 flock -n 9 || exit 0
 
 compose() { docker compose -p tijori -f deploy/compose.yml --env-file "$ENV_FILE" "$@"; }
+scaled() { command -v scale0 >/dev/null && scale0 managed tijori; }
+# Start the stack on the checked-out code: all of it directly, or db + worker directly and the api
+# through scale0 so it can sleep again (waking it runs migrate first, as `up` always has).
+start_app() {
+  if scaled; then
+    compose build && compose up --detach --remove-orphans db worker && scale0 restart tijori
+  else
+    compose up --detach --build --remove-orphans
+  fi
+}
 
 notify() {
   # Optional ops alerts; NTFY_* live in the root-only env file and are never echoed.
@@ -37,7 +49,7 @@ git fetch --prune origin "$BRANCH"
 target_commit="$(git rev-parse "origin/$BRANCH")"
 short="${target_commit:0:8}"
 
-if [[ "$deployed_commit" == "$target_commit" ]] && compose ps --services --status running | grep -qx api; then
+if [[ "$deployed_commit" == "$target_commit" ]] && { scaled || compose ps --services --status running | grep -qx api; }; then
   exit 0
 fi
 # Don't rebuild and re-test a commit that already failed; a new push clears it.
@@ -48,7 +60,7 @@ fi
 restore_previous_release() {
   echo "Restoring $rollback_commit" >&2
   git checkout --detach "$rollback_commit"
-  compose up --detach --build --remove-orphans
+  start_app
 }
 
 reject() {
@@ -72,7 +84,7 @@ if compose ps --services --status running | grep -qx db; then
   ls -1t "$BACKUP_DIR"/pre-*.sql.gz | tail -n +15 | xargs -r rm -f
 fi
 
-if ! compose up --detach --build --remove-orphans; then
+if ! start_app; then
   echo "Compose rollout failed" >&2
   restore_previous_release
   reject "compose up failed"
