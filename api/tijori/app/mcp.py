@@ -1,8 +1,10 @@
 """MCP server (PLAN §9): JSON-RPC over streamable HTTP at POST /mcp, one response per request.
 
-Tools are grouped by outcome, not one per endpoint: each action names an /api route and runs it in-process
-through the app, so validation, RLS, audit and error shapes are the web's own. build_tools() fails the boot
-when an /api route is neither an action nor in EXCLUDED, which keeps MCP able to do what the API does.
+The grouped tools ({action, args}) reach every operation; the ones agents call most also have a typed tool
+with the route's JSON Schema, and describe_action gives any other action's schema on request. All run the
+/api route in-process through the app, so validation, RLS, the owner lock, audit and error shapes are the
+web's own. build_tools() fails the boot when an /api route is neither an action nor in EXCLUDED, which keeps
+MCP able to do what the API does.
 
 Auth is a bearer token only, never the site cookie: a pasted tjm_ token, or an OAuth access token from any
 MCP client (app/oauth.py), whose scope may be read-only. Per tools/call: one token check (lookup and
@@ -164,7 +166,46 @@ EXCLUDED = {
 }
 RENAMES = {"link_txn": {"other_txn_id": "txn_id"}, "unlink_txn": {"other_txn_id": "txn_id"}}  # argument → body field
 DENIED = {"patch_mail_source": {"app_password"}}  # body fields MCP never sends
-UPLOADS = {"upload": ("file", "text?: str, pdf_base64?: str, filename?: str"), "import_sheet": ("sheet", "csv: str")}
+# Multipart routes, which declare no models: (field, signature, JSON Schema properties, required, returns).
+# _multipart enforces text xor pdf_base64, which a top-level oneOf can't say to every client.
+UPLOADS: dict[str, tuple[str, str, dict[str, Any], list[str], str]] = {
+    "upload": ("file", "text?: str, pdf_base64?: str, filename?: str", {
+        "text": {"type": "string", "description": "pdftotext -layout output; send this or pdf_base64"},
+        "pdf_base64": {"type": "string", "description": "the PDF, base64; send this or text"},
+        "filename": {"type": "string", "maxLength": 200}}, [],
+        "{statement_id: int, raw_message_id: int, duplicate: bool, account: obj, period_start: YYYY-MM-DD, "
+        "period_end: YYYY-MM-DD, reconciliation: obj, txns: obj}"),
+    "import_sheet": ("sheet", "csv: str", {"csv": {"type": "string", "description": "the sheet exported as CSV"}}, ["csv"],
+                     "{snapshots_upserted: int}"),
+}
+
+# Typed tools for the operations agents call, each with the route's JSON Schema, so the common calls need no
+# guessing. Picked from Engram's trace and the Pitcrew rollouts, 2026-10-02/03: these ten were 66 of the 79
+# Tijori calls, all reads. Every other action stays reachable through its grouped tool, with describe_action for
+# its exact schema, so the listing every agent loads each turn stays small. The grouped tools' text is untouched:
+# gateways that pin tool text (Engram) block a tool whose text changes.
+TYPED: dict[str, tuple[str, str]] = {  # typed tool: (grouped tool, action)
+    "search_transactions": ("find_transactions", "search"), "get_month_summary": ("get_reports", "summary"),
+    "list_accounts": ("get_setup", "accounts"), "get_budgets": ("get_reports", "budgets"),
+    "get_alerts": ("get_reports", "alerts"), "list_inbox": ("find_transactions", "inbox"),
+    "get_transaction": ("find_transactions", "get"), "get_net_worth_live": ("get_net_worth", "live"),
+    "get_filing_stats": ("get_reports", "filing_stats"), "list_recurring": ("get_reports", "recurring"),
+}
+# Typed-only tools, kept out of the grouped ones so their pinned text stays put: (route name, kind, hint).
+EXTRA: dict[str, tuple[str, str, str]] = {
+    "get_freshness": ("get_freshness", READ, "how current the data is, in one block: per account the newest txn date, when "
+                      "Tijori last recorded one, the newest alert, and how far reconciled statements and read alerts reach; "
+                      "per mailbox whether it is being read. Day by day, with reasons: get_setup action coverage"),
+}
+DESCRIBE = "describe_action"
+# Actions that delete, overwrite or can't be undone (route names): a typed tool and describe_action report these
+# alone as destructive. The grouped tools keep their original hints, so their listing stays exactly as it was.
+DESTRUCTIVE_OPS = frozenset({"delete_account", "delete_mail_source", "remove_statement_password", "revoke_invite",
+                             "put_profile", "import_sheet", "patch_settings"})  # profile replace, sheet upsert, retention purge
+# Ledger reads whose result also carries `freshness` (GET /api/freshness): one more in-process request per call.
+FRESH = frozenset({"summary", "get_months", "trends", "get_budgets", "get_recurring", "get_alerts", "inbox_stats",
+                   "transactions", "inbox", "get_cards", "get_loans", "networth_live"})
+_TOOL_NAME = re.compile(r"^[a-z0-9_]{1,64}$")  # no dots: the Anthropic API refuses them in tool names
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,6 +220,8 @@ class Op:
     upload: str | None  # the multipart field, for the upload routes
     sig: str
     hint: str
+    schema: dict[str, Any]  # the typed tool's inputSchema
+    returns: str  # compact shape of the 2xx body
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,6 +229,7 @@ class Tool:
     ops: dict[str, Op]
     listing: dict[str, Any]  # the tools/list entry
     read_only: bool
+    single: Op | None = None  # a typed tool: arguments are the op's own, not {action, args}
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,18 +240,26 @@ class Registry:
 
 def build_tools(app: FastAPI) -> Registry:
     """Once per process, after the routers are included. Raises when MCP and the API disagree: an /api
-    route with no action and no EXCLUDED reason, a name no route has, or an argument with two homes."""
+    route with no action and no EXCLUDED reason, a name no route has, an argument with two homes, or a typed
+    tool that names no grouped action, shares one, or takes a used name."""
     spec = app.openapi()
     defs = spec.get("components", {}).get("schemas", {})
     every = [c for c in iter_route_contexts(app.routes) if isinstance(c.original_route, APIRoute)]
     api = [c for c in every if c.path.startswith("/api/")]
     routes = {r.name: r for r in api}
-    mapped = {name for _, _, acts in TOOLS.values() for name, _ in acts.values()}
+    mapped = {name for _, _, acts in TOOLS.values() for name, _ in acts.values()} | {r for r, _, _ in EXTRA.values()}
     errors = [f"two routes are named {n}" for n in routes if sum(r.name == n for r in api) > 1]
     errors += [f"route {n} is neither an MCP action nor in EXCLUDED" for n in routes.keys() - mapped - EXCLUDED.keys()]
     errors += [f"{n} names no /api route" for n in (mapped | EXCLUDED.keys()) - routes.keys()]
     errors += [f"{n} is both an action and excluded" for n in mapped & EXCLUDED.keys()]
-    tools: dict[str, Tool] = {}
+    pairs = [(t, a) for t, (_, _, acts) in TOOLS.items() for a in acts]
+    errors += [f"typed tool {n} names no grouped action" for n, ta in TYPED.items() if ta not in pairs]
+    errors += [f"{ta[0]}.{ta[1]} has two typed tools" for ta in set(TYPED.values()) if list(TYPED.values()).count(ta) > 1]
+    errors += [f"tool name {n} is taken or malformed" for n in [*TYPED, *EXTRA, DESCRIBE]
+               if n in TOOLS or [*TYPED, *EXTRA, DESCRIBE].count(n) > 1 or not _TOOL_NAME.match(n)]
+    errors += [f"{n} in DESTRUCTIVE_OPS is not a write action" for n in DESTRUCTIVE_OPS
+               if not any(r == n for _, kind, acts in TOOLS.values() if kind != READ for r, _ in acts.values())]
+    grouped: dict[str, Tool] = {}
     for name, (desc, kind, acts) in TOOLS.items():
         ops: dict[str, Op] = {}
         for action, (route_name, hint) in acts.items():
@@ -217,23 +269,79 @@ def build_tools(app: FastAPI) -> Registry:
                 except ValueError as exc:
                     errors.append(str(exc))
         lines = "\n".join(f"- {a}({op.sig}): {op.hint}" for a, op in ops.items())
-        tools[name] = Tool(ops, {
+        grouped[name] = Tool(ops, {
             "name": name, "description": f"{desc} Pass the action and its args.\n{lines}",
             "inputSchema": {"type": "object", "additionalProperties": False, "required": ["action"], "properties": {
                 "action": {"type": "string", "enum": list(ops)},
                 "args": {"type": "object", "description": "The action's arguments, as listed in the description."}}},
             "annotations": {"readOnlyHint": kind == READ, "destructiveHint": kind == DESTRUCTIVE}}, kind == READ)
+    typed: dict[str, Tool] = {}
+    for name, (group, action) in TYPED.items():
+        op = grouped[group].ops.get(action) if group in grouped else None
+        if op is not None:
+            typed[name] = _typed(name, op, TOOLS[group][1])
+    for name, (route_name, kind, hint) in EXTRA.items():
+        if route_name in routes:
+            try:
+                typed[name] = _typed(name, _op(routes[route_name], spec, defs, hint), kind)
+            except ValueError as exc:
+                errors.append(str(exc))
+    typed[DESCRIBE] = _describer(grouped)
     if errors:
         raise RuntimeError("MCP is out of step with the API: " + "; ".join(sorted(errors)))
-    return Registry(tools, [(compile_path(c.path)[0], frozenset(c.methods), c.name) for c in every])
+    return Registry({**typed, **grouped}, [(compile_path(c.path)[0], frozenset(c.methods), c.name) for c in every])
+
+
+def _typed(name: str, op: Op, kind: str) -> Tool:
+    desc = op.hint[0].upper() + op.hint[1:] + "."
+    if "month" in op.schema["properties"]:
+        desc += " A month is YYYY-MM, in the member's month cycle."
+    desc += f" Returns {op.returns}."
+    if op.name in FRESH:
+        desc += " Adds freshness (as get_freshness); before saying a period had no txns, call get_setup action coverage."
+    if op.name == "transactions":
+        desc += " Other transaction actions are on find_transactions; describe_action gives their arguments."
+    return Tool({}, {"name": name, "description": desc, "inputSchema": op.schema,
+                     "annotations": {"readOnlyHint": kind == READ, "destructiveHint": op.name in DESTRUCTIVE_OPS}},
+                kind == READ, op)
+
+
+def _describer(grouped: dict[str, Tool]) -> Tool:
+    """describe_action: any grouped action's exact schema on request, so the listing needn't carry them all."""
+    actions = sorted({a for t in grouped.values() for a in t.ops})
+    return Tool({}, {"name": DESCRIBE, "description": (
+        "The exact JSON Schema of the arguments, and the return shape, of any action of the grouped tools "
+        f"({', '.join(grouped)}). Use it before calling an action you haven't used, then call the grouped tool with "
+        "{action, args}. Returns {tool, action, typed_tool, description, kind, destructive, arguments, returns}. Reads "
+        "no data."), "inputSchema": {"type": "object", "additionalProperties": False, "required": ["tool", "action"],
+                                     "properties": {"tool": {"type": "string", "enum": list(grouped)},
+                                                    "action": {"type": "string", "enum": actions}}},
+        "annotations": {"readOnlyHint": True, "destructiveHint": False}}, True)
+
+
+def _describe(reg: Registry, tool: Tool, arguments: dict[str, Any]) -> dict[str, Any]:
+    problem = _check(tool.listing["inputSchema"], arguments)
+    if problem:
+        return _error(problem)
+    name, action = arguments["tool"], arguments["action"]
+    op = reg.tools[name].ops.get(action)
+    if op is None:
+        return _error(f"{name} has no action {action!r}; it has {', '.join(reg.tools[name].ops)}")
+    data = {"tool": name, "action": action, "typed_tool": next((n for n, ta in TYPED.items() if ta == (name, action)), None),
+            "description": op.hint, "kind": "read" if TOOLS[name][1] == READ else "write",
+            "destructive": op.name in DESTRUCTIVE_OPS, "arguments": op.schema, "returns": op.returns}
+    return {"content": [{"type": "text", "text": json.dumps(data, ensure_ascii=False, separators=(",", ":"))}],
+            "structuredContent": data}
 
 
 def _op(route: RouteContext, spec: dict[str, Any], defs: dict[str, Any], hint: str) -> Op:
     method = next(iter(route.methods))
     if route.name in UPLOADS:
-        field, sig = UPLOADS[route.name]
-        return Op(route.name, method, route.path_format, frozenset(), frozenset(), None, {}, field, sig, hint)
+        field, sig, props, required, returns = UPLOADS[route.name]
+        schema = {"type": "object", "properties": props, "required": required, "additionalProperties": False}
+        return Op(route.name, method, route.path_format, frozenset(), frozenset(), None, {}, field, sig, hint, schema, returns)
     doc = spec["paths"][route.path_format][method.lower()]
+    returns = _returns(doc, defs)
     params = doc.get("parameters", [])
     path = [p for p in params if p["in"] == "path"]
     query = [p for p in params if p["in"] == "query"]
@@ -249,14 +357,96 @@ def _op(route: RouteContext, spec: dict[str, Any], defs: dict[str, Any], hint: s
         raise ValueError(f"{route.name}: {sorted(clash)} is both a parameter and a body field; add a RENAMES entry")
     sig = [f"{p['name']}{'' if p.get('required') else '?'}: {_ty(p.get('schema', {}), defs)}" for p in path + query]
     sig += [f"{a}{'' if req else '?'}: {_ty(v, defs)}" for a, (v, req) in body_args.items()]
+    props = {p["name"]: {**_optional(_clean(p.get("schema", {}), defs)),
+                         **({"description": p["description"]} if p.get("description") else {})} for p in path + query}
+    props |= {a: _clean(v, defs) for a, (v, _) in body_args.items()}
+    need = [p["name"] for p in path + query if p.get("required")] + [a for a, (_, req) in body_args.items() if req]
+    schema = {"type": "object", "properties": props, "required": need, "additionalProperties": False}
     return Op(route.name, method, route.path_format, frozenset(p["name"] for p in path), frozenset(p["name"] for p in query),
-              frozenset(body_args) if body is not None else None, renames, None, ", ".join(sig), hint)
+              frozenset(body_args) if body is not None else None, renames, None, ", ".join(sig), hint, schema, returns)
 
 
 def _deref(sc: dict[str, Any], defs: dict[str, Any]) -> dict[str, Any]:
     while "$ref" in sc:
         sc = defs[sc["$ref"].rsplit("/", 1)[1]]
     return sc
+
+
+def _clean(sc: dict[str, Any], defs: dict[str, Any], seen: tuple[str, ...] = ()) -> dict[str, Any]:
+    """The route's JSON Schema with $refs inlined (not every client resolves them) and OpenAPI titles dropped."""
+    if "$ref" in sc:
+        name = sc["$ref"].rsplit("/", 1)[1]
+        if name in seen:
+            raise ValueError(f"{name} is recursive; typed tool schemas are inlined")
+        return _clean({**defs[name], **{k: v for k, v in sc.items() if k != "$ref"}}, defs, (*seen, name))
+    out: dict[str, Any] = {}
+    for k, v in sc.items():
+        if k == "title":
+            continue
+        if k == "properties":
+            out[k] = {n: _clean(p, defs, seen) for n, p in v.items()}
+        elif k in ("items", "additionalProperties") and isinstance(v, dict):
+            out[k] = _clean(v, defs, seen)
+        elif k in ("anyOf", "oneOf", "allOf"):
+            out[k] = [_clean(x, defs, seen) for x in v]
+        else:
+            out[k] = v
+    return out
+
+
+def _optional(sc: dict[str, Any]) -> dict[str, Any]:
+    """A parameter's `X | null` as plain X: _request drops a null parameter anyway, and the listing is loaded every turn."""
+    alts = [x for x in sc.get("anyOf", ()) if x.get("type") != "null"]
+    if len(alts) == 1 and len(sc["anyOf"]) == 2:
+        return {**alts[0], **{k: v for k, v in sc.items() if k != "anyOf"}}
+    return sc
+
+
+def _returns(doc: dict[str, Any], defs: dict[str, Any]) -> str:
+    """The 2xx body in _ty's compact form, one level deep; a body-less 2xx is what _result returns for it."""
+    for code, resp in doc.get("responses", {}).items():
+        if code.startswith("2"):
+            sc = resp.get("content", {}).get("application/json", {}).get("schema")
+            return "{ok: true}" if sc is None else _ty(sc, defs, 1)
+    return "{ok: true}"
+
+
+_TYPES = {"integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
+          "number": lambda v: isinstance(v, int | float) and not isinstance(v, bool),
+          "string": lambda v: isinstance(v, str), "boolean": lambda v: isinstance(v, bool),
+          "array": lambda v: isinstance(v, list), "object": lambda v: isinstance(v, dict), "null": lambda v: v is None}
+
+
+def _check(sc: dict[str, Any], v: Any, at: str = "") -> str | None:
+    """The first way v breaks a typed tool's schema, or None. Shape, enums and patterns only: the route still
+    applies its own bounds, so this can only refuse earlier, never let more through."""
+    where = at or "arguments"
+    if "anyOf" in sc:
+        errs = [_check(x, v, at) for x in sc["anyOf"]]
+        if None in errs:
+            return None
+        fits = [e for x, e in zip(sc["anyOf"], errs) if _TYPES.get(x.get("type", ""), lambda _: True)(v)]
+        return (fits or errs)[0]
+    if "type" in sc and not _TYPES.get(sc["type"], lambda _: True)(v):
+        return f"{where}: expected {sc['type']}"
+    if "enum" in sc and v not in sc["enum"]:
+        return f"{where}: one of {'|'.join(map(str, sc['enum']))}"
+    if "const" in sc and v != sc["const"]:
+        return f"{where}: must be {sc['const']}"
+    if isinstance(v, str) and "pattern" in sc and not re.search(sc["pattern"], v):
+        return f"{where}: must match {sc['pattern']}"
+    if isinstance(v, list) and isinstance(sc.get("items"), dict):
+        return next((e for i, x in enumerate(v) if (e := _check(sc["items"], x, f"{at}[{i}]"))), None)
+    if isinstance(v, dict) and "properties" in sc:
+        props, dot = sc["properties"], f"{at}." if at else ""
+        missing = [k for k in sc.get("required", ()) if k not in v]
+        if missing:
+            return f"{dot}{missing[0]} is required"
+        extra = sorted(v.keys() - props.keys()) if sc.get("additionalProperties") is False else []
+        if extra:
+            return f"unknown argument {dot}{extra[0]!r}"
+        return next((e for k, x in v.items() if k in props and (e := _check(props[k], x, f"{dot}{k}"))), None)
+    return None
 
 
 def _ty(sc: dict[str, Any], defs: dict[str, Any], depth: int = 0) -> str:
@@ -407,7 +597,7 @@ def _detail(data: Any) -> str:
     return str(d)
 
 
-def _result(status: int, raw: bytes) -> dict[str, Any]:
+def _result(status: int, raw: bytes, fresh: dict[str, Any] | None = None) -> dict[str, Any]:
     try:
         data = json.loads(raw) if raw else {"ok": True}
     except ValueError:
@@ -416,18 +606,41 @@ def _result(status: int, raw: bytes) -> dict[str, Any]:
         return _error("internal error")
     if status >= 400:
         return _error(f"{status}: {_detail(data)}")
+    if fresh is not None and isinstance(data, dict):
+        data.setdefault("freshness", fresh)
     data = _mask(data)
     return {"content": [{"type": "text", "text": json.dumps(data, ensure_ascii=False, separators=(",", ":"))}],
             "structuredContent": data if isinstance(data, dict) else {"items": data}}
 
 
+async def _freshness(app: FastAPI, identity: Identity) -> dict[str, Any] | None:
+    """Through the app like any action, so the owner lock and RLS apply. A failure drops the block, not the answer."""
+    try:
+        status, raw = await _asgi(app, "GET", "/api/freshness", [], b"", "application/json", identity)
+        if status == 200:
+            return json.loads(raw)
+        log.warning("mcp freshness answered %s", status)
+    except Exception:
+        log.exception("mcp freshness failed")
+    return None
+
+
 async def _call(app: FastAPI, reg: Registry, tool: Tool, arguments: dict[str, Any], identity: Identity, token_id: int) -> dict[str, Any]:
-    action, args = arguments.get("action"), arguments.get("args") or {}
-    op = tool.ops.get(action) if isinstance(action, str) else None
-    if op is None:
-        return _error(f"unknown action {action!r}; one of {', '.join(tool.ops)}")
-    if not isinstance(args, dict):
-        return _error("args must be an object")
+    if tool.listing["name"] == DESCRIBE:  # metadata only: no route, no data
+        return _describe(reg, tool, arguments)
+    if tool.single is not None:
+        op, args, action = tool.single, arguments, tool.listing["name"]
+        problem = _check(op.schema, args)
+        if problem:
+            return _error(f"{problem}; this tool takes ({op.sig})")
+    else:
+        action, args = arguments.get("action"), arguments.get("args") or {}
+        found = tool.ops.get(action) if isinstance(action, str) else None
+        if found is None:
+            return _error(f"unknown action {action!r}; one of {', '.join(tool.ops)}")
+        if not isinstance(args, dict):
+            return _error("args must be an object")
+        op = found
     if not CALLS.allow(str(token_id)):
         return _error("too many calls; wait a minute")
     try:
@@ -441,7 +654,8 @@ async def _call(app: FastAPI, reg: Registry, tool: Tool, arguments: dict[str, An
     except Exception:  # the app already answered 500; log it here too, since the caller only sees "internal error"
         log.exception("mcp action %s failed", action)
         return _error("internal error")
-    return _result(status, raw)
+    fresh = await _freshness(app, identity) if status == 200 and op.name in FRESH else None
+    return _result(status, raw, fresh)
 
 
 def _touch(engine: Engine, token_hash: str) -> tuple[int, str | None] | None:

@@ -1150,6 +1150,32 @@ class ParseQueue(BaseModel):
     uploads: list[UploadOut]
 
 
+class AccountFreshness(BaseModel):
+    id: int
+    label: str | None
+    kind: str
+    last_txn_at: date | None  # the newest txn's date
+    last_recorded_at: datetime | None  # when Tijori last stored a txn for it, whatever its date
+    last_seen_at: datetime | None  # the newest alert for it (CoverageAccount)
+    covered_through: date | None  # end of the newest reconciled statement
+    last_statement_end: date | None  # reconciled or not
+    live_through: datetime | None  # its alert mailbox's last full read, for alert-covered accounts
+
+
+class MailboxFreshness(BaseModel):
+    id: int
+    label: str
+    last_ok_poll_at: datetime | None
+    healthy: bool
+    problem: str | None
+
+
+class Freshness(BaseModel):
+    generated_at: datetime
+    accounts: list[AccountFreshness]
+    mailboxes: list[MailboxFreshness]
+
+
 class McpTokenOut(BaseModel):
     id: int
     name: str

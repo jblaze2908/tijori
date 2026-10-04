@@ -23,6 +23,7 @@ from tijori.app.schemas import (
     Alerts,
     CardList,
     FilingStats,
+    Freshness,
     Holdings,
     LiveNetWorth,
     ParseQueue,
@@ -46,8 +47,8 @@ from tijori.app.schemas import (
 )
 from tijori.classify.taxonomy import KINDS
 from tijori.models import Category
-from tijori.services import (aliases, alerts, budgets, cards, coverage, loans, mcp_tokens, members, networth, ops, raw, recurring,
-                             reports, sources, txn_edit, txns)
+from tijori.services import (aliases, alerts, budgets, cards, coverage, freshness, loans, mcp_tokens, members, networth, ops,
+                             raw, recurring, reports, sources, txn_edit, txns)
 from tijori.services.common import month_start_day, today_ist
 
 router = APIRouter(prefix="/api")
@@ -104,11 +105,11 @@ def transactions(
     month: Annotated[str | None, Query(pattern=MONTH_PATTERN)] = None,
     date_from: Annotated[date | None, Query(alias="from")] = None,
     date_to: Annotated[date | None, Query(alias="to")] = None,
-    account: Annotated[list[int] | None, Query(max_length=20)] = None,
-    category: Annotated[list[str] | None, Query(max_length=40)] = None,
+    account: Annotated[list[int] | None, Query(max_length=20, description="account ids")] = None,
+    category: Annotated[list[str] | None, Query(max_length=40, description="category ids (get_setup action categories), or none for unfiled txns; not names")] = None,
     kind: Annotated[Literal[KINDS] | None, Query()] = None,  # type: ignore[valid-type]
     direction: Annotated[Literal["debit", "credit"] | None, Query()] = None,
-    q: Annotated[str | None, Query(min_length=1, max_length=100)] = None,
+    q: Annotated[str | None, Query(min_length=1, max_length=100, description="text in the narration or merchant")] = None,
     min_amount: Annotated[Decimal | None, Query(alias="min", ge=0, max_digits=14, decimal_places=2)] = None,
     max_amount: Annotated[Decimal | None, Query(alias="max", ge=0, max_digits=14, decimal_places=2)] = None,
     sort: Literal[txns.SORTS] = "date_desc",  # type: ignore[valid-type]
@@ -277,6 +278,11 @@ def networth_live(db: MemberDep) -> dict:
 @router.get("/holdings", response_model=Holdings)
 def get_holdings(db: MemberDep) -> dict:
     return networth.holdings(db.session, db.ctx.member_id)
+
+
+@router.get("/freshness", response_model=Freshness)
+def get_freshness(db: MemberDep) -> dict:
+    return freshness.freshness(db.session, db.ctx.member_id)
 
 
 @router.get("/sources/queue", response_model=ParseQueue)

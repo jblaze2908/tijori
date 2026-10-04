@@ -692,6 +692,34 @@ The Settings view of source health.
               "diff": "0.00", "reconciled": true}]}
 ```
 
+## `GET /api/freshness`
+
+How current the member's data is, in one compact block; MCP adds it to ledger reads. The feed fields mean what they mean in [`GET /api/coverage`](#get-apicoverage), which has the day-by-day answer. Every value is read from the tables; an account with no data has nulls.
+
+```json
+{"generated_at": "2026-10-04T05:00:12Z",
+ "accounts": [{"id": 51, "label": "HDFC savings ••9876", "kind": "bank", "last_txn_at": "2026-10-03",
+               "last_recorded_at": "2026-10-03T09:01:40Z", "last_seen_at": "2026-10-03T08:58:00Z",
+               "covered_through": "2026-09-30", "last_statement_end": "2026-09-30",
+               "live_through": "2026-10-04T04:58:00Z"}],
+ "mailboxes": [{"id": 3, "label": "tijori", "last_ok_poll_at": "2026-10-04T04:58:00Z", "healthy": true, "problem": null}]}
+```
+
+| Field | Source |
+|---|---|
+| `last_txn_at` | The newest txn's date |
+| `last_recorded_at` | When Tijori last stored a txn for the account (`txn.created_at`), whatever its date |
+| `last_seen_at`, `covered_through`, `live_through` | As in coverage: the newest alert, the end of the newest reconciled statement, the alert mailbox's last full read |
+| `last_statement_end` | The newest statement's end, reconciled or not |
+| `mailboxes[]` | `last_ok_poll_at` (last full read), and `healthy`/`problem` as in coverage |
+
+---|---|
+| `last_txn_at` | The newest txn's date |
+| `last_recorded_at` | When Tijori last stored a txn for the account (`txn.created_at`), whatever its date |
+| `last_received_at` | The newest email (its `Date` header) or upload that a parser read for the account |
+| `last_statement_end` | The newest statement's `period_end` |
+| `mail_sources[].last_poll_at` | The collector's last poll of that mailbox; `last_poll_error` is its error code, if it failed |
+
 ---
 
 ## `POST /api/uploads`
@@ -957,19 +985,22 @@ A Model Context Protocol server, so any MCP client (Claude, ChatGPT, Cursor and 
   - A request carrying `_meta["io.modelcontextprotocol/protocolVersion"]` is served as `2026-07-28`. `MCP-Protocol-Version`, `Mcp-Method` and, for `tools/call`, `Mcp-Name` must match the body (else 400, `-32020`). Any other version gets 400 with `-32022` and the supported list. The methods are `server/discover`, `tools/list` and `tools/call`; anything else gets 404 with `-32601`. Results carry `resultType` and `serverInfo`.
   - Anything else is an `initialize`-based client (`2025-03-26` to `2025-11-25`), with `initialize`, `ping`, `tools/list` and `tools/call`.
 - **Origin:** a browser client's `Origin` must be `https`, or `http` on localhost, else 403. `/mcp` and the OAuth token, register and revoke endpoints answer CORS without credentials.
-- **Tools are grouped by outcome.** There are 11 tools, not one per endpoint. Each takes `{"action": "…", "args": {…}}`, and each action runs one `/api` route in-process as the token's member. So it validates, audit-logs (actor `mcp:<token id>`) and fails exactly as that route does. `tools/list` lists every action's arguments, generated from the route. The API refuses to start if an `/api` route has no action and isn't in the table of routes left out, below.
-- **Arguments:** path, query and body fields all go flat in `args`, under the names this document uses. `link` and `unlink` take the other txn as `other_txn_id`. `upload_statement` takes `text` (pdftotext `-layout` output) or `pdf_base64`, and a locked PDF is tried with the saved passwords. `import_sheet` takes `csv`.
+- **Typed tools for the common calls.** Ten operations have their own tool: `search_transactions`, `get_month_summary`, `list_accounts`, `get_budgets`, `get_alerts`, `list_inbox`, `get_transaction`, `get_net_worth_live`, `get_filing_stats` and `list_recurring`. They are the ten agents called most, 66 of the 79 Tijori calls in Engram's trace on 2026-10-02/03, all reads. `get_freshness` is typed too. Each runs one `/api` route in-process as the token's member, so it validates, audit-logs (actor `mcp:<token id>`) and fails exactly as that route does, owner lock included. Its `inputSchema` is the route's own JSON Schema (fields flat, `$ref`s inlined, `additionalProperties: false`, required fields, enums and patterns), and its description says what it returns. Arguments are checked against that schema before the route runs: a missing or unknown argument, a wrong type, a value outside an enum or a pattern miss returns `isError` naming the field. The route still applies its own bounds.
+- **Grouped tools.** The 11 grouped tools reach every operation, the ten above included. Each takes `{"action": "…", "args": {…}}`. Their listing is exactly what it was before the typed tools: gateways that pin tool text (Engram) block a tool whose text changes until it is approved, so change it only when it must change.
+- **`describe_action`** `{tool, action}` returns any grouped action's exact argument JSON Schema, its return shape, its typed tool if it has one, its kind and whether it is destructive. It reads no data and runs no route, so the ~60 other operations stay discoverable without being listed. The API refuses to start if an `/api` route has no action and isn't in the table of routes left out, below.
+- **Arguments:** path, query and body fields all go flat (in `args`, for a grouped tool), under the names this document uses. `link_transactions` and `unlink_transactions` take the other txn as `other_txn_id`. `upload_statement` takes `text` (pdftotext `-layout` output) or `pdf_base64`, and a locked PDF is tried with the saved passwords. `import_net_worth_sheet` takes `csv`.
 - **Results:** the route's JSON; a 204 becomes `{"ok": true}`. A 4xx returns `isError: true` with `<status>: <detail>`, and validation errors are cut down to `field: message`. A 5xx returns `internal error`.
-- **No transactions ≠ nothing happened:** `get_setup` and `find_transactions` tell the agent to call `get_setup` `coverage` (`from?`, `to?`) before saying a period had no transactions.
+- **No transactions ≠ nothing happened:** `get_setup` and `find_transactions`, and the typed ledger reads, tell the agent to call `get_setup` `coverage` (`from?`, `to?`) before saying a period had no transactions.
+- **Freshness:** ledger reads (`get_month_summary`, `get_budgets`, `get_alerts`, `get_filing_stats`, `list_recurring`, `search_transactions`, `list_inbox`, `get_net_worth_live`, and the grouped actions `months`, `trends`, `cards` and `loans` `list`, plus the same actions through the grouped tools) add a `freshness` key: the body of [`GET /api/freshness`](#get-apifreshness), fetched as the same member. If that lookup fails, the answer comes back without it.
 - **Masking:** person UPI handles are masked anywhere in the output, narrations and email text included (`ra***@okaxis`), since it leaves Tijori. Merchant QR handles stay. `payee_key` and `payee_keys` also stay whole, because writes take them back.
 
-| Tool | Kind | Actions |
+| Grouped tool | Kind | Actions (typed tool) |
 |---|---|---|
-| `get_reports` | read | `summary`, `months`, `trends`, `budgets`, `recurring`, `alerts`, `filing_stats` |
-| `find_transactions` | read | `search`, `get`, `sources`, `link_candidates`, `inbox` |
+| `get_reports` | read | `summary` (`get_month_summary`), `months`, `trends`, `budgets` (`get_budgets`), `recurring` (`list_recurring`), `alerts` (`get_alerts`), `filing_stats` (`get_filing_stats`) |
+| `find_transactions` | read | `search` (`search_transactions`), `get` (`get_transaction`), `sources`, `link_candidates`, `inbox` (`list_inbox`) |
 | `get_loans` | read | `list`, `get`, `for_txn` |
-| `get_net_worth` | read | `live`, `history`, `holdings` |
-| `get_setup` | read | `me`, `accounts`, `coverage`, `cards`, `categories`, `rules`, `payees`, `payee_names`, `settings`, `onboarding`, `classify_profile`, `household`, `mail_sources`, `statement_queue`, `backup` |
+| `get_net_worth` | read | `live` (`get_net_worth_live`), `history`, `holdings` |
+| `get_setup` | read | `me`, `accounts` (`list_accounts`), `coverage`, `cards`, `categories`, `rules`, `payees`, `payee_names`, `settings`, `onboarding`, `classify_profile`, `household`, `mail_sources`, `statement_queue`, `backup` |
 | `classify` | write | `set_category`, `file_payee`, `undo`, `set_rule`, `rename_payees`, `reset_payee_names`, `dismiss_name_suggestion` |
 | `edit_transactions` | write | `notes`, `split`, `unsplit`, `link`, `unlink` |
 | `plan_spending` | write | `set_budget`, `set_recurring` |
@@ -977,7 +1008,7 @@ A Model Context Protocol server, so any MCP client (Claude, ChatGPT, Cursor and 
 | `edit_net_worth` | write | `set_value`, `set_remark`, `import_sheet` |
 | `edit_setup` | destructive | `add_account`, `edit_account`, `delete_account`, `upload_statement`, `remove_statement_password`, `edit_mail_source`, `delete_mail_source`, `test_mail_source`, `update_settings`, `rename_me`, `set_onboarding`, `set_classify_profile`, `test_notification`, `revoke_invite` |
 
-Read tools carry `readOnlyHint`, so a client can allow them and still ask before a write. `edit_setup` carries `destructiveHint`. A read-only connection lists only the five read tools; calling a write tool gets 403 with `error="insufficient_scope"`.
+Read tools carry `readOnlyHint`, so a client can allow them and still ask before a write. The grouped `edit_setup` keeps `destructiveHint`, since it can delete. Per action, `describe_action` (and any typed write tool) marks as destructive only what deletes, overwrites or can't be undone: `delete_account`, `delete_mail_source`, `remove_statement_password`, `revoke_invite`, `set_classify_profile` (replaces the profile), `import_sheet` (overwrites snapshots by month) and `update_settings` (a retention window purges raw files). `add_account`, `upload_statement` and the rest are not. A read-only connection lists only the read tools (17: 10 typed, `get_freshness`, `describe_action` and the 5 grouped reads); calling a write tool gets 403 with `error="insufficient_scope"`.
 
 **Left out, on purpose (web only):**
 

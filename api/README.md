@@ -11,7 +11,14 @@ The backend for Tijori. It covers:
 
 The design lives in [`../PLAN.md`](../PLAN.md), the HTTP contract in [`../docs/api.md`](../docs/api.md), and deployment in [`../docs/deploy.md`](../docs/deploy.md).
 
-The stack is FastAPI, SQLAlchemy 2, Alembic, pydantic/pydantic-settings, psycopg 3, uvicorn, and `cryptography` for SecretBox. PDFs are read by OS tools: `pdftotext` (poppler-utils) and `qpdf`. There are no tests in the repo for now; that was Jai's decision on 2026-09-26.
+The stack is FastAPI, SQLAlchemy 2, Alembic, pydantic/pydantic-settings, psycopg 3, uvicorn, and `cryptography` for SecretBox. PDFs are read by OS tools: `pdftotext` (poppler-utils) and `qpdf`. Tests are limited to the MCP tools (`tests/`, stdlib `unittest`, no extra dependency); otherwise there are none, by Jai's decision on 2026-09-26:
+
+```sh
+uv run python -m unittest discover -s tests      # offline; the database tests skip
+TIJORI_TEST_DATABASE_URL=postgresql+psycopg://tijori_app:…@127.0.0.1:55432/tijori \
+TIJORI_TEST_ADMIN_DATABASE_URL=postgresql+psycopg://tijori_owner:…@127.0.0.1:55432/tijori \
+  uv run python -m unittest discover -s tests    # also against a migrated database (see Run locally)
+```
 
 ## Setup
 
