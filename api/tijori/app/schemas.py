@@ -479,12 +479,56 @@ class AccountOut(BaseModel):
     has_statement_password: bool  # the "main" slot; kept for older clients
     has_extra_statement_password: bool
     balance: "Balance | None"
-    last_seen_at: datetime | None
-    coverage_pct: float | None
+    last_seen_at: datetime | None  # when the newest alert for the account arrived
+    coverage_pct: float | None  # % of statement lines since the first alert that were also seen as alerts
+    covered_through: date | None  # end of the newest reconciled statement
+    live_through: datetime | None  # alerts are read up to here; null when no rule reads this account's alerts
+    alerts: bool  # a rule reads alerts for this institution and kind
 
 
 class Accounts(BaseModel):
     items: list[AccountOut]
+
+
+class CoverageMailbox(BaseModel):
+    id: int
+    label: str
+    email: str
+    status: str
+    collecting: bool  # status ok: the collector reads it
+    last_poll_at: datetime | None
+    last_ok_poll_at: datetime | None
+    last_poll_error: str | None
+    last_tested_at: datetime | None
+    healthy: bool
+    problem: str | None
+
+
+class CoverageDay(BaseModel):
+    date: date
+    state: Literal["confirmed", "live", "unknown"]
+    reason: str | None
+    txn_count: int
+
+
+class CoverageAccount(BaseModel):
+    account: AccountRef
+    alerts: bool
+    covered_through: date | None
+    last_seen_at: datetime | None
+    live_through: datetime | None
+    coverage_pct: float | None
+    days: list[CoverageDay]
+
+
+class Coverage(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    from_: date = Field(alias="from")
+    to: date
+    timezone: str
+    now: datetime
+    mailboxes: list[CoverageMailbox]
+    accounts: list[CoverageAccount]
 
 
 # --- net worth -------------------------------------------------------------------------------
@@ -621,8 +665,10 @@ class MailSourceOut(BaseModel):
     last_tested_at: datetime | None
     last_error_code: str | None
     last_message_count: int | None
-    last_poll_at: datetime | None
+    last_poll_at: datetime | None  # every attempt
     last_poll_error: str | None
+    last_ok_poll_at: datetime | None = None  # the last poll that read the whole label
+    collecting: bool = False  # status ok: the collector reads it
     created_at: datetime
 
 

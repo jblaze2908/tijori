@@ -67,8 +67,7 @@ class HdfcCardStatementParser:
             lines.append(Observation(occurred_at=ts.date(), amount=parse_amount(m["amt"]),
                                      direction="credit" if m["cr"] else "debit", narration=desc,
                                      payload={"time": m["time"]}))
-        if not lines:
-            raise ParseError("HDFC card statement: no transaction rows found")
+        # No rows is a quiet month only if the printed totals are zero too; reconciliation checks that.
         prev, due = parse_amount(summary["prev"]), parse_amount(summary["due"])
         exact_due = prev - parse_amount(summary["cr"]) + parse_amount(summary["dr"]) + parse_amount(summary["fin"])
         s = card_summary(prev, exact_due, lines)

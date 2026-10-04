@@ -80,6 +80,11 @@ RULES: tuple[_Rule, ...] = (
         lambda m: "PAYMENT RECEIVED"),
 )
 
+# Derived from RULES so a new rule widens both: the collector queues unread mail from these senders, and
+# coverage only vouches for live alerts on accounts some rule can read.
+SENDER_INSTITUTION: dict[str, str] = {s: r.institution for r in RULES for s in r.senders}
+COVERED: frozenset[tuple[str, str]] = frozenset((r.institution, r.kind) for r in RULES)
+
 
 def _sender(msg: Message) -> str:
     return (msg.sender or "").lower()

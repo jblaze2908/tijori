@@ -10,6 +10,8 @@ from tijori.classify.kinds import DEFAULT_LOCAL_SHOP_CAP
 from tijori.db import MemberContext
 from tijori.models import Account, Household, Member, Statement, Txn
 from tijori.money import fmt
+from tijori.parsers.alerts import COVERED
+from tijori.services import coverage
 from tijori.services.common import account_label, audit
 from tijori.services.errors import Invalid, NotFound
 from tijori.services.recurring import balances
@@ -61,8 +63,8 @@ def me(s: Session, ctx: MemberContext) -> dict[str, Any]:
 
 
 def accounts(s: Session, member_id: int) -> dict[str, Any]:
-    """Accounts with activity and the latest statement. Sync-health fields stay null until the
-    collectors exist (M1). Two grouped/lateral lookups, not one query per account."""
+    """Accounts with activity, the latest statement and how far each feed reaches (services/coverage).
+    Grouped/lateral lookups, not one query per account."""
     stats = (select(Txn.account_id, func.count().label("n"), func.min(Txn.occurred_at).label("first_at"),
                     func.max(Txn.occurred_at).label("last_at"))
              .where(Txn.member_id == member_id).group_by(Txn.account_id).subquery())
@@ -78,6 +80,9 @@ def accounts(s: Session, member_id: int) -> dict[str, Any]:
     ).all()
     passwords = account_passwords(s, member_id)
     bal = balances(s, member_id)
+    feed = coverage.feeds(s, member_id)
+    boxes = {m["id"]: m for m in coverage.mailboxes(s, member_id)}
+    none = coverage.Feed(None, None, None, None, None)
     return {"items": [
         {"id": a.id, "institution": a.institution, "name": a.name, "kind": a.kind, "mask": a.mask,
          "label": account_label(a.institution, a.name, a.mask), "currency": a.currency, "txn_count": n,
@@ -89,8 +94,14 @@ def accounts(s: Session, member_id: int) -> dict[str, Any]:
          "has_statement_password": any(p["slot"] == "main" for p in passwords.get(a.id, [])),
          "has_extra_statement_password": any(p["slot"] == "extra" for p in passwords.get(a.id, [])),
          "balance": {"amount": fmt(bal[a.id][0]), "as_of": bal[a.id][1]} if a.id in bal else None,
-         "last_seen_at": None, "coverage_pct": None}
+         **_feed(a, feed.get(a.id, none), boxes)}
         for a, n, first, last, ps, pe, rat, diff in rows]}
+
+
+def _feed(a: Account, f: coverage.Feed, boxes: dict[int, dict[str, Any]]) -> dict[str, Any]:
+    return {"last_seen_at": f.last_seen_at, "coverage_pct": f.coverage_pct, "covered_through": f.covered_through,
+            "live_through": coverage.live_through(a.institution, a.kind, f, boxes),
+            "alerts": (a.institution, a.kind) in COVERED}
 
 
 ACCOUNT_KINDS = ("bank", "card", "wallet", "deposit", "holding", "cash")

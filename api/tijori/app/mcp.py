@@ -56,10 +56,11 @@ TOOLS: dict[str, tuple[str, str, dict[str, tuple[str, str]]]] = {
         "trends": ("trends", "totals per period, optionally grouped"),
         "budgets": ("get_budgets", "budget vs actual and pace, per category"),
         "recurring": ("get_recurring", "subscriptions, bills and SIPs: cost per month, next due date, state"),
-        "alerts": ("get_alerts", "rule alerts: duplicate charge, bounce risk, price rise, missed charge, budgets"),
+        "alerts": ("get_alerts", "rule alerts: duplicate charge, bounce risk, price rise, missed charge, budgets, stale backup or mailbox"),
         "filing_stats": ("inbox_stats", "how the month's txns got their category, and how many still wait"),
     }),
-    "find_transactions": ("Search and inspect transactions, and see what waits in the Inbox.", READ, {
+    "find_transactions": (("Search and inspect transactions, and see what waits in the Inbox. No txns on a day can mean a "
+                           "feed is behind: check get_setup coverage before saying there were none."), READ, {
         "search": ("transactions", "a page of txns and the totals of the whole filtered set; category takes ids or 'none'"),
         "get": ("transaction", "one txn with its observations, links, payee history and split parts"),
         "sources": ("txn_sources", "the emails and files the txn was read from"),
@@ -76,9 +77,12 @@ TOOLS: dict[str, tuple[str, str, dict[str, tuple[str, str]]]] = {
         "history": ("get_networth", "monthly snapshots, with remarks"),
         "holdings": ("get_holdings", "funds and stocks with units and value"),
     }),
-    "get_setup": ("Accounts, categories, rules, payees, settings and household.", READ, {
+    "get_setup": (("Accounts, categories, rules, payees, settings and household. Call coverage before claiming there were "
+                   "no transactions in a period: a missing day may be a feed that is behind."), READ, {
         "me": ("get_me", "the signed-in member"),
-        "accounts": ("get_accounts", "accounts with sync health and coverage"),
+        "accounts": ("get_accounts", "accounts with their last alert, statement reach (covered_through) and live_through"),
+        "coverage": ("get_coverage", ("per account per day (default the last 7, IST): confirmed (a reconciled statement), "
+                                      "live (alerts read past that day; not proof) or unknown with the reason, plus mailbox health")),
         "cards": ("get_cards", "credit card bills: statement, due date, paid"),
         "categories": ("categories", "every category with its id, kind and bucket"),
         "rules": ("get_rules", "classification rules and payee memory"),
@@ -88,7 +92,7 @@ TOOLS: dict[str, tuple[str, str, dict[str, tuple[str, str]]]] = {
         "onboarding": ("get_onboarding", "onboarding progress"),
         "classify_profile": ("get_profile", "what the classifier knows about the member (employer, family, own accounts)"),
         "household": ("get_household", "household members and open invites"),
-        "mail_sources": ("list_mail_sources", "connected mailboxes and their last sync"),
+        "mail_sources": ("list_mail_sources", "connected mailboxes, their last poll and last full read (last_ok_poll_at)"),
         "statement_queue": ("parse_queue", "documents that no parser could read yet"),
         "backup": ("backup_status", "when the last backup ran"),
     }),

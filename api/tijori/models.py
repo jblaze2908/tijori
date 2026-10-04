@@ -506,8 +506,10 @@ class MailSource(Base):
     # Collector watermark: UIDs are only comparable within one UIDVALIDITY.
     uid_validity: Mapped[int | None] = mapped_column(BigInteger)
     last_uid: Mapped[int | None] = mapped_column(BigInteger)
-    last_poll_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_poll_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # every attempt, failed ones too
     last_poll_error: Mapped[str | None] = mapped_column(String(40))
+    # Start of the newest poll that read the label to the end: all mail that arrived before it is stored.
+    last_ok_poll_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = _created()
 
 

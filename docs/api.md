@@ -141,11 +141,16 @@ Month cycles that contain at least one txn, oldest first. `start` and `end` are 
             "first_txn_at": "2026-04-01", "last_txn_at": "2026-04-30",
             "last_statement": {"period_start": "2026-04-01", "period_end": "2026-04-30", "reconciled": true, "diff": "0.00"},
             "statement_passwords": [], "has_statement_password": false, "has_extra_statement_password": false, "balance": {"amount": "184500.00", "as_of": "2026-08-31"},
-            "last_seen_at": null, "coverage_pct": null}]}
+            "last_seen_at": "2026-10-01T07:31:02Z", "coverage_pct": 62.5, "covered_through": "2026-04-30",
+            "live_through": "2026-10-04T04:28:00Z", "alerts": true}]}
 ```
 
 - `balance` is the balance printed after the account's newest statement line, or `null` when no statement had one.
-- `last_seen_at` (last live alert) and `coverage_pct` (share of statement lines seen live) stay `null` until the collectors land in M1.
+- `last_seen_at`: when the newest alert for the account arrived, or `null` when none has.
+- `coverage_pct`: of the statement lines dated on or after the account's first alert, the share also seen as an alert. `null` without alerts or such lines. Bank charges, interest and some transfer kinds never send an alert, so 100 is not the norm.
+- `covered_through`: end of the newest **reconciled** statement. A statement with no lines counts when its printed totals are zero (see [uploads](#post-apiuploads)).
+- `alerts`: a rule in `parsers/alerts.py` reads alerts for this institution and kind (today HDFC bank and card, SBI bank, ICICI card).
+- `live_through`: how far this account's alerts have been read: the last full read (`last_ok_poll_at`) of the mailbox its newest alert came through, while that mailbox is collected. `null` when `alerts` is false, no alert has arrived, or the mailbox isn't collected. See [`/api/coverage`](#get-apicoverage) for what it does and doesn't prove.
 
 Accounts are created automatically from uploaded statements. They can also be declared up front, for example during onboarding:
 
@@ -156,6 +161,35 @@ Accounts are created automatically from uploaded statements. They can also be de
 | `DELETE /api/accounts/{id}` | 204. 422 if the account has transactions or statements, since history is never orphaned |
 
 ---
+
+## `GET /api/coverage`
+
+Whether "no transactions on day D" is the truth or a feed that is behind. Query `from` and `to` (`YYYY-MM-DD`, IST days). The default is the 7 days to today, and the range is at most 62 days (else 422). Bank and card accounts only. Computed on request, in six queries whatever the range.
+
+Each day of each account gets a `state`:
+
+| `state` | Meaning |
+|---|---|
+| `confirmed` | A reconciled statement covers the day, so its transactions are all in. A zero-line statement whose totals are zero proves an empty period |
+| `live` | A rule reads this account's alerts, one has already arrived through a mailbox, and that mailbox was read to the end at least 1 hour after the day closed (IST). Alerts would have arrived. It is **not proof**: not every kind of transaction sends an alert |
+| `unknown` | Anything else. `reason` says why, e.g. no alert rule for the account (with when the next statement is due), no alert from it yet, the mailbox is skipped or behind, alert emails from the bank that day that no rule could read, the day isn't over, or its statement didn't reconcile |
+
+`txn_count` is the transactions Tijori has for that day (split parts not counted). `mailboxes` is each mailbox's health: `healthy` is false when the collector skips it (`status` isn't `ok`), or when it hasn't been read to the end in 30 minutes (15 polls). `problem` says which. Days before the last full read stay `live` even when a mailbox later goes stale, because those alerts were already read.
+
+```json
+{"from": "2026-09-28", "to": "2026-10-04", "timezone": "Asia/Kolkata", "now": "2026-10-04T04:30:00Z",
+ "mailboxes": [{"id": 1, "label": "tijori", "email": "asha@example.test", "status": "ok", "collecting": true,
+                "last_poll_at": "2026-10-04T04:28:10Z", "last_ok_poll_at": "2026-10-04T04:28:00Z", "last_poll_error": null,
+                "last_tested_at": "2026-09-26T18:10:22Z", "healthy": true, "problem": null}],
+ "accounts": [{"account": {"id": 51, "institution": "HDFC", "name": "HDFC savings", "label": "HDFC savings ••9876",
+                           "kind": "bank", "mask": "9876"},
+               "alerts": true, "covered_through": "2026-09-30", "last_seen_at": "2026-10-01T07:31:02Z",
+               "live_through": "2026-10-04T04:28:00Z", "coverage_pct": 62.5,
+               "days": [{"date": "2026-09-30", "state": "confirmed", "reason": null, "txn_count": 3},
+                        {"date": "2026-10-03", "state": "live", "reason": null, "txn_count": 0},
+                        {"date": "2026-10-04", "state": "unknown", "txn_count": 1,
+                         "reason": "alerts for this day may still be arriving; mail read to 04 Oct 09:58 IST"}]}]}
+```
 
 ## `GET /api/summary?month=YYYY-MM`
 
@@ -523,6 +557,8 @@ Rule flags for the month cycle. Every one is computed from data; none is written
 | `missed` | `warn` | A series in state `late` (see [`/api/recurring`](#get-apirecurring)), in the current cycle |
 | `budget_over` | `bad` | A budget's `state` is `over` (see [`/api/budgets`](#get-apibudgetsmonthyyyy-mm)) |
 | `budget_pace` | `warn` | A budget's `state` is `ahead` |
+| `backup_stale` | `bad` | No good off-site backup in 2 days (see [Notifications](#notifications)) |
+| `mailbox_stale` | `bad` | A mailbox the collector skips (`status` isn't `ok`, e.g. `untested` after a label or password change), or one not read to the end in 30 minutes (15 missed polls; shorter blips heal on their own). The id holds the last full read, so one outage pushes once |
 
 ```json
 {"month": "2026-09", "items": [{"id": "dup:579", "kind": "duplicate", "severity": "bad",
@@ -672,12 +708,13 @@ Uploads one bank statement. The api stores the raw file, then parses → resolve
 - **Parsers:** SBI savings e-statements and HDFC savings statements. Anything else is kept as `parser_needed`.
 - **Resolve:** each statement line has a stable identity, so re-sending a statement never duplicates a txn. That covers both the same file and another export of the same lines, and lines already loaded by the legacy import. Matching txns gain `"statement"` in `sources` and turn `reconciled` when the statement balances.
 - **Storage:** the raw file is kept for re-parsing, content-addressed per member.
+- **Empty periods:** a statement with no lines is stored (`txns.lines: 0`) only when it reconciles, i.e. its printed totals are zero and opening equals closing. It then proves the period had no transactions (see [`/api/coverage`](#get-apicoverage)). If the totals show activity the parser didn't read, it is refused with 422 `parse_status: "failed"`. SBI e-statement accounts with no activity print no balances, and SBI Quick statements print no totals, so those two still can't prove an empty month.
 
 | Status | Body |
 |---|---|
 | 201 | New statement (below) |
 | 200 | The exact same file again: `{"duplicate": true, "raw_message_id", "statement_id", "parse_status", "reconciliation"}` |
-| 422 | Not a statement Tijori can read: `{"detail": "...", "raw_message_id": 87, "parse_status": "parser_needed" \| "failed"}` (kept for a future parser); or an unreadable or encrypted PDF without the right password |
+| 422 | Not a statement Tijori can read: `{"detail": "...", "raw_message_id": 87, "parse_status": "parser_needed" \| "failed"}` (kept for a future parser), including a statement the parser read but that can't be stored, such as a zero-line one whose totals aren't zero; or an unreadable or encrypted PDF without the right password |
 | 415 | Neither PDF nor UTF-8 text |
 | 503 | PDF tools missing on the server |
 
@@ -783,7 +820,7 @@ It applies to statements uploaded after the change.
  "last_message_count": 38, "created_at": "2026-09-26T18:10:21Z"}
 ```
 
-`status` is one of `untested`, `ok`, `error`. `last_message_count` is how many messages the label held at the last successful test.
+`status` is one of `untested`, `ok`, `error`. `last_message_count` is how many messages the label held at the last successful test. Only `ok` mailboxes are collected (`collecting: true`). The others are skipped until a test passes, and raise a `mailbox_stale` alert.
 
 ### Statement passwords
 
@@ -845,10 +882,10 @@ Browser flow: OIDC authorization code with PKCE (S256), `state` and `nonce`, sco
 
 ## Mail collector
 
-The `worker` service (`python -m tijori.collector`) polls each connected mailbox every 2 minutes. It uses read-only IMAP (EXAMINE, BODY.PEEK) and a UID watermark per mailbox (`mail_source.last_uid`, reset when UIDVALIDITY changes). `GET /api/mail-sources` adds `last_poll_at` and `last_poll_error`.
+The `worker` service (`python -m tijori.collector`) polls each connected mailbox every 2 minutes. It uses read-only IMAP (EXAMINE, BODY.PEEK) and a UID watermark per mailbox (`mail_source.last_uid`, reset when UIDVALIDITY changes). `GET /api/mail-sources` adds `last_poll_at` (every attempt, failed ones too), `last_poll_error` (cleared by a good poll), `last_ok_poll_at` (the start of the newest poll that read the label to the end, so all mail that arrived before it is stored) and `collecting`. A mailbox that isn't `ok` is skipped, and the worker logs that once.
 
 - Every message is stored raw first (`raw_message`, blobs), then routed:
-  - Alert emails go to `parsers/alerts.py`: HDFC UPI, account and card alerts, SBI CBS alerts, ICICI card alerts and payments. Only INR amounts are taken.
+  - Alert emails go to `parsers/alerts.py`: HDFC UPI, account and card alerts, SBI CBS alerts, ICICI card alerts and payments. Only INR amounts are taken. A mail from one of those banks' alert senders that no rule reads is kept as `parser_needed`, not `ignored`, so a new alert format shows in the statement queue and is re-read when a rule lands. Mail from other senders without a statement stays `ignored`.
   - Statement PDFs go to the statement parsers: HDFC card, ICICI card, HDFC combined email statement, SBI e-statement, plus the two netbanking formats.
   - CAMS account statements set holdings (units as of the NAV date).
 - **Matching.** An alert becomes a `pending` txn, unless a txn on the same account with the same amount and direction exists within ±3 days, in which case it's attached as a sighting. A statement line matches first on its key. Otherwise it matches the same line from another statement format (same date, amount and direction), or an alert-only txn within ±3 days, which takes the statement's date, narration and key.
@@ -923,6 +960,7 @@ A Model Context Protocol server, so any MCP client (Claude, ChatGPT, Cursor and 
 - **Tools are grouped by outcome.** There are 11 tools, not one per endpoint. Each takes `{"action": "…", "args": {…}}`, and each action runs one `/api` route in-process as the token's member. So it validates, audit-logs (actor `mcp:<token id>`) and fails exactly as that route does. `tools/list` lists every action's arguments, generated from the route. The API refuses to start if an `/api` route has no action and isn't in the table of routes left out, below.
 - **Arguments:** path, query and body fields all go flat in `args`, under the names this document uses. `link` and `unlink` take the other txn as `other_txn_id`. `upload_statement` takes `text` (pdftotext `-layout` output) or `pdf_base64`, and a locked PDF is tried with the saved passwords. `import_sheet` takes `csv`.
 - **Results:** the route's JSON; a 204 becomes `{"ok": true}`. A 4xx returns `isError: true` with `<status>: <detail>`, and validation errors are cut down to `field: message`. A 5xx returns `internal error`.
+- **No transactions ≠ nothing happened:** `get_setup` and `find_transactions` tell the agent to call `get_setup` `coverage` (`from?`, `to?`) before saying a period had no transactions.
 - **Masking:** person UPI handles are masked anywhere in the output, narrations and email text included (`ra***@okaxis`), since it leaves Tijori. Merchant QR handles stay. `payee_key` and `payee_keys` also stay whole, because writes take them back.
 
 | Tool | Kind | Actions |
@@ -931,7 +969,7 @@ A Model Context Protocol server, so any MCP client (Claude, ChatGPT, Cursor and 
 | `find_transactions` | read | `search`, `get`, `sources`, `link_candidates`, `inbox` |
 | `get_loans` | read | `list`, `get`, `for_txn` |
 | `get_net_worth` | read | `live`, `history`, `holdings` |
-| `get_setup` | read | `me`, `accounts`, `cards`, `categories`, `rules`, `payees`, `payee_names`, `settings`, `onboarding`, `classify_profile`, `household`, `mail_sources`, `statement_queue`, `backup` |
+| `get_setup` | read | `me`, `accounts`, `coverage`, `cards`, `categories`, `rules`, `payees`, `payee_names`, `settings`, `onboarding`, `classify_profile`, `household`, `mail_sources`, `statement_queue`, `backup` |
 | `classify` | write | `set_category`, `file_payee`, `undo`, `set_rule`, `rename_payees`, `reset_payee_names`, `dismiss_name_suggestion` |
 | `edit_transactions` | write | `notes`, `split`, `unsplit`, `link`, `unlink` |
 | `plan_spending` | write | `set_budget`, `set_recurring` |

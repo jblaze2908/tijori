@@ -39,7 +39,7 @@ from tijori.models import ComponentValue, Holding, MailSource, Price, RawAttachm
 from tijori.parsers.cams_statement import CamsStatementParser
 from tijori.parsers.cdsl_cas import CdslCasParser
 from tijori.parsers import Message, ParseError, route
-from tijori.parsers.alerts import AlertParser
+from tijori.parsers.alerts import SENDER_INSTITUTION, AlertParser
 from tijori.pdf import PdfError, is_pdf, pdf_to_text
 from tijori.services import cards, loans, notify, prices, retention, txn_edit
 from tijori.services import secrets as vault
@@ -77,14 +77,24 @@ def _members(engine: Engine) -> list[MemberContext]:
         return [MemberContext(r.member_id, r.household_id) for r in c.execute(text("SELECT * FROM collector_members()"))]
 
 
+_skipped: dict[int, str] = {}  # source id → why it was last skipped, so the log says it once per change
+
+
 def _boxes(engine: Engine, ctx: MemberContext, settings: Settings) -> list[Box]:
+    """Mailboxes that tested ok. The rest are logged when they start being skipped; the API raises an alert."""
     box = settings.secret_box()
     out = []
     with member_session(engine, ctx) as s:
-        for m in s.scalars(select(MailSource).where(MailSource.member_id == ctx.member_id, MailSource.status == "ok")):
-            pw = vault.get(s, ctx, box, vault.mail_source_name(m.id)) if box else None
+        for m in s.scalars(select(MailSource).where(MailSource.member_id == ctx.member_id)):
+            pw = vault.get(s, ctx, box, vault.mail_source_name(m.id)) if box and m.status == "ok" else None
             if pw:
+                _skipped.pop(m.id, None)
                 out.append(Box(m.id, m.host, m.port, m.username, m.label, pw, m.uid_validity, m.last_uid))
+                continue
+            why = f"status {m.status}" if m.status != "ok" else "no app password"
+            if _skipped.get(m.id) != why:
+                _skipped[m.id] = why
+                log.warning("member=%s source=%s skipped: %s (test the mailbox to resume)", ctx.member_id, m.id, why)
     return out
 
 
@@ -152,6 +162,8 @@ def _route(s: Session, ctx: MemberContext, settings: Settings, rm: RawMessage, m
         status = "parsed"
     for att, data in atts:
         status = _statement(s, ctx, settings, rm.sender or "", rm, att, data) or status
+    if status == "ignored" and not atts and rm.sender in SENDER_INSTITUTION:
+        status = "parser_needed"  # a bank's alert sender in a shape no rule reads yet: queue it, don't drop it
     return status
 
 
@@ -304,7 +316,11 @@ def poll_box(engine: Engine, ctx: MemberContext, settings: Settings, b: Box) -> 
             return counts
         validity = int(conn.response("UIDVALIDITY")[1][0] or 0)
         since = (b.last_uid or 0) if validity == b.uid_validity else 0
+        started = datetime.now(UTC)  # the SEARCH sees all mail that arrived before this
         typ, data = conn.uid("SEARCH", None, f"UID {since + 1}:*")
+        if typ != "OK":
+            _set_poll(engine, ctx, b.id, last_poll_error="search_failed")
+            return counts
         uids = sorted(int(u) for u in (data[0] or b"").split() if int(u) > since)
         for i in range(0, len(uids), BATCH):
             chunk = uids[i:i + BATCH]
@@ -325,10 +341,12 @@ def poll_box(engine: Engine, ctx: MemberContext, settings: Settings, b: Box) -> 
                     _store_failed(engine, ctx, settings, b.id, uid, part[1])
                 counts[st] = counts.get(st, 0) + 1
             _set_poll(engine, ctx, b.id, uid_validity=validity, last_uid=chunk[-1], last_poll_error=None)
-        if not uids:
-            _set_poll(engine, ctx, b.id, uid_validity=validity, last_poll_error=None)
+        _set_poll(engine, ctx, b.id, uid_validity=validity, last_poll_error=None, last_ok_poll_at=started)
     except imaplib.IMAP4.error:
         _set_poll(engine, ctx, b.id, last_poll_error="imap_error")
+    except OSError:  # a timeout or reset mid-fetch: record it, and let the other mailboxes still poll
+        log.exception("poll interrupted: source=%s", b.id)
+        _set_poll(engine, ctx, b.id, last_poll_error="poll_interrupted")
     finally:
         try:
             conn.logout()

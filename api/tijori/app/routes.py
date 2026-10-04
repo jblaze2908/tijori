@@ -3,7 +3,7 @@ filter member_id explicitly, because RLS lets a grantee read shared rows and tho
 leak into the caller's own totals."""
 
 import re
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Annotated, Literal
 
@@ -32,6 +32,7 @@ from tijori.app.schemas import (
     Rules,
     Budgets,
     CategoryOut,
+    Coverage,
     InboxGroupPage,
     InboxPage,
     Me,
@@ -45,8 +46,8 @@ from tijori.app.schemas import (
 )
 from tijori.classify.taxonomy import KINDS
 from tijori.models import Category
-from tijori.services import (aliases, alerts, budgets, cards, loans, mcp_tokens, members, networth, ops, raw, recurring, reports,
-                             sources, txn_edit, txns)
+from tijori.services import (aliases, alerts, budgets, cards, coverage, loans, mcp_tokens, members, networth, ops, raw, recurring,
+                             reports, sources, txn_edit, txns)
 from tijori.services.common import month_start_day, today_ist
 
 router = APIRouter(prefix="/api")
@@ -74,6 +75,22 @@ def get_months(db: MemberDep) -> dict:
 @router.get("/accounts", response_model=Accounts)
 def get_accounts(db: MemberDep) -> dict:
     return members.accounts(db.session, db.ctx.member_id)
+
+
+@router.get("/coverage", response_model=Coverage)
+def get_coverage(
+    db: MemberDep,
+    date_from: Annotated[date | None, Query(alias="from")] = None,
+    date_to: Annotated[date | None, Query(alias="to")] = None,
+) -> dict:
+    """Default: the 7 days to today (IST)."""
+    date_to = date_to or today_ist()
+    date_from = date_from or date_to - timedelta(days=6)
+    if date_from > date_to:
+        raise _unprocessable("from", "must not be after to")
+    if (date_to - date_from).days >= coverage.MAX_DAYS:
+        raise _unprocessable("from", f"the range is at most {coverage.MAX_DAYS} days")
+    return coverage.coverage(db.session, db.ctx.member_id, date_from, date_to)
 
 
 @router.get("/summary", response_model=Summary)

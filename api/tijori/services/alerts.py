@@ -1,12 +1,13 @@
 """All rule alerts for a month cycle: recurring (duplicate, bounce risk, price increase, missed) plus
-budget pace. Figures only; the same list feeds the Overview and the push notifications."""
+budget pace, and the feeds behind them (backup, mailboxes). Figures only; the same list feeds the Overview
+and the push notifications."""
 
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 
-from tijori.services import budgets, ops, recurring
+from tijori.services import budgets, coverage, ops, recurring
 
 
 def month_alerts(s: Session, member_id: int, month: str, month_start_day: int = 1) -> dict[str, Any]:
@@ -29,6 +30,5 @@ def month_alerts(s: Session, member_id: int, month: str, month_start_day: int = 
         out["items"].append({"id": f"backup:{when}", "kind": "backup_stale", "severity": "bad", "title": "Off-site backup is stale",
                              "detail": f"Last good backup: {when}" + (f" · last run: {bk['last_detail']}" if not bk["last_ok"] else ""),
                              "txn_ids": []})
+    out["items"] += coverage.mailbox_alerts(s, member_id)
     return out
-
-

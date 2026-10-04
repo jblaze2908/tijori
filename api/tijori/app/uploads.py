@@ -1,6 +1,7 @@
 """POST /api/uploads: one bank statement, stored raw, then parse → resolve → classify →
 reconcile synchronously. The statement password is used once and never kept."""
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -19,7 +20,9 @@ from tijori.parsers import Message, ParseError, route
 from tijori.pdf import PdfError, PdfUnavailable, is_pdf, pdf_to_text
 from tijori.services import ingest, networth
 from tijori.services import secrets as vault
+from tijori.services.errors import Invalid
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", dependencies=[Depends(require_upload_header)])
 
 MAX_PASSWORD = 256
@@ -108,8 +111,16 @@ async def upload(request: Request, identity: AuthDep) -> JSONResponse:
                                        parse_status=parse_status)
             return 422, {"detail": parse_error or "no parser recognises this document",
                          "raw_message_id": msg.id, "parse_status": parse_status}
-        return 201, ingest.ingest_statement(s, ctx, actor, statement, filename=filename,
-                                            sha256=digest, blob_ref=blob_ref)
+        try:
+            with s.begin_nested():  # a refused statement leaves nothing half-written, only its raw file
+                return 201, ingest.ingest_statement(s, ctx, actor, statement, filename=filename,
+                                                    sha256=digest, blob_ref=blob_ref)
+        except ValueError as exc:  # Invalid says why; any other is a parser bug, named in the log only
+            if not isinstance(exc, Invalid):
+                log.warning("statement ingest failed: parser=%s (%s)", statement.parser, type(exc).__name__)
+            msg, _ = ingest.record_raw(s, ctx, filename=filename, sha256=digest, blob_ref=blob_ref, parse_status="failed")
+            return 422, {"detail": str(exc) if isinstance(exc, Invalid) else "this statement could not be read",
+                         "raw_message_id": msg.id, "parse_status": "failed"}
 
     code, payload = await run_in_threadpool(run_as_member, request.app.state, identity, work)
     return JSONResponse(jsonable_encoder(payload), status_code=code)

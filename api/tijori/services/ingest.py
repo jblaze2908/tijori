@@ -37,6 +37,7 @@ from tijori.parsers import Statement as ParsedStatement
 from tijori.parsers import reconcile
 from tijori.services import cards, txn_edit
 from tijori.services.common import account_ref, audit
+from tijori.services.errors import Invalid
 
 
 def line_dedupe_key(account_id: int, line: Line, occurrence: int) -> str:
@@ -194,10 +195,11 @@ def _soft_matches(s: Session, member_id: int, account_id: int, lines: tuple[Line
 
 def ingest_statement(s: Session, ctx: MemberContext, actor: str, st: ParsedStatement, *, filename: str | None,
                      sha256: str, blob_ref: str, raw: tuple[RawMessage, RawAttachment] | None = None) -> dict[str, Any]:
-    """`raw` is the collector's email and attachment; an upload records its own."""
-    if not st.lines:
-        raise ValueError("statement has no lines")
+    """`raw` is the collector's email and attachment; an upload records its own. A statement with no lines is
+    kept only when its printed totals reconcile: it is then the proof that the period was empty."""
     rec = reconcile(st)
+    if not st.lines and not rec.ok:
+        raise Invalid("statement has no lines, and its totals don't show an empty period")
     msg, att = raw or record_raw(s, ctx, filename=filename, sha256=sha256, blob_ref=blob_ref, parse_status="parsed")
     account = ensure_account(s, ctx.member_id, st.institution, st.account_mask, st.account_kind, st.account_name)
     values = dict(member_id=ctx.member_id, account_id=account.id, period_start=st.period_start,
@@ -221,7 +223,7 @@ def ingest_statement(s: Session, ctx: MemberContext, actor: str, st: ParsedState
              payload_json={"narration": o.narration, **{k: v for k, v in o.payload.items() if v is not None},
                            "value_date": o.value_date.isoformat() if o.value_date else None})
         for o in st.lines
-    ]))
+    ])) if st.lines else []  # an empty parameter list would run one bare INSERT
 
     keys = line_keys(account.id, st.lines)
     existing = dict(s.execute(select(Txn.dedupe_key, Txn.id)
@@ -263,10 +265,11 @@ def ingest_statement(s: Session, ctx: MemberContext, actor: str, st: ParsedState
                                  else_=func.array_append(Txn.sources, "statement")),
                     status="reconciled" if rec.ok else Txn.status, updated_at=func.now())
         )
-    s.execute(pg_insert(TxnObservation).on_conflict_do_nothing(), [
-        dict(txn_id=txn_ids.get(i) or existing[keys[i]], observation_id=obs_ids[i], member_id=ctx.member_id)
-        for i in range(len(st.lines))
-    ])
+    if st.lines:
+        s.execute(pg_insert(TxnObservation).on_conflict_do_nothing(), [
+            dict(txn_id=txn_ids.get(i) or existing[keys[i]], observation_id=obs_ids[i], member_id=ctx.member_id)
+            for i in range(len(st.lines))
+        ])
     hits = [dict(rule_id=int(d.rule_id[5:]), txn_id=txn_ids[i], member_id=ctx.member_id)
             for i, d in enumerate(decisions) if i in txn_ids and d.rule_id.startswith("rule:") and d.rule_id[5:].isdigit()]
     if hits:
