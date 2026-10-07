@@ -30,11 +30,13 @@ class CategoryRef(BaseModel):
 
 
 class OrderItemOut(BaseModel):
+    id: int
     name: str
     unit: str | None
     qty: int
     note: str | None  # add-ons and customisations
     category: str | None = None
+    category_by: Literal["user"] | None = None  # set by the member; agents' pushes keep it
     line_price: Money | None  # Zomato's history gives none
     unit_price: Money | None
 
@@ -1412,6 +1414,7 @@ class OrdersOut(BaseModel):
 
 
 class OrderItemHit(BaseModel):
+    item_id: int
     name: str
     unit: str | None
     qty: int
@@ -1446,6 +1449,19 @@ class OrderItemPage(BaseModel):
     page_size: int
     total: int
     totals: OrderItemTotals
+
+
+class ItemCategoryIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    category: Annotated[str, Field(min_length=1, max_length=60)] | None  # null: uncategorised
+    scope: Literal["this", "always"] = "this"  # always: this product in every past and future order
+
+
+class ItemCategoryOut(BaseModel):
+    item_id: int
+    category: str | None
+    scope: Literal["this", "always"]
+    items: int  # lines changed
 
 
 class OrderKey(BaseModel):

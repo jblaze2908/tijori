@@ -353,6 +353,21 @@ class MerchantOrderItem(Base):
     unit_price: Mapped[Decimal | None] = mapped_column(Money)
     note: Mapped[str | None] = mapped_column(Text)  # add-ons and customisations
     category: Mapped[str | None] = mapped_column(String(60))
+    category_by: Mapped[str | None] = mapped_column(String(8))  # "user": set by the member; an agent's push keeps it
+
+
+class ItemCategoryRule(Base):
+    """The member's "every time I buy this" category, by (source, name, unit); wins over an agent's on every push."""
+
+    __tablename__ = "item_category_rule"
+    id: Mapped[int] = _pk()
+    member_id: Mapped[int] = _member_fk()
+    source: Mapped[str] = mapped_column(String(20))
+    name: Mapped[str] = mapped_column(Text)
+    unit: Mapped[str | None] = mapped_column(String(60))
+    category: Mapped[str] = mapped_column(String(60))
+    created_at: Mapped[datetime] = _created()
+    __table_args__ = (UniqueConstraint("member_id", "source", "name", "unit", postgresql_nulls_not_distinct=True),)
 
 
 class Recurring(Base):

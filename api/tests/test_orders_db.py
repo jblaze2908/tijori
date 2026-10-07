@@ -20,14 +20,17 @@ from tijori.models import (
     Account,
     Category,
     Household,
+    ItemCategoryRule,
     McpToken,
     Member,
     MerchantOrder,
+    MerchantOrderItem,
     Txn,
 )
 from tijori.parsers.base import Observation, Statement, StatementSummary
 from tijori.services.common import IST, today_ist
 from tijori.services.ingest import ingest_statement
+from tijori.services.orders import set_item_category
 from tijori.settings import Settings
 
 APP_URL = os.environ.get("TIJORI_TEST_DATABASE_URL")
@@ -192,6 +195,34 @@ class OrdersDB(unittest.IsolatedAsyncioTestCase):
         with member_session(self.app.state.engine, self.owner) as s:
             o = s.scalars(select(MerchantOrder).where(MerchantOrder.order_no == "ZLATE")).one()
             self.assertEqual((o.match_state, s.get(Txn, o.txn_id).amount), ("matched", Decimal("777.77")))
+
+    async def test_member_categories_win_over_the_agent(self) -> None:
+        kulfi = {"name": "Kesar Kulfi Stick", "unit": "70 ml", "qty": 1, "line_price": "78", "category": "Fruit & vegetables"}
+        bread = {"name": "Brown Bread", "unit": "400 g", "qty": 1, "line_price": "57", "category": "Bread & bakery"}
+        first = order("zomato", "ORDCAT1", at(date(2026, 8, 3)), "135", items=[kulfi, bread])
+        await self.call("record_orders", {"orders": [first]})
+        with member_session(self.app.state.engine, self.owner) as s:
+            kid = s.scalar(select(MerchantOrderItem.id).join(MerchantOrder, MerchantOrder.id == MerchantOrderItem.order_id)
+                           .where(MerchantOrder.order_no == "ORDCAT1", MerchantOrderItem.name == "Brown Bread"))
+            out = set_item_category(s, self.owner, "test", kid, "Bakery", "this")
+        self.assertEqual(out["items"], 1)
+        # The agent re-sends the order with its own labels: the member's stays, the agent's still updates the rest.
+        resend = {**first, "items": [{**kulfi, "category": "Desserts"}, bread]}
+        await self.call("record_orders", {"orders": [resend]})
+        cats = {i["name"]: i["category"] for i in (await self.call("search_order_items", {
+            "source": "zomato", "from": "2026-08-03", "to": "2026-08-03"}))["items"]}
+        self.assertEqual(cats, {"Kesar Kulfi Stick": "Desserts", "Brown Bread": "Bakery"})
+        # "Every time": past purchases change now, and a new order gets the rule over the agent's label.
+        with member_session(self.app.state.engine, self.owner) as s:
+            kulfi_id = s.scalar(select(MerchantOrderItem.id).where(MerchantOrderItem.name == "Kesar Kulfi Stick"))
+            set_item_category(s, self.owner, "test", kulfi_id, "Desserts & sweets", "always")
+        later = order("zomato", "ORDCAT2", at(date(2026, 8, 9)), "78", items=[{**kulfi, "category": "Fruit & vegetables"}])
+        await self.call("record_orders", {"orders": [later]})
+        got = await self.call("search_order_items", {"q": "Kesar Kulfi"})
+        self.assertEqual(sorted((i["order_no"], i["category"]) for i in got["items"]),
+                         [("ORDCAT1", "Desserts & sweets"), ("ORDCAT2", "Desserts & sweets")])
+        with member_session(self.app.state.engine, self.other) as s:
+            self.assertEqual(s.scalar(select(func.count()).select_from(ItemCategoryRule)), 0)
 
     async def test_rls_and_owner_lock(self) -> None:
         await self.call("record_orders", {"orders": [order("blinkit", "ORDRLS", at(date(2026, 8, 1)), "10")]})

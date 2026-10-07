@@ -163,6 +163,7 @@ EXCLUDED = {
     "add_statement_password": "takes a statement password, which must not pass through the model",
     "delete_statement_password": "remove_statement_password does the same",
     "raw_attachment": "binary original with unmasked account details",
+    "set_item_category": "the member's own corrections, made in the web; agents send categories with record_orders",
 }
 RENAMES = {"link_txn": {"other_txn_id": "txn_id"}, "unlink_txn": {"other_txn_id": "txn_id"}}  # argument → body field
 DENIED = {"patch_mail_source": {"app_password"}}  # body fields MCP never sends

@@ -23,6 +23,8 @@ from tijori.app.schemas import (
     BudgetIn,
     BudgetOut,
     McpTokenIn,
+    ItemCategoryIn,
+    ItemCategoryOut,
     OrdersAssignIn,
     OrdersAssignOut,
     OrdersIn,
@@ -263,3 +265,8 @@ def record_orders(db: MemberDep, body: OrdersIn) -> dict:
 @router.post("/orders/assign", response_model=OrdersAssignOut)
 def assign_orders(db: MemberDep, body: OrdersAssignIn) -> dict:
     return orders.assign(db.session, db.ctx, db.actor, [(o.source, o.order_no) for o in body.orders], body.account_id)
+
+
+@router.put("/order-items/{item_id}/category", response_model=ItemCategoryOut)
+def set_item_category(db: MemberDep, item_id: Annotated[int, Path(ge=1)], body: ItemCategoryIn) -> dict:
+    return orders.set_item_category(db.session, db.ctx, db.actor, item_id, body.category, body.scope)

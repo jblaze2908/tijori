@@ -1035,6 +1035,15 @@ Returns `{"received", "created", "updated", "unchanged", "states": {"matched": 1
 
 Returns `{"orders": [{"source", "order_no", "match_state", "txn_id"}]}`.
 
+### `PUT /api/order-items/{item_id}/category`
+
+Your own category for an item. The body is `{"category": "Desserts & sweets", "scope": "this"}`; `category: null` means uncategorised.
+- **`this`:** this line of this order only.
+- **`always`:** this product (same source, name and pack) in every past order now, and in every later push. `always` with `null` drops the rule.
+- **Your choice wins:** an agent re-sending an order keeps the categories you set.
+
+Returns `{"item_id", "category", "scope", "items"}`, where `items` is the number of lines changed. Item ids are `items[].id` on a txn's orders and `item_id` in item search. Web only: MCP leaves it out, since agents send categories with `record_orders`.
+
 ### `GET /api/order-items`
 
 Items, not txns.
@@ -1101,6 +1110,7 @@ Read tools carry `readOnlyHint`, so a client can allow them and still ask before
 | `PUT /api/accounts/{id}/statement-password`, `POST /api/accounts/{id}/statement-passwords` | They take a statement password |
 | `DELETE /api/accounts/{id}/statement-password` | `remove_statement_password` does the same |
 | `GET /api/raw/attachments/{id}` | The binary original, with unmasked account details |
+| `PUT /api/order-items/{id}/category` | Your own item categories; agents send theirs with `record_orders` |
 
 ### Tokens: `GET /api/mcp/tokens`, `POST /api/mcp/tokens`, `POST /api/mcp/tokens/{id}/revoke`
 

@@ -16,12 +16,18 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from tijori.classify.brands import BRANDS
 from tijori.db import MemberContext
-from tijori.models import Account, MerchantOrder, MerchantOrderItem, Txn
+from tijori.models import (
+    Account,
+    ItemCategoryRule,
+    MerchantOrder,
+    MerchantOrderItem,
+    Txn,
+)
 from tijori.money import fmt
 from tijori.services.common import IST, audit, category_by_ref, sha256_hex
 from tijori.services.errors import Invalid, NotFound
@@ -62,14 +68,20 @@ def record(s: Session, ctx: MemberContext, actor: str, orders: list[dict[str, An
     have = {(r.source, r.order_no): r for r in s.scalars(select(MerchantOrder).where(
         MerchantOrder.member_id == ctx.member_id, MerchantOrder.order_no.in_([k[1] for k in keys])))}
     old_items = defaultdict(list)
+    mine: dict[int, dict[tuple[str, str | None], str | None]] = defaultdict(dict)  # categories the member set, per order
     if have:
         for i in s.scalars(select(MerchantOrderItem).where(MerchantOrderItem.member_id == ctx.member_id,
                                                            MerchantOrderItem.order_id.in_([r.id for r in have.values()]))
                            .order_by(MerchantOrderItem.order_id, MerchantOrderItem.position)):
-            old_items[i.order_id].append((i.name, i.unit, i.qty, i.line_price, i.unit_price, i.note, i.category))
+            old_items[i.order_id].append((i.name, i.unit, i.qty, i.line_price, i.unit_price, i.note, i.category, i.category_by))
+            if i.category_by == "user":
+                mine[i.order_id][(i.name, i.unit)] = i.category
+    rules = {(r.source, r.name, r.unit): r.category for r in s.scalars(
+        select(ItemCategoryRule).where(ItemCategoryRule.member_id == ctx.member_id))}
     created = updated = 0
     for o in orders:
-        row, items, cur = _row(o), _items(o), have.get((o["source"], o["order_no"]))
+        cur = have.get((o["source"], o["order_no"]))
+        row, items = _row(o), _own(_items(o), o["source"], rules, mine[cur.id] if cur else {})
         if cur is None:
             cur = MerchantOrder(member_id=ctx.member_id, source=o["source"], order_no=o["order_no"], **row)
             s.add(cur)
@@ -87,8 +99,8 @@ def record(s: Session, ctx: MemberContext, actor: str, orders: list[dict[str, An
                                                       MerchantOrderItem.order_id == cur.id))
             updated += 1
         s.add_all(MerchantOrderItem(member_id=ctx.member_id, order_id=cur.id, position=n, name=name, unit=unit, qty=qty,
-                                    line_price=lp, unit_price=up, note=note, category=cat)
-                  for n, (name, unit, qty, lp, up, note, cat) in enumerate(items))
+                                    line_price=lp, unit_price=up, note=note, category=cat, category_by=by)
+                  for n, (name, unit, qty, lp, up, note, cat, by) in enumerate(items))
     s.flush()
     rematch(s, ctx)
     rows = s.execute(select(MerchantOrder.source, MerchantOrder.order_no, MerchantOrder.match_state, MerchantOrder.txn_id)
@@ -101,6 +113,50 @@ def record(s: Session, ctx: MemberContext, actor: str, orders: list[dict[str, An
     audit(s, ctx, actor, "orders.record", None, {"received": len(orders), "created": created, "updated": updated})
     return {"received": len(orders), "created": created, "updated": updated,
             "unchanged": len(orders) - created - updated, "states": dict(states), "orders": out}
+
+
+def _own(items: list[tuple[Any, ...]], source: str, rules: dict[tuple[str, str, str | None], str],
+         mine: dict[tuple[str, str | None], str | None]) -> list[tuple[Any, ...]]:
+    """The member's categories win over the agent's: an "every time" rule first, then one they set on this order."""
+    out = []
+    for name, unit, qty, lp, up, note, cat in items:
+        if (source, name, unit) in rules:
+            cat, by = rules[(source, name, unit)], "user"
+        elif (name, unit) in mine:
+            cat, by = mine[(name, unit)], "user"
+        else:
+            by = None
+        out.append((name, unit, qty, lp, up, note, cat, by))
+    return out
+
+
+def set_item_category(s: Session, ctx: MemberContext, actor: str, item_id: int, category: str | None,
+                      scope: str) -> dict[str, Any]:
+    """scope "this": one line of one order. "always": a rule for this product (source, name, unit), applied now to every
+    past purchase of it and on every later push; with category None it drops the rule. Either way an agent's push
+    no longer changes these lines."""
+    i = s.scalars(select(MerchantOrderItem).where(MerchantOrderItem.member_id == ctx.member_id,
+                                                  MerchantOrderItem.id == item_id)).first()
+    if i is None:
+        raise NotFound("item not found")
+    source = s.scalar(select(MerchantOrder.source).where(MerchantOrder.id == i.order_id))
+    n = 1
+    if scope == "always":
+        same = (ItemCategoryRule.member_id == ctx.member_id, ItemCategoryRule.source == source,
+                ItemCategoryRule.name == i.name, ItemCategoryRule.unit.is_not_distinct_from(i.unit))
+        s.execute(delete(ItemCategoryRule).where(*same))
+        if category is not None:
+            s.add(ItemCategoryRule(member_id=ctx.member_id, source=source, name=i.name, unit=i.unit, category=category))
+        orders = select(MerchantOrder.id).where(MerchantOrder.member_id == ctx.member_id, MerchantOrder.source == source)
+        n = s.execute(update(MerchantOrderItem).where(
+            MerchantOrderItem.member_id == ctx.member_id, MerchantOrderItem.order_id.in_(orders),
+            MerchantOrderItem.name == i.name, MerchantOrderItem.unit.is_not_distinct_from(i.unit))
+            .values(category=category, category_by="user")).rowcount
+    else:
+        i.category, i.category_by = category, "user"
+    s.flush()
+    audit(s, ctx, actor, "orders.item_category", f"item:{item_id}", {"scope": scope, "items": n})
+    return {"item_id": item_id, "category": category, "scope": scope, "items": n}
 
 
 def _unlink(s: Session, ctx: MemberContext, o: MerchantOrder) -> None:
@@ -237,7 +293,8 @@ def _out(o: MerchantOrder, items: list[MerchantOrderItem]) -> dict[str, Any]:
             "payment": o.payment, "store": o.store, "delivery_address": o.delivery_address,
             "address_label": o.address_label, "category": o.category, "item_total": fmt(o.item_total) if o.item_total is not None else None,
             "charges": o.charges, "bill_total": fmt(o.bill_total), "match_state": o.match_state,
-            "items": [{"name": i.name, "unit": i.unit, "qty": i.qty, "note": i.note, "category": i.category,
+            "items": [{"id": i.id, "name": i.name, "unit": i.unit, "qty": i.qty, "note": i.note, "category": i.category,
+                       "category_by": i.category_by,
                        "line_price": fmt(i.line_price) if i.line_price is not None else None,
                        "unit_price": fmt(i.unit_price) if i.unit_price is not None else None} for i in items]}
 
@@ -293,7 +350,7 @@ def search_items(s: Session, member_id: int, *, q: str | None, source: str | Non
     groups = s.execute(select(cat.label("c"), func.count(), func.coalesce(func.sum(MerchantOrderItem.line_price), 0))
                        .select_from(MerchantOrderItem).join(MerchantOrder, MerchantOrder.id == MerchantOrderItem.order_id)
                        .where(*conds).group_by(cat).order_by(func.coalesce(func.sum(MerchantOrderItem.line_price), 0).desc())).all()
-    return {"items": [{"name": i.name, "unit": i.unit, "qty": i.qty, "note": i.note, "category": i.category,
+    return {"items": [{"item_id": i.id, "name": i.name, "unit": i.unit, "qty": i.qty, "note": i.note, "category": i.category,
                        "line_price": fmt(i.line_price) if i.line_price is not None else None,
                        "source": o.source, "order_no": o.order_no, "placed_at": o.placed_at, "store": o.store,
                        "delivery_address": o.delivery_address, "match_state": o.match_state, "txn_id": o.txn_id}
