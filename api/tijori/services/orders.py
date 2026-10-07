@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from tijori.classify.brands import BRANDS
@@ -341,20 +341,28 @@ def search_items(s: Session, member_id: int, *, q: str | None, source: str | Non
     if date_to:
         conds.append(MerchantOrder.placed_at < datetime.combine(date_to + timedelta(days=1), datetime.min.time(), IST))
     base = select(MerchantOrderItem, MerchantOrder).join(MerchantOrder, MerchantOrder.id == MerchantOrderItem.order_id).where(*conds)
-    total, amount, priced, n_orders = s.execute(
-        select(func.count(), func.coalesce(func.sum(MerchantOrderItem.line_price), 0), func.count(MerchantOrderItem.line_price),
-               func.count(func.distinct(MerchantOrder.id)))
-        .select_from(MerchantOrderItem).join(MerchantOrder, MerchantOrder.id == MerchantOrderItem.order_id).where(*conds)).one()
+    # An order with no item prices (Zomato) counts its bill instead, shared across its items by quantity.
+    per = (select(MerchantOrderItem.order_id, func.sum(MerchantOrderItem.qty).label("q"),
+                  func.count(MerchantOrderItem.line_price).label("p"))
+           .where(MerchantOrderItem.member_id == member_id).group_by(MerchantOrderItem.order_id).subquery())
+    spent = func.coalesce(func.sum(func.coalesce(
+        MerchantOrderItem.line_price,
+        case((per.c.p == 0, MerchantOrder.bill_total * MerchantOrderItem.qty / per.c.q), else_=0))), 0)
+    joined = (select().select_from(MerchantOrderItem).join(MerchantOrder, MerchantOrder.id == MerchantOrderItem.order_id)
+              .join(per, per.c.order_id == MerchantOrderItem.order_id).where(*conds))
+    total, amount, priced, n_orders, spent_all = s.execute(
+        joined.add_columns(func.count(), func.coalesce(func.sum(MerchantOrderItem.line_price), 0),
+                           func.count(MerchantOrderItem.line_price), func.count(func.distinct(MerchantOrder.id)), spent)).one()
     rows = s.execute(base.order_by(MerchantOrder.placed_at.desc(), MerchantOrderItem.position)
                      .offset((page - 1) * page_size).limit(page_size)).all()
-    groups = s.execute(select(cat.label("c"), func.count(), func.coalesce(func.sum(MerchantOrderItem.line_price), 0))
-                       .select_from(MerchantOrderItem).join(MerchantOrder, MerchantOrder.id == MerchantOrderItem.order_id)
-                       .where(*conds).group_by(cat).order_by(func.coalesce(func.sum(MerchantOrderItem.line_price), 0).desc())).all()
+    groups = s.execute(joined.add_columns(cat.label("c"), func.count(), func.coalesce(func.sum(MerchantOrderItem.line_price), 0),
+                                          spent).group_by(cat).order_by(spent.desc())).all()
     return {"items": [{"item_id": i.id, "name": i.name, "unit": i.unit, "qty": i.qty, "note": i.note, "category": i.category,
                        "line_price": fmt(i.line_price) if i.line_price is not None else None,
                        "source": o.source, "order_no": o.order_no, "placed_at": o.placed_at, "store": o.store,
                        "delivery_address": o.delivery_address, "match_state": o.match_state, "txn_id": o.txn_id}
                       for i, o in rows],
             "page": page, "page_size": page_size, "total": total,
-            "totals": {"line_price": fmt(amount), "priced": priced, "orders": n_orders,
-                       "by_category": [{"category": c, "items": n, "line_price": fmt(a)} for c, n, a in groups]}}
+            "totals": {"line_price": fmt(amount), "spent": fmt(spent_all), "priced": priced, "orders": n_orders,
+                       "by_category": [{"category": c, "items": n, "line_price": fmt(a), "spent": fmt(sp)}
+                                       for c, n, a, sp in groups]}}

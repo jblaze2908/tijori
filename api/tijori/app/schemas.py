@@ -1434,10 +1434,12 @@ class CategoryTotal(BaseModel):
     category: str | None  # null: uncategorised
     items: int
     line_price: Money
+    spent: Money  # line prices, plus the bill of orders that list none (Zomato), shared by quantity
 
 
 class OrderItemTotals(BaseModel):
     line_price: Money  # sum over the whole filtered set; Zomato items carry no price
+    spent: Money  # line_price plus the bills of orders with no item prices
     priced: int  # matches with a price, the ones line_price covers
     orders: int
     by_category: list[CategoryTotal] = []  # the filtered set per category, biggest spend first

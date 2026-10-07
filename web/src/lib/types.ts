@@ -653,7 +653,8 @@ export interface OrderItemHit {
   txn_id: number | null;
 }
 export interface OrderItemPage extends ApiPage<OrderItemHit> {
-  totals: { line_price: Decimal; priced: number; orders: number; by_category: { category: string | null; items: number; line_price: Decimal }[] };
+  /** spent: item prices plus the bill of orders that list none (Zomato), shared by quantity. */
+  totals: { line_price: Decimal; spent: Decimal; priced: number; orders: number; by_category: { category: string | null; items: number; line_price: Decimal; spent: Decimal }[] };
 }
 export interface OrderItemQuery {
   from?: ISODate;

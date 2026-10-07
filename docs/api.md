@@ -1062,6 +1062,7 @@ Returns each matching item with its order (`source`, `order_no`, `placed_at`, `s
 `totals` covers the whole filtered set:
 - `line_price` adds the item prices, so "spent on coffee" isn't the whole bill.
 - `priced` says how many of the matches carry a price; Zomato items carry none.
+- `spent` adds the item prices, plus the bill of every order that lists no item prices (Zomato), shared across its items by quantity. A Zomato order is never ₹0. `by_category[]` carries `spent` too, and is sorted by it.
 - `orders` counts distinct orders.
 - `by_category` gives `{"category", "items", "line_price"}` per category for the filtered set, biggest spend first; `category: null` is uncategorised.
 

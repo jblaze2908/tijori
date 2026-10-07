@@ -92,8 +92,8 @@ export function Orders({ app }: { app: AppCtx }) {
               <span className="k">items match</span>
             </div>
             <div>
-              <span className="k">Spent on items</span>
-              <b>{page ? inr(toPaise(page.totals.line_price)) : "…"}</b>
+              <span className="k">Spent</span>
+              <b>{page ? inr(toPaise(page.totals.spent)) : "…"}</b>
             </div>
             <div>
               <span className="k">Orders</span>
@@ -102,7 +102,7 @@ export function Orders({ app }: { app: AppCtx }) {
             <div>
               <span className="k">Priced</span>
               <b>{page ? `${page.totals.priced} of ${total}` : "…"}</b>
-              {page && page.totals.priced < total && <small className="foot">Zomato items carry no price</small>}
+              {page && page.totals.priced < total && <small className="foot">Zomato counted by its bill</small>}
             </div>
           </div>
           <div className="ordgrid">
@@ -223,7 +223,7 @@ function Filters({ f, set, cats }: { f: OrderItemQuery; set: (p: Patch) => void;
 function ByCategory({ page, picked, pick }: { page: OrderItemPage | null; picked: string | undefined; pick: (c: string | undefined) => void }) {
   const [more, setMore] = useState(false);
   const rows = page?.totals.by_category ?? [];
-  const max = Math.max(1, ...rows.map((r) => toPaise(r.line_price)));
+  const max = Math.max(1, ...rows.map((r) => toPaise(r.spent)));
   const shown = more ? rows : rows.slice(0, TOP);
   return (
     <section className="panel ocats" aria-label="By category">
@@ -239,10 +239,10 @@ function ByCategory({ page, picked, pick }: { page: OrderItemPage | null; picked
             <span className="t">
               <i className="dot" style={{ background: color }} />
               <span className="nm">{catName(r.category)}</span>
-              <span className="mono-n">{inr(toPaise(r.line_price))}</span>
+              <span className="mono-n">{inr(toPaise(r.spent))}</span>
             </span>
             <span className="bar">
-              <span style={{ width: `${(toPaise(r.line_price) / max) * 100}%`, background: color }} />
+              <span style={{ width: `${(toPaise(r.spent) / max) * 100}%`, background: color }} />
             </span>
           </button>
         );

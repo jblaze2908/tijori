@@ -153,6 +153,8 @@ class OrdersDB(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((hits["total"], hits["totals"]["line_price"], hits["items"][0]["order_no"]), (1, "769.00", "ORDA"))
         by_store = await self.call("search_order_items", {"q": "waffle place"})
         self.assertEqual((by_store["total"], by_store["totals"]["priced"]), (1, 0))
+        # No item prices: the bill counts, so eating out isn't ₹0.
+        self.assertEqual((by_store["totals"]["spent"], by_store["totals"]["by_category"][0]["spent"]), ("529.58", "529.58"))
         # Item categories: filterable in any case, totalled per category; an order's own label never stands in.
         self.assertEqual(by_store["items"][0]["category"], "Eating out")
         snacks = await self.call("search_order_items", {"category": "snacks & BISCUITS"})
