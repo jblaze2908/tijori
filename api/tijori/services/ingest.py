@@ -35,7 +35,7 @@ from tijori.money import fmt
 from tijori.parsers import Observation as Line
 from tijori.parsers import Statement as ParsedStatement
 from tijori.parsers import reconcile
-from tijori.services import cards, txn_edit
+from tijori.services import cards, orders, txn_edit
 from tijori.services.common import account_ref, audit
 from tijori.services.errors import Invalid
 
@@ -288,6 +288,7 @@ def ingest_statement(s: Session, ctx: MemberContext, actor: str, st: ParsedState
                                            set_={"amount": cv.excluded.amount}))
     linked = cards.link_card_payments(s, ctx.member_id)
     refunds = txn_edit.link_refunds_by_ref(s, ctx)
+    orders.rematch(s, ctx)  # a debit that arrives after its order was recorded links it now
     audit(s, ctx, actor, "statement.upload", f"statement:{statement_id}",
           {"parser": st.parser, "lines": len(st.lines), "created": len(created), "ok": rec.ok,
            "soft_matched": len(soft), "card_payments_linked": linked, "refunds_linked": refunds})

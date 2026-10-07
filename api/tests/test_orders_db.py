@@ -25,7 +25,9 @@ from tijori.models import (
     MerchantOrder,
     Txn,
 )
+from tijori.parsers.base import Observation, Statement, StatementSummary
 from tijori.services.common import IST, today_ist
+from tijori.services.ingest import ingest_statement
 from tijori.settings import Settings
 
 APP_URL = os.environ.get("TIJORI_TEST_DATABASE_URL")
@@ -164,6 +166,21 @@ class OrdersDB(unittest.IsolatedAsyncioTestCase):
         off = await self.call("assign_orders", {"orders": [{"source": "zomato", "order_no": "ZF"}], "account_id": self.meal})
         back = await self.call("assign_orders", {"orders": [{"source": "zomato", "order_no": "ZF"}], "account_id": None})
         self.assertEqual((off["orders"][0]["match_state"], back["orders"][0]["match_state"]), ("assigned", "ambiguous"))
+
+    async def test_statement_links_an_order_recorded_before_its_debit(self) -> None:
+        late = order("zomato", "ZLATE", at(date(2026, 8, 20), 20, 5), "777.77", store="Momo Place")
+        self.assertEqual((await self.call("record_orders", {"orders": [late]}))["orders"][0]["match_state"], "unmatched")
+        line = Observation(occurred_at=date(2026, 8, 20), amount=Decimal("777.77"), direction="debit",
+                           narration="UPI/DR/612345678901/ZOMATO L/YESB/zomato-ord/Zomato", balance_after=Decimal("222.23"),
+                           ref_no="612345678901")
+        st = Statement(institution="SBI", account_mask="0003", period_start=date(2026, 8, 20), period_end=date(2026, 8, 20),
+                       summary=StatementSummary(Decimal("1000.00"), Decimal("222.23"), 1, 0, Decimal("777.77"), Decimal(0)),
+                       lines=(line,), parser="test", parser_version="1")
+        with member_session(self.app.state.engine, self.owner) as s:
+            ingest_statement(s, self.owner, "test", st, filename=None, sha256=self.tag * 8, blob_ref="test")
+        with member_session(self.app.state.engine, self.owner) as s:
+            o = s.scalars(select(MerchantOrder).where(MerchantOrder.order_no == "ZLATE")).one()
+            self.assertEqual((o.match_state, s.get(Txn, o.txn_id).amount), ("matched", Decimal("777.77")))
 
     async def test_rls_and_owner_lock(self) -> None:
         await self.call("record_orders", {"orders": [order("blinkit", "ORDRLS", at(date(2026, 8, 1)), "10")]})

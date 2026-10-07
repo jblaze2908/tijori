@@ -1005,7 +1005,7 @@ Upserts up to 200 orders by `(source, order_no)`. Resending an order changes not
 
 Returns `{"received", "created", "updated", "unchanged", "states": {"matched": 1}, "orders": [{"source", "order_no", "match_state", "txn_id"}]}`. A batch naming one order twice gets 422.
 
-**Matching.** After every post, each open order of yours is matched again. One query fetches the candidate debits.
+**Matching.** Each open order of yours is matched again after every post, after every statement or alert Tijori reads, and when the worker starts. So an order recorded before its debit arrives (an SBI line comes only with the next statement) links when that debit lands. One query fetches the candidate debits.
 - An order matches a debit of its brand's payee (`brand:blinkit`, `brand:zomato`) with the same amount to the paisa, on the order day or the next.
 - Orders placed in the same minute may share one debit for their sum.
 - If two orders could take one debit, both are `ambiguous`; Tijori never guesses.
