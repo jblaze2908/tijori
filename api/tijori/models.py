@@ -63,7 +63,8 @@ def _created() -> Mapped[datetime]:
 
 DIRECTION = ("debit", "credit")
 ONBOARDING_STEPS = ("profile", "mail", "statement_passwords", "first_upload", "done")
-TXN_SOURCES = ("statement", "alert", "sms", "upload", "expected", "import")
+TXN_SOURCES = ("statement", "alert", "sms", "upload", "expected", "import", "order")
+ORDER_MATCH_STATES = ("unmatched", "matched", "ambiguous", "assigned", "cancelled")
 CLASSIFIED_BY = ("rule", "payee_memory", "dictionary", "heuristic", "user", "system")
 
 
@@ -304,6 +305,52 @@ class PayeeAlias(Base):
         UniqueConstraint("member_id", "payee_key"),
         Index("ix_payee_alias_member_name", "member_id", "name"),
     )
+
+
+class MerchantOrder(Base):
+    """A Blinkit or Zomato order (services/orders): the line items behind the debit that paid it (txn_id), or behind
+    a txn built from the receipt on the account that paid it when no debit did (match_state 'assigned')."""
+
+    __tablename__ = "merchant_order"
+    id: Mapped[int] = _pk()
+    member_id: Mapped[int] = _member_fk()
+    source: Mapped[str] = mapped_column(String(20))
+    order_no: Mapped[str] = mapped_column(String(64))
+    placed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(12))  # delivered | cancelled | pending
+    payment: Mapped[str | None] = mapped_column(String(80))
+    store: Mapped[str | None] = mapped_column(String(160))  # the restaurant on a Zomato order
+    delivery_address: Mapped[str | None] = mapped_column(Text)
+    address_label: Mapped[str | None] = mapped_column(String(40))
+    item_total: Mapped[Decimal | None] = mapped_column(Money)
+    charges: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    bill_total: Mapped[Decimal] = mapped_column(Money)
+    txn_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("txn.id", ondelete="SET NULL"), index=True)
+    match_state: Mapped[str] = mapped_column(String(12), server_default="unmatched")
+    created_at: Mapped[datetime] = _created()
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    __table_args__ = (
+        UniqueConstraint("member_id", "source", "order_no"),
+        Index("ix_merchant_order_member_placed", "member_id", "placed_at"),
+        CheckConstraint("bill_total >= 0", name="bill_non_negative"),
+        CheckConstraint(f"match_state IN ({', '.join(repr(x) for x in ORDER_MATCH_STATES)})", name="match_state"),
+    )
+
+
+class MerchantOrderItem(Base):
+    __tablename__ = "merchant_order_item"
+    id: Mapped[int] = _pk()
+    member_id: Mapped[int] = _member_fk()
+    order_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("merchant_order.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    name: Mapped[str] = mapped_column(Text)
+    unit: Mapped[str | None] = mapped_column(String(60))
+    qty: Mapped[int] = mapped_column(Integer)
+    line_price: Mapped[Decimal | None] = mapped_column(Money)  # Zomato's history gives none
+    unit_price: Mapped[Decimal | None] = mapped_column(Money)
+    note: Mapped[str | None] = mapped_column(Text)  # add-ons and customisations
 
 
 class Recurring(Base):

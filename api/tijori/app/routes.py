@@ -42,13 +42,14 @@ from tijori.app.schemas import (
     SettingsOut,
     Summary,
     Trends,
+    OrderItemPage,
     TxnDetail,
     TxnPage,
 )
 from tijori.classify.taxonomy import KINDS
 from tijori.models import Category
 from tijori.services import (aliases, alerts, budgets, cards, coverage, freshness, loans, mcp_tokens, members, networth, ops,
-                             raw, recurring, reports, sources, txn_edit, txns)
+                             orders, raw, recurring, reports, sources, txn_edit, txns)
 from tijori.services.common import month_start_day, today_ist
 
 router = APIRouter(prefix="/api")
@@ -153,6 +154,23 @@ def raw_attachment(request: Request, db: MemberDep, attachment_id: Annotated[int
     return Response(data, media_type="application/pdf" if data[:5] == b"%PDF-" else "application/octet-stream",
                     headers={"Content-Disposition": f'attachment; filename="{safe}"', "X-Content-Type-Options": "nosniff",
                              "Cache-Control": "private, no-store"})
+
+
+@router.get("/order-items", response_model=OrderItemPage)
+def search_order_items(
+    db: MemberDep,
+    q: Annotated[str | None, Query(min_length=1, max_length=100, description="text in the item, add-ons, restaurant or delivery address")] = None,
+    source: Literal["blinkit", "zomato"] | None = None,
+    store: Annotated[str | None, Query(min_length=1, max_length=100, description="text in the restaurant name")] = None,
+    date_from: Annotated[date | None, Query(alias="from")] = None,
+    date_to: Annotated[date | None, Query(alias="to")] = None,
+    page: Page = 1,
+    page_size: PageSize = 50,
+) -> dict:
+    if date_from and date_to and date_from > date_to:
+        raise _unprocessable("from", "must not be after to")
+    return orders.search_items(db.session, db.ctx.member_id, q=q, source=source, store=store, date_from=date_from,
+                               date_to=date_to, page=page, page_size=page_size)
 
 
 @router.get("/transactions/{txn_id}", response_model=TxnDetail)

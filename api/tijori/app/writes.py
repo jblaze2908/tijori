@@ -23,6 +23,10 @@ from tijori.app.schemas import (
     BudgetIn,
     BudgetOut,
     McpTokenIn,
+    OrdersAssignIn,
+    OrdersAssignOut,
+    OrdersIn,
+    OrdersOut,
     McpTokenOut,
     NotifyTestOut,
     PayeeDismissIn,
@@ -50,7 +54,7 @@ from tijori.app.schemas import (
     SettingsIn,
     SettingsOut,
 )
-from tijori.services import aliases, budgets, loans, mcp_tokens, members, networth, notify, recurring, txn_edit, txns
+from tijori.services import aliases, budgets, loans, mcp_tokens, members, networth, notify, orders, recurring, txn_edit, txns
 from tijori.services.common import today_ist
 from tijori.services.networth import COMPONENT_KEYS, MANUAL_KEYS
 from tijori.services.errors import NotFound
@@ -249,3 +253,13 @@ def patch_remark(db: MemberDep, day: date, body: RemarkIn) -> dict:
     if out is None:
         raise NotFound("no snapshot on that date")
     return out
+
+
+@router.post("/orders", response_model=OrdersOut)
+def record_orders(db: MemberDep, body: OrdersIn) -> dict:
+    return orders.record(db.session, db.ctx, db.actor, [o.model_dump() for o in body.orders])
+
+
+@router.post("/orders/assign", response_model=OrdersAssignOut)
+def assign_orders(db: MemberDep, body: OrdersAssignIn) -> dict:
+    return orders.assign(db.session, db.ctx, db.actor, [(o.source, o.order_no) for o in body.orders], body.account_id)

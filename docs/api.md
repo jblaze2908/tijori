@@ -286,6 +286,7 @@ One txn with everything behind it. Returns 404 when the txn doesn't exist or isn
 
 - `observations` lists every sighting behind the txn. Legacy-imported txns have none until their statement is uploaded.
 - `links` is empty in M0; the resolver fills it in M1.
+- `transaction.orders` lists the Blinkit or Zomato orders the txn paid for, items included (see [Orders](#orders)). It holds two when one payment covered two orders. Only this route fills it; in lists it is `[]`.
 - `payee` gives this payee's totals in the same direction, and its 12 most recent txns. It is `null` without a `payee_key`. When you named the payee, every payee sharing the name counts: `alias` is `{"name", "original", "payee_keys"}`, where `original` is this payee's name before. Otherwise `alias` is `null`, and `suggest` is `{"name", "why", "like"}` when the payee's name matches one of your names (see Payee names), else `null`.
 
 ## `PATCH /api/transactions/{id}`
@@ -976,6 +977,82 @@ Pushes go through ntfy (`TIJORI_NTFY_URL`, with `TIJORI_NTFY_TOKEN` when the ser
 
 `POST /api/notify/test` sends a test push and returns `{"sent": true}`, or `false` when ntfy isn't configured or didn't answer. 422 without a topic.
 
+## Orders
+
+Blinkit and Zomato orders, as the line items behind a txn. A bot reads them from the apps (Pitcrew) and posts them here. Tijori keeps them, matches each to the debit that paid it, and makes items searchable.
+
+### `POST /api/orders`
+
+Upserts up to 200 orders by `(source, order_no)`. Resending an order changes nothing. A changed `placed_at`, `status` or `bill_total` unlinks the order and matches it again; other changes just update it. Items are replaced whole.
+
+```json
+{"orders": [{"source": "blinkit", "order_no": "ORD12345678901", "placed_at": "2026-09-27T12:11:00+05:30",
+             "status": "delivered", "payment": "Paid via UPI", "delivery_address": "Flat 1, Example Road, Gurugram",
+             "address_label": "Home", "item_total": "1082", "charges": {"handling_charge": "9", "product_discount": "-194"},
+             "bill_total": "1092",
+             "items": [{"name": "Instant Coffee", "unit": "100 g", "qty": 1, "line_price": "769", "unit_price": "769"}]}]}
+```
+
+| Field | Notes |
+|---|---|
+| `source` | `blinkit` or `zomato` |
+| `order_no` | 1–64 of `A-Z a-z 0-9 _ -` |
+| `placed_at` | With its offset. Zomato's history prints no year, so take it from the month the bot asked for |
+| `status` | `delivered`, `cancelled` or `pending`. Only delivered orders are matched |
+| `store` | The restaurant, on a Zomato order |
+| `charges` | Up to 20 named amounts (`[a-z0-9_]`). Discounts are negative |
+| `items[]` | `name`, `qty` (1–999), and optional `unit`, `line_price`, `unit_price`, `note` (add-ons). Zomato's history gives no prices |
+
+Returns `{"received", "created", "updated", "unchanged", "states": {"matched": 1}, "orders": [{"source", "order_no", "match_state", "txn_id"}]}`. A batch naming one order twice gets 422.
+
+**Matching.** After every post, each open order of yours is matched again. One query fetches the candidate debits.
+- An order matches a debit of its brand's payee (`brand:blinkit`, `brand:zomato`) with the same amount to the paisa, on the order day or the next.
+- Orders placed in the same minute may share one debit for their sum.
+- If two orders could take one debit, both are `ambiguous`; Tijori never guesses.
+- Measured on 2026-10-07: 107 of 131 Blinkit orders and 15 of 20 Zomato orders matched this way, none ambiguously.
+
+| `match_state` | Meaning |
+|---|---|
+| `matched` | `txn_id` is the debit that paid it |
+| `assigned` | No debit paid it, so `txn_id` is a txn built from the receipt on the account that did |
+| `unmatched` | No debit, and nothing says which account paid |
+| `ambiguous` | More than one order could be this debit |
+| `cancelled` | Never matched |
+
+**Paid from an account Tijori doesn't see** (a meal card): nothing is guessed.
+- **Card on the receipt:** when the order's `payment` ends in the last 4 digits of exactly one of your accounts (`Paid via Card (XXXX XXXX 0001)`), the order goes on that account at once.
+- **Assigned by hand:** otherwise someone assigns it (below). Zomato's history never says how an order was paid.
+- **What the account gets:** a txn built from the receipt, with `sources: ["order"]`, `rule_id` `order:card` or `order:assigned`, and the brand's category (Groceries, Eating out).
+- **Out of totals:** its `bucket` is `excluded`, because the money arrived where Tijori never saw it, so counting the spend would be one-sided. Filing it under another category, or back to the Inbox, keeps it excluded.
+- **When a debit turns up later** for exactly that order, the order moves to the debit and the receipt txn is deleted.
+
+### `POST /api/orders/assign`
+
+`{"orders": [{"source": "zomato", "order_no": "8615246657"}], "account_id": 12}` puts up to 200 orders on an account of yours. `"account_id": null` takes them off and deletes their receipt txns.
+- Orders a debit paid, and cancelled orders, get 422. An unknown order gets 404.
+- Taking off an order whose receipt names a card puts it straight back on that card.
+
+Returns `{"orders": [{"source", "order_no", "match_state", "txn_id"}]}`.
+
+### `GET /api/order-items`
+
+Items, not txns.
+
+| Param | Notes |
+|---|---|
+| `q` | 1–100 chars. Case-insensitive match on the item, its add-ons, the restaurant or the delivery address. `%` and `_` match literally |
+| `source` | `blinkit` or `zomato` |
+| `store` | Text in the restaurant name |
+| `from`, `to` | `YYYY-MM-DD`, IST, inclusive |
+| `page`, `page_size` | See paging |
+
+Returns each matching item with its order (`source`, `order_no`, `placed_at`, `store`, `delivery_address`, `match_state`, `txn_id`), newest first. Cancelled orders are left out.
+
+`totals` covers the whole filtered set:
+- `line_price` adds the item prices, so "spent on coffee" isn't the whole bill.
+- `priced` says how many of the matches carry a price; Zomato items carry none.
+- `orders` counts distinct orders.
+
 ## MCP (`POST /mcp`)
 
 A Model Context Protocol server, so any MCP client (Claude, ChatGPT, Cursor and others) can do anything the web can. It speaks JSON-RPC 2.0 over HTTP POST, one JSON response per request; notifications get 202 with no body. `GET` and `DELETE` get 405: there are no sessions and no standalone stream.
@@ -985,7 +1062,7 @@ A Model Context Protocol server, so any MCP client (Claude, ChatGPT, Cursor and 
   - A request carrying `_meta["io.modelcontextprotocol/protocolVersion"]` is served as `2026-07-28`. `MCP-Protocol-Version`, `Mcp-Method` and, for `tools/call`, `Mcp-Name` must match the body (else 400, `-32020`). Any other version gets 400 with `-32022` and the supported list. The methods are `server/discover`, `tools/list` and `tools/call`; anything else gets 404 with `-32601`. Results carry `resultType` and `serverInfo`.
   - Anything else is an `initialize`-based client (`2025-03-26` to `2025-11-25`), with `initialize`, `ping`, `tools/list` and `tools/call`.
 - **Origin:** a browser client's `Origin` must be `https`, or `http` on localhost, else 403. `/mcp` and the OAuth token, register and revoke endpoints answer CORS without credentials.
-- **Typed tools for the common calls.** Ten operations have their own tool: `search_transactions`, `get_month_summary`, `list_accounts`, `get_budgets`, `get_alerts`, `list_inbox`, `get_transaction`, `get_net_worth_live`, `get_filing_stats` and `list_recurring`. They are the ten agents called most, 66 of the 79 Tijori calls in Engram's trace on 2026-10-02/03, all reads. `get_freshness` is typed too. Each runs one `/api` route in-process as the token's member, so it validates, audit-logs (actor `mcp:<token id>`) and fails exactly as that route does, owner lock included. Its `inputSchema` is the route's own JSON Schema (fields flat, `$ref`s inlined, `additionalProperties: false`, required fields, enums and patterns), and its description says what it returns. Arguments are checked against that schema before the route runs: a missing or unknown argument, a wrong type, a value outside an enum or a pattern miss returns `isError` naming the field. The route still applies its own bounds.
+- **Typed tools for the common calls.** Ten operations have their own tool: `search_transactions`, `get_month_summary`, `list_accounts`, `get_budgets`, `get_alerts`, `list_inbox`, `get_transaction`, `get_net_worth_live`, `get_filing_stats` and `list_recurring`. They are the ten agents called most, 66 of the 79 Tijori calls in Engram's trace on 2026-10-02/03, all reads. `get_freshness` is typed too, and so are the order tools, which no grouped tool carries: `record_orders` (write), `search_order_items` (read) and `assign_orders` (write). Each runs one `/api` route in-process as the token's member, so it validates, audit-logs (actor `mcp:<token id>`) and fails exactly as that route does, owner lock included. Its `inputSchema` is the route's own JSON Schema (fields flat, `$ref`s inlined, `additionalProperties: false`, required fields, enums and patterns), and its description says what it returns. Arguments are checked against that schema before the route runs: a missing or unknown argument, a wrong type, a value outside an enum or a pattern miss returns `isError` naming the field. The route still applies its own bounds.
 - **Grouped tools.** The 11 grouped tools reach every operation, the ten above included. Each takes `{"action": "…", "args": {…}}`. Their listing is exactly what it was before the typed tools: gateways that pin tool text (Engram) block a tool whose text changes until it is approved, so change it only when it must change.
 - **`describe_action`** `{tool, action}` returns any grouped action's exact argument JSON Schema, its return shape, its typed tool if it has one, its kind and whether it is destructive. It reads no data and runs no route, so the ~60 other operations stay discoverable without being listed. The API refuses to start if an `/api` route has no action and isn't in the table of routes left out, below.
 - **Arguments:** path, query and body fields all go flat (in `args`, for a grouped tool), under the names this document uses. `link_transactions` and `unlink_transactions` take the other txn as `other_txn_id`. `upload_statement` takes `text` (pdftotext `-layout` output) or `pdf_base64`, and a locked PDF is tried with the saved passwords. `import_net_worth_sheet` takes `csv`.
@@ -1008,7 +1085,7 @@ A Model Context Protocol server, so any MCP client (Claude, ChatGPT, Cursor and 
 | `edit_net_worth` | write | `set_value`, `set_remark`, `import_sheet` |
 | `edit_setup` | destructive | `add_account`, `edit_account`, `delete_account`, `upload_statement`, `remove_statement_password`, `edit_mail_source`, `delete_mail_source`, `test_mail_source`, `update_settings`, `rename_me`, `set_onboarding`, `set_classify_profile`, `test_notification`, `revoke_invite` |
 
-Read tools carry `readOnlyHint`, so a client can allow them and still ask before a write. The grouped `edit_setup` keeps `destructiveHint`, since it can delete. Per action, `describe_action` (and any typed write tool) marks as destructive only what deletes, overwrites or can't be undone: `delete_account`, `delete_mail_source`, `remove_statement_password`, `revoke_invite`, `set_classify_profile` (replaces the profile), `import_sheet` (overwrites snapshots by month) and `update_settings` (a retention window purges raw files). `add_account`, `upload_statement` and the rest are not. A read-only connection lists only the read tools (17: 10 typed, `get_freshness`, `describe_action` and the 5 grouped reads); calling a write tool gets 403 with `error="insufficient_scope"`.
+Read tools carry `readOnlyHint`, so a client can allow them and still ask before a write. The grouped `edit_setup` keeps `destructiveHint`, since it can delete. Per action, `describe_action` (and any typed write tool) marks as destructive only what deletes, overwrites or can't be undone: `delete_account`, `delete_mail_source`, `remove_statement_password`, `revoke_invite`, `set_classify_profile` (replaces the profile), `import_sheet` (overwrites snapshots by month) and `update_settings` (a retention window purges raw files). `add_account`, `upload_statement` and the rest are not. A read-only connection lists only the read tools (18: 10 typed, `get_freshness`, `search_order_items`, `describe_action` and the 5 grouped reads); calling a write tool gets 403 with `error="insufficient_scope"`.
 
 **Left out, on purpose (web only):**
 

@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 Money = str
 
@@ -27,6 +27,31 @@ class AccountRef(BaseModel):
 class CategoryRef(BaseModel):
     id: int
     name: str
+
+
+class OrderItemOut(BaseModel):
+    name: str
+    unit: str | None
+    qty: int
+    note: str | None  # add-ons and customisations
+    line_price: Money | None  # Zomato's history gives none
+    unit_price: Money | None
+
+
+class OrderOut(BaseModel):
+    source: str
+    order_no: str
+    placed_at: datetime
+    status: str
+    payment: str | None
+    store: str | None  # the restaurant, on a Zomato order
+    delivery_address: str | None
+    address_label: str | None
+    item_total: Money | None
+    charges: dict[str, Money]
+    bill_total: Money
+    match_state: str
+    items: list[OrderItemOut]
 
 
 class Settles(BaseModel):
@@ -64,6 +89,7 @@ class TxnOut(BaseModel):
     split_of: int | None = None  # this is a part of that txn's split
     split_parts: int = 0  # this txn was split into this many parts
     loan_id: int | None = None  # filed under Loans, on this loan
+    orders: list[OrderOut] = []  # what it paid for; filled on GET /api/transactions/{id} only
 
 
 class TotalLine(BaseModel):
@@ -1321,3 +1347,106 @@ class LoanLines(BaseModel):
 
 
 Summary.model_rebuild()
+
+
+# --- orders ---------------------------------------------------------------------------------
+
+OrderMoney = Annotated[str, Field(pattern=r"^\d{1,12}(\.\d{1,2})?$")]
+SignedMoney = Annotated[str, Field(pattern=r"^-?\d{1,12}(\.\d{1,2})?$")]  # discounts are negative charges
+
+
+class OrderItemIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: Annotated[str, Field(min_length=1, max_length=300)]
+    unit: Annotated[str, Field(max_length=60)] | None = None
+    qty: Annotated[int, Field(ge=1, le=999)]
+    line_price: OrderMoney | None = None
+    unit_price: OrderMoney | None = None
+    note: Annotated[str, Field(max_length=300)] | None = None
+
+
+class OrderIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"examples": [{
+        "source": "blinkit", "order_no": "ORD12345678901", "placed_at": "2026-09-27T12:11:00+05:30",
+        "status": "delivered", "payment": "Paid via UPI", "delivery_address": "Flat 1, Example Road, Gurugram",
+        "address_label": "Home", "item_total": "1082", "charges": {"handling_charge": "9", "product_discount": "-194"},
+        "bill_total": "1092", "items": [{"name": "Instant Coffee", "unit": "100 g", "qty": 1, "line_price": "769",
+                                         "unit_price": "769"}]}]})
+    source: Literal["blinkit", "zomato"]
+    order_no: Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")]
+    placed_at: AwareDatetime  # with its offset, e.g. +05:30; Zomato's list has no year, so take it from the month asked for
+    status: Literal["delivered", "cancelled", "pending"]
+    payment: Annotated[str, Field(max_length=80)] | None = None
+    store: Annotated[str, Field(max_length=160)] | None = None
+    delivery_address: Annotated[str, Field(max_length=500)] | None = None
+    address_label: Annotated[str, Field(max_length=40)] | None = None
+    item_total: OrderMoney | None = None
+    charges: Annotated[dict[Annotated[str, Field(pattern=r"^[a-z0-9_]{1,40}$")], SignedMoney], Field(max_length=20)] = {}
+    bill_total: OrderMoney
+    items: Annotated[list[OrderItemIn], Field(max_length=100)] = []
+
+
+class OrdersIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    orders: Annotated[list[OrderIn], Field(min_length=1, max_length=200)]
+
+
+class OrderState(BaseModel):
+    source: str
+    order_no: str
+    match_state: Literal["unmatched", "matched", "ambiguous", "assigned", "cancelled"]
+    txn_id: int | None
+
+
+class OrdersOut(BaseModel):
+    received: int
+    created: int
+    updated: int
+    unchanged: int
+    states: dict[str, int]
+    orders: list[OrderState]
+
+
+class OrderItemHit(BaseModel):
+    name: str
+    unit: str | None
+    qty: int
+    note: str | None
+    line_price: Money | None
+    source: str
+    order_no: str
+    placed_at: datetime
+    store: str | None
+    delivery_address: str | None
+    match_state: str
+    txn_id: int | None
+
+
+class OrderItemTotals(BaseModel):
+    line_price: Money  # sum over the whole filtered set; Zomato items carry no price
+    priced: int  # matches with a price, the ones line_price covers
+    orders: int
+
+
+class OrderItemPage(BaseModel):
+    items: list[OrderItemHit]
+    page: int
+    page_size: int
+    total: int
+    totals: OrderItemTotals
+
+
+class OrderKey(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source: Literal["blinkit", "zomato"]
+    order_no: Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")]
+
+
+class OrdersAssignIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    orders: Annotated[list[OrderKey], Field(min_length=1, max_length=200)]
+    account_id: Annotated[int, Field(ge=1)] | None  # null takes them off their account
+
+
+class OrdersAssignOut(BaseModel):
+    orders: list[OrderState]

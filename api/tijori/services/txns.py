@@ -13,7 +13,7 @@ from tijori.classify.taxonomy import bucket_kind
 from tijori.db import MemberContext
 from tijori.models import Account, Category, Observation, RawMessage, Rule, RuleHit, Txn, TxnLink, TxnObservation
 from tijori.money import ZERO, fmt
-from tijori.services import aliases, cards, txn_edit
+from tijori.services import aliases, cards, orders, txn_edit
 from tijori.services.common import audit, category_by_ref, cycle_bounds, txn_out, txn_query
 from tijori.services.errors import Invalid, NotFound
 from tijori.services.reports import expense_amount, is_expense
@@ -188,7 +188,8 @@ def get_txn(s: Session, member_id: int, txn_id: int) -> dict[str, Any]:
                  "suggest": None if alias else aliases.suggest_for(s, member_id, t.payee_key,
                                                                    [t.merchant_norm, t.counterparty])}
     return {
-        "transaction": {**txn_out(row), "settles": cards.settles(s, member_id, [txn_id]).get(txn_id)},
+        "transaction": {**txn_out(row), "settles": cards.settles(s, member_id, [txn_id]).get(txn_id),
+                        "orders": orders.for_txn(s, member_id, txn_id)},
         "observations": [
             {"id": o.id, "source": "alert" if o.parser == "bank_alerts" else "statement", "parser": o.parser, "parser_version": o.parser_version,
              "occurred_at": o.occurred_at, "amount": fmt(o.amount), "direction": o.direction,
@@ -288,6 +289,8 @@ def _filed_values(cat: Category, by: str, rule_id: str) -> dict[str, Any]:
         credit_bucket, credit_kind = bucket_kind(cat.bucket, cat.kind, cat.credit_bucket, "credit")
         bucket = case((Txn.direction == "credit", credit_bucket), else_=cat.bucket)
         kind = case((Txn.direction == "credit", credit_kind), else_=cat.kind)
+    # A txn built from an order receipt (services/orders) stays out of totals however it is filed.
+    bucket = case((Txn.sources.contains(["order"]), literal_column("'excluded'")), else_=bucket)
     return dict(category_id=cat.id, bucket=bucket, kind=kind, classified_by=by, rule_id=rule_id,
                 review_reason=None, updated_at=func.now())
 
@@ -383,8 +386,8 @@ def unfile(s: Session, ctx: MemberContext, actor: str, txn_ids: list[int], rule_
     reason = case((Txn.vpa.op("~*")(MERCHANT_QR_HANDLES.pattern), literal_column("'merchant_over_cap'")),
                   (Txn.payee_key.like("vpa:%"), literal_column("'person'")),
                   else_=literal_column("'new_payee'"))
-    back_to_inbox = dict(category_id=None, bucket=None, classified_by=None, rule_id="inbox:undo", loan_id=None,
-                         review_reason=reason, updated_at=func.now())
+    back_to_inbox = dict(category_id=None, bucket=case((Txn.sources.contains(["order"]), literal_column("'excluded'"))),
+                         classified_by=None, rule_id="inbox:undo", loan_id=None, review_reason=reason, updated_at=func.now())
     owned_by = [Txn.classified_by == "user"]
     if rule_pk is not None:
         owned_by.append(and_(Txn.classified_by == "rule", Txn.rule_id == rule_id))

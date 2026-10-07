@@ -196,6 +196,13 @@ EXTRA: dict[str, tuple[str, str, str]] = {
     "get_freshness": ("get_freshness", READ, "how current the data is, in one block: per account the newest txn date, when "
                       "Tijori last recorded one, the newest alert, and how far reconciled statements and read alerts reach; "
                       "per mailbox whether it is being read. Day by day, with reasons: get_setup action coverage"),
+    "record_orders": ("record_orders", WRITE, "save Blinkit or Zomato orders, up to 200, with their items; resending one "
+                      "changes nothing. Each is matched to the debit that paid it, or put on the account whose last 4 digits "
+                      "its payment names. placed_at carries its offset (+05:30)"),
+    "search_order_items": ("search_order_items", READ, "items from Blinkit and Zomato orders by text, restaurant, source or "
+                           "date, with each one's order and txn. Totals add item prices; Zomato items have none"),
+    "assign_orders": ("assign_orders", WRITE, "say which account paid for orders no debit matched (a meal card), "
+                      "or account_id null to take them off; orders a debit paid can't be assigned"),
 }
 DESCRIBE = "describe_action"
 # Actions that delete, overwrite or can't be undone (route names): a typed tool and describe_action report these
