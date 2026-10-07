@@ -45,13 +45,13 @@ def _dec(v: str | None) -> Decimal | None:
 def _row(o: dict[str, Any]) -> dict[str, Any]:
     return {"placed_at": o["placed_at"], "status": o["status"], "payment": o.get("payment"), "store": o.get("store"),
             "delivery_address": o.get("delivery_address"), "address_label": o.get("address_label"),
-            "item_total": _dec(o.get("item_total")), "charges": {k: fmt(Decimal(v)) for k, v in (o.get("charges") or {}).items()},
+            "category": o.get("category"), "item_total": _dec(o.get("item_total")), "charges": {k: fmt(Decimal(v)) for k, v in (o.get("charges") or {}).items()},
             "bill_total": Decimal(o["bill_total"])}
 
 
 def _items(o: dict[str, Any]) -> list[tuple[Any, ...]]:
-    return [(i["name"], i.get("unit"), i["qty"], _dec(i.get("line_price")), _dec(i.get("unit_price")), i.get("note"))
-            for i in o.get("items") or []]
+    return [(i["name"], i.get("unit"), i["qty"], _dec(i.get("line_price")), _dec(i.get("unit_price")), i.get("note"),
+             i.get("category")) for i in o.get("items") or []]
 
 
 def record(s: Session, ctx: MemberContext, actor: str, orders: list[dict[str, Any]]) -> dict[str, Any]:
@@ -66,7 +66,7 @@ def record(s: Session, ctx: MemberContext, actor: str, orders: list[dict[str, An
         for i in s.scalars(select(MerchantOrderItem).where(MerchantOrderItem.member_id == ctx.member_id,
                                                            MerchantOrderItem.order_id.in_([r.id for r in have.values()]))
                            .order_by(MerchantOrderItem.order_id, MerchantOrderItem.position)):
-            old_items[i.order_id].append((i.name, i.unit, i.qty, i.line_price, i.unit_price, i.note))
+            old_items[i.order_id].append((i.name, i.unit, i.qty, i.line_price, i.unit_price, i.note, i.category))
     created = updated = 0
     for o in orders:
         row, items, cur = _row(o), _items(o), have.get((o["source"], o["order_no"]))
@@ -87,8 +87,8 @@ def record(s: Session, ctx: MemberContext, actor: str, orders: list[dict[str, An
                                                       MerchantOrderItem.order_id == cur.id))
             updated += 1
         s.add_all(MerchantOrderItem(member_id=ctx.member_id, order_id=cur.id, position=n, name=name, unit=unit, qty=qty,
-                                    line_price=lp, unit_price=up, note=note)
-                  for n, (name, unit, qty, lp, up, note) in enumerate(items))
+                                    line_price=lp, unit_price=up, note=note, category=cat)
+                  for n, (name, unit, qty, lp, up, note, cat) in enumerate(items))
     s.flush()
     rematch(s, ctx)
     rows = s.execute(select(MerchantOrder.source, MerchantOrder.order_no, MerchantOrder.match_state, MerchantOrder.txn_id)
@@ -235,9 +235,9 @@ def assign(s: Session, ctx: MemberContext, actor: str, keys: list[tuple[str, str
 def _out(o: MerchantOrder, items: list[MerchantOrderItem]) -> dict[str, Any]:
     return {"source": o.source, "order_no": o.order_no, "placed_at": o.placed_at, "status": o.status,
             "payment": o.payment, "store": o.store, "delivery_address": o.delivery_address,
-            "address_label": o.address_label, "item_total": fmt(o.item_total) if o.item_total is not None else None,
+            "address_label": o.address_label, "category": o.category, "item_total": fmt(o.item_total) if o.item_total is not None else None,
             "charges": o.charges, "bill_total": fmt(o.bill_total), "match_state": o.match_state,
-            "items": [{"name": i.name, "unit": i.unit, "qty": i.qty, "note": i.note,
+            "items": [{"name": i.name, "unit": i.unit, "qty": i.qty, "note": i.note, "category": i.category,
                        "line_price": fmt(i.line_price) if i.line_price is not None else None,
                        "unit_price": fmt(i.unit_price) if i.unit_price is not None else None} for i in items]}
 
@@ -257,16 +257,24 @@ def for_txn(s: Session, member_id: int, txn_id: int) -> list[dict[str, Any]]:
 
 
 def search_items(s: Session, member_id: int, *, q: str | None, source: str | None, store: str | None,
-                 date_from: date | None, date_to: date | None, page: int, page_size: int) -> dict[str, Any]:
+                 category: str | None, date_from: date | None, date_to: date | None, page: int,
+                 page_size: int) -> dict[str, Any]:
     """Items, not txns: totals add line prices, so "what did I spend on coffee" isn't the whole bill. Zomato items
-    carry no price, so `priced` says how many of the matches the total covers."""
+    carry no price, so `priced` says how many of the matches the total covers. An item without its own category
+    takes its order's (a Zomato order is eating out as a whole). Three queries: page, totals, per category."""
     from tijori.services.txns import _like
 
+    cat = func.coalesce(MerchantOrderItem.category, MerchantOrder.category)
     conds = [MerchantOrderItem.member_id == member_id, MerchantOrder.status != "cancelled"]
     if q:
         p = _like(q)
         conds.append(or_(MerchantOrderItem.name.ilike(p, escape="\\"), MerchantOrderItem.note.ilike(p, escape="\\"),
-                         MerchantOrder.store.ilike(p, escape="\\"), MerchantOrder.delivery_address.ilike(p, escape="\\")))
+                         MerchantOrder.store.ilike(p, escape="\\"), MerchantOrder.delivery_address.ilike(p, escape="\\"),
+                         cat.ilike(p, escape="\\")))
+    if category == "none":
+        conds.append(cat.is_(None))
+    elif category:
+        conds.append(func.lower(cat) == category.lower())
     if source:
         conds.append(MerchantOrder.source == source)
     if store:
@@ -282,10 +290,14 @@ def search_items(s: Session, member_id: int, *, q: str | None, source: str | Non
         .select_from(MerchantOrderItem).join(MerchantOrder, MerchantOrder.id == MerchantOrderItem.order_id).where(*conds)).one()
     rows = s.execute(base.order_by(MerchantOrder.placed_at.desc(), MerchantOrderItem.position)
                      .offset((page - 1) * page_size).limit(page_size)).all()
-    return {"items": [{"name": i.name, "unit": i.unit, "qty": i.qty, "note": i.note,
+    groups = s.execute(select(cat.label("c"), func.count(), func.coalesce(func.sum(MerchantOrderItem.line_price), 0))
+                       .select_from(MerchantOrderItem).join(MerchantOrder, MerchantOrder.id == MerchantOrderItem.order_id)
+                       .where(*conds).group_by(cat).order_by(func.coalesce(func.sum(MerchantOrderItem.line_price), 0).desc())).all()
+    return {"items": [{"name": i.name, "unit": i.unit, "qty": i.qty, "note": i.note, "category": i.category or o.category,
                        "line_price": fmt(i.line_price) if i.line_price is not None else None,
                        "source": o.source, "order_no": o.order_no, "placed_at": o.placed_at, "store": o.store,
                        "delivery_address": o.delivery_address, "match_state": o.match_state, "txn_id": o.txn_id}
                       for i, o in rows],
             "page": page, "page_size": page_size, "total": total,
-            "totals": {"line_price": fmt(amount), "priced": priced, "orders": n_orders}}
+            "totals": {"line_price": fmt(amount), "priced": priced, "orders": n_orders,
+                       "by_category": [{"category": c, "items": n, "line_price": fmt(a)} for c, n, a in groups]}}

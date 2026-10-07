@@ -34,6 +34,7 @@ class OrderItemOut(BaseModel):
     unit: str | None
     qty: int
     note: str | None  # add-ons and customisations
+    category: str | None = None
     line_price: Money | None  # Zomato's history gives none
     unit_price: Money | None
 
@@ -47,6 +48,7 @@ class OrderOut(BaseModel):
     store: str | None  # the restaurant, on a Zomato order
     delivery_address: str | None
     address_label: str | None
+    category: str | None = None
     item_total: Money | None
     charges: dict[str, Money]
     bill_total: Money
@@ -1363,15 +1365,16 @@ class OrderItemIn(BaseModel):
     line_price: OrderMoney | None = None
     unit_price: OrderMoney | None = None
     note: Annotated[str, Field(max_length=300)] | None = None
+    category: Annotated[str, Field(min_length=1, max_length=60)] | None = None  # e.g. "Snacks & biscuits"
 
 
 class OrderIn(BaseModel):
     model_config = ConfigDict(extra="forbid", json_schema_extra={"examples": [{
         "source": "blinkit", "order_no": "ORD12345678901", "placed_at": "2026-09-27T12:11:00+05:30",
         "status": "delivered", "payment": "Paid via UPI", "delivery_address": "Flat 1, Example Road, Gurugram",
-        "address_label": "Home", "item_total": "1082", "charges": {"handling_charge": "9", "product_discount": "-194"},
+        "address_label": "Home", "category": "Groceries", "item_total": "1082", "charges": {"handling_charge": "9", "product_discount": "-194"},
         "bill_total": "1092", "items": [{"name": "Instant Coffee", "unit": "100 g", "qty": 1, "line_price": "769",
-                                         "unit_price": "769"}]}]})
+                                         "unit_price": "769", "category": "Tea & coffee"}]}]})
     source: Literal["blinkit", "zomato"]
     order_no: Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")]
     placed_at: AwareDatetime  # with its offset, e.g. +05:30; Zomato's list has no year, so take it from the month asked for
@@ -1380,6 +1383,7 @@ class OrderIn(BaseModel):
     store: Annotated[str, Field(max_length=160)] | None = None
     delivery_address: Annotated[str, Field(max_length=500)] | None = None
     address_label: Annotated[str, Field(max_length=40)] | None = None
+    category: Annotated[str, Field(min_length=1, max_length=60)] | None = None  # the whole order, e.g. "Eating out"
     item_total: OrderMoney | None = None
     charges: Annotated[dict[Annotated[str, Field(pattern=r"^[a-z0-9_]{1,40}$")], SignedMoney], Field(max_length=20)] = {}
     bill_total: OrderMoney
@@ -1412,6 +1416,7 @@ class OrderItemHit(BaseModel):
     unit: str | None
     qty: int
     note: str | None
+    category: str | None  # the item's, else its order's
     line_price: Money | None
     source: str
     order_no: str
@@ -1422,10 +1427,17 @@ class OrderItemHit(BaseModel):
     txn_id: int | None
 
 
+class CategoryTotal(BaseModel):
+    category: str | None  # null: uncategorised
+    items: int
+    line_price: Money
+
+
 class OrderItemTotals(BaseModel):
     line_price: Money  # sum over the whole filtered set; Zomato items carry no price
     priced: int  # matches with a price, the ones line_price covers
     orders: int
+    by_category: list[CategoryTotal] = []  # the filtered set per category, biggest spend first
 
 
 class OrderItemPage(BaseModel):

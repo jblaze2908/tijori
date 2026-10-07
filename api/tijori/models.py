@@ -322,6 +322,7 @@ class MerchantOrder(Base):
     store: Mapped[str | None] = mapped_column(String(160))  # the restaurant on a Zomato order
     delivery_address: Mapped[str | None] = mapped_column(Text)
     address_label: Mapped[str | None] = mapped_column(String(40))
+    category: Mapped[str | None] = mapped_column(String(60))  # an agent's label; never the txn's category
     item_total: Mapped[Decimal | None] = mapped_column(Money)
     charges: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
     bill_total: Mapped[Decimal] = mapped_column(Money)
@@ -351,6 +352,7 @@ class MerchantOrderItem(Base):
     line_price: Mapped[Decimal | None] = mapped_column(Money)  # Zomato's history gives none
     unit_price: Mapped[Decimal | None] = mapped_column(Money)
     note: Mapped[str | None] = mapped_column(Text)  # add-ons and customisations
+    category: Mapped[str | None] = mapped_column(String(60))
 
 
 class Recurring(Base):

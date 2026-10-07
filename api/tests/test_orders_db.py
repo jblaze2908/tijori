@@ -93,12 +93,14 @@ class OrdersDB(unittest.IsolatedAsyncioTestCase):
         batch = [
             order("blinkit", "ORDA", at(date(2026, 9, 27), 12, 11), "1092", payment="Paid via UPI", item_total="1082",
                   delivery_address="Flat 1, Example Road", charges={"handling_charge": "9", "product_discount": "-194"},
-                  items=[{"name": "Instant Coffee", "unit": "100 g", "qty": 1, "line_price": "769", "unit_price": "769"},
-                         {"name": "Potato Chips", "unit": "54 g", "qty": 1, "line_price": "25"}]),
+                  category="Tea & coffee",
+                  items=[{"name": "Instant Coffee", "unit": "100 g", "qty": 1, "line_price": "769", "unit_price": "769",
+                          "category": "Tea & coffee"},
+                         {"name": "Potato Chips", "unit": "54 g", "qty": 1, "line_price": "25", "category": "Snacks & biscuits"}]),
             order("blinkit", "ORDB", at(date(2025, 5, 6), 19, 3), "1265"),  # one payment, two orders in the same minute
             order("blinkit", "ORDC", at(date(2025, 5, 6), 19, 3), "466"),
             order("blinkit", "ORDK", at(date(2026, 9, 20), 9, 44), "206", payment="Paid via Card (XXXX XXXX 0002)"),
-            order("zomato", "ZD", at(date(2026, 9, 6), 20, 25), "529.58", store="Waffle Place",
+            order("zomato", "ZD", at(date(2026, 9, 6), 20, 25), "529.58", store="Waffle Place", category="Eating out",
                   items=[{"name": "Oreo crunch waffle", "qty": 1, "note": "Oreo biscuit"}]),
             order("zomato", "ZF", at(date(2026, 9, 10), 13), "300"),  # two orders, one debit: never guess
             order("zomato", "ZG", at(date(2026, 9, 10), 20), "300"),
@@ -148,6 +150,15 @@ class OrdersDB(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((hits["total"], hits["totals"]["line_price"], hits["items"][0]["order_no"]), (1, "769.00", "ORDA"))
         by_store = await self.call("search_order_items", {"q": "waffle place"})
         self.assertEqual((by_store["total"], by_store["totals"]["priced"]), (1, 0))
+        # Categories: an item's own, else its order's; filterable in any case, totalled per category.
+        self.assertEqual(by_store["items"][0]["category"], "Eating out")
+        snacks = await self.call("search_order_items", {"category": "snacks & BISCUITS"})
+        self.assertEqual((snacks["total"], snacks["items"][0]["name"]), (1, "Potato Chips"))
+        cats = {c["category"]: c for c in (await self.call("search_order_items", {"source": "blinkit"}))["totals"]["by_category"]}
+        self.assertEqual({k: (v["items"], v["line_price"]) for k, v in cats.items()},
+                         {"Tea & coffee": (1, "769.00"), "Snacks & biscuits": (1, "25.00")})
+        recat = await self.call("record_orders", {"orders": [{**batch[0], "category": "Groceries"}]})
+        self.assertEqual((recat["updated"], recat["orders"][0]["match_state"]), (1, "matched"))  # a label never unlinks
 
         # The debit turns up late: it takes the order back and the receipt txn goes.
         with Session(self.admin) as s, s.begin():

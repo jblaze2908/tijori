@@ -983,7 +983,7 @@ Blinkit and Zomato orders, as the line items behind a txn. A bot reads them from
 
 ### `POST /api/orders`
 
-Upserts up to 200 orders by `(source, order_no)`. Resending an order changes nothing. A changed `placed_at`, `status` or `bill_total` unlinks the order and matches it again; other changes just update it. Items are replaced whole.
+Upserts up to 200 orders by `(source, order_no)`. Resending an order changes nothing. A changed `placed_at`, `status` or `bill_total` unlinks the order and matches it again; other changes, categories included, just update it. Items are replaced whole.
 
 ```json
 {"orders": [{"source": "blinkit", "order_no": "ORD12345678901", "placed_at": "2026-09-27T12:11:00+05:30",
@@ -1000,8 +1000,9 @@ Upserts up to 200 orders by `(source, order_no)`. Resending an order changes not
 | `placed_at` | With its offset. Zomato's history prints no year, so take it from the month the bot asked for |
 | `status` | `delivered`, `cancelled` or `pending`. Only delivered orders are matched |
 | `store` | The restaurant, on a Zomato order |
+| `category` | Up to 60 chars: an agent's label for the whole order ("Eating out"; for Blinkit, where most of the money went). It never changes the txn's category or totals |
 | `charges` | Up to 20 named amounts (`[a-z0-9_]`). Discounts are negative |
-| `items[]` | `name`, `qty` (1–999), and optional `unit`, `line_price`, `unit_price`, `note` (add-ons). Zomato's history gives no prices |
+| `items[]` | `name`, `qty` (1–999), and optional `unit`, `line_price`, `unit_price`, `note` (add-ons), `category` (e.g. "Snacks & biscuits"). Zomato's history gives no prices |
 
 Returns `{"received", "created", "updated", "unchanged", "states": {"matched": 1}, "orders": [{"source", "order_no", "match_state", "txn_id"}]}`. A batch naming one order twice gets 422.
 
@@ -1040,9 +1041,10 @@ Items, not txns.
 
 | Param | Notes |
 |---|---|
-| `q` | 1–100 chars. Case-insensitive match on the item, its add-ons, the restaurant or the delivery address. `%` and `_` match literally |
+| `q` | 1–100 chars. Case-insensitive match on the item, its add-ons, its category, the restaurant or the delivery address. `%` and `_` match literally |
 | `source` | `blinkit` or `zomato` |
 | `store` | Text in the restaurant name |
+| `category` | An item category, any case; `none` for uncategorised items. An item without its own category takes its order's |
 | `from`, `to` | `YYYY-MM-DD`, IST, inclusive |
 | `page`, `page_size` | See paging |
 
@@ -1052,6 +1054,7 @@ Returns each matching item with its order (`source`, `order_no`, `placed_at`, `s
 - `line_price` adds the item prices, so "spent on coffee" isn't the whole bill.
 - `priced` says how many of the matches carry a price; Zomato items carry none.
 - `orders` counts distinct orders.
+- `by_category` gives `{"category", "items", "line_price"}` per category for the filtered set, biggest spend first; `category: null` is uncategorised.
 
 ## MCP (`POST /mcp`)
 

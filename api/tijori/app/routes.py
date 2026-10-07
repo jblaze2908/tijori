@@ -159,9 +159,10 @@ def raw_attachment(request: Request, db: MemberDep, attachment_id: Annotated[int
 @router.get("/order-items", response_model=OrderItemPage)
 def search_order_items(
     db: MemberDep,
-    q: Annotated[str | None, Query(min_length=1, max_length=100, description="text in the item, add-ons, restaurant or delivery address")] = None,
+    q: Annotated[str | None, Query(min_length=1, max_length=100, description="text in the item, add-ons, category, restaurant or delivery address")] = None,
     source: Literal["blinkit", "zomato"] | None = None,
     store: Annotated[str | None, Query(min_length=1, max_length=100, description="text in the restaurant name")] = None,
+    category: Annotated[str | None, Query(min_length=1, max_length=60, description="an item category, any case; none for uncategorised items")] = None,
     date_from: Annotated[date | None, Query(alias="from")] = None,
     date_to: Annotated[date | None, Query(alias="to")] = None,
     page: Page = 1,
@@ -169,7 +170,7 @@ def search_order_items(
 ) -> dict:
     if date_from and date_to and date_from > date_to:
         raise _unprocessable("from", "must not be after to")
-    return orders.search_items(db.session, db.ctx.member_id, q=q, source=source, store=store, date_from=date_from,
+    return orders.search_items(db.session, db.ctx.member_id, q=q, source=source, store=store, category=category, date_from=date_from,
                                date_to=date_to, page=page, page_size=page_size)
 
 
