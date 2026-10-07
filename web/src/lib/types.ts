@@ -602,13 +602,18 @@ export interface ParseQueue {
 
 export type OrderSource = "blinkit" | "zomato";
 export type MatchState = "matched" | "assigned" | "unmatched" | "ambiguous" | "cancelled";
+/** "always": this product (source, name, pack) in every past and later order. */
+export type ItemCategoryScope = "this" | "always";
 export interface ApiOrderItem {
+  id: number;
   name: string;
   unit: string | null;
   qty: number;
   /** Add-ons, or "unavailable" for an item the store dropped. */
   note: string | null;
   category: string | null;
+  /** "user" when you set it; agents' pushes keep it. */
+  category_by: "user" | null;
   /** Null on Zomato: its history gives no prices. */
   line_price: Decimal | null;
   unit_price: Decimal | null;
@@ -631,6 +636,7 @@ export interface ApiOrder {
   items: ApiOrderItem[];
 }
 export interface OrderItemHit {
+  item_id: number;
   name: string;
   unit: string | null;
   qty: number;

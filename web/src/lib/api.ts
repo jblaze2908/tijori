@@ -25,6 +25,7 @@ import type {
   Holding,
   InboxStats,
   ISODate,
+  ItemCategoryScope,
   LiveNetWorth,
   OrderItemPage,
   OrderItemQuery,
@@ -618,4 +619,15 @@ export async function setRuleEnabled(id: string, enabled: boolean): Promise<void
 export async function assignOrders(orders: { source: OrderSource; order_no: string }[], accountId: number | null): Promise<void> {
   await request<unknown>("/api/orders/assign", "POST", { orders, account_id: accountId });
   invalidate(["/api/transactions", "/api/order-items"]);
+}
+
+/** Your category on these items, one PUT each. Refreshes once, failure included, so a partial save still shows. */
+export async function setItemCategory(itemIds: number[], category: string | null, scope: ItemCategoryScope): Promise<number> {
+  let n = 0;
+  try {
+    for (const id of itemIds) n += (await request<{ items: number }>(`/api/order-items/${id}/category`, "PUT", { category, scope })).items;
+  } finally {
+    invalidate(["/api/transactions", "/api/order-items"]);
+  }
+  return n;
 }

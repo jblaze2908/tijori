@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { api, assignOrders, categorize, dataOf, decideRecurring, dismissAliasSuggestion, linkTxn, patchTxn, read, renamePayees, resetPayees, splitTxn, unsplitTxn } from "../lib/api";
+import { api, assignOrders, categorize, dataOf, decideRecurring, dismissAliasSuggestion, linkTxn, patchTxn, read, renamePayees, resetPayees, setItemCategory, splitTxn, unsplitTxn } from "../lib/api";
 import { categoryColor, itemCategoryColor, monogramColor } from "../lib/colors";
 import { dayIST, dayLong, dayShort, inr, inr2, plural, timeIST, toPaise } from "../lib/format";
 import { navigate } from "../lib/router";
-import type { AliasSuggestion, ApiOrder, Cadence, Category, ClassifiedBy, LinkKind, Scope, Transaction } from "../lib/types";
+import type { AliasSuggestion, ApiOrder, Cadence, Category, ClassifiedBy, ItemCategoryScope, LinkKind, Scope, Transaction } from "../lib/types";
 import { G } from "./Glyphs";
 import { LoanLine, LoanPicker } from "./Loans";
 import { useToast } from "./Toast";
@@ -357,6 +357,9 @@ function OrderBlock({ o, account, accountId }: { o: ApiOrder; account: string; a
   const charges = Object.entries(o.charges).filter(([, v]) => toPaise(v) !== 0);
   // One category for every item (a Zomato order is all eating out): say it once, not on each line.
   const shared = o.items.length > 0 && o.items.every((i) => i.category && i.category === o.items[0]!.category) ? o.items[0]!.category : null;
+  // An item id, or "order" for the shared category; ids change when an agent re-sends the order, so none is kept past a save.
+  const [editing, setEditing] = useState<number | "order" | null>(null);
+  const toggle = (k: number | "order") => setEditing((e) => (e === k ? null : k));
   return (
     <div className="ord">
       <div className="ord-g">
@@ -366,8 +369,7 @@ function OrderBlock({ o, account, accountId }: { o: ApiOrder; account: string; a
           {shared && (
             <>
               {" · "}
-              <i className="dot" style={{ background: itemCategoryColor(shared) }} />
-              {shared}
+              <CatButton cat={shared} mine={o.items.every((i) => i.category_by === "user")} onClick={() => toggle("order")} />
             </>
           )}
           {" · "}
@@ -379,6 +381,7 @@ function OrderBlock({ o, account, accountId }: { o: ApiOrder; account: string; a
             </>
           )}
         </span>
+        {editing === "order" && shared && <CategoryEditor ids={o.items.map((i) => i.id)} current={shared} onDone={() => setEditing(null)} />}
       </div>
       <div className="ord-g">
         <span className="lbl">Items</span>
@@ -389,7 +392,7 @@ function OrderBlock({ o, account, accountId }: { o: ApiOrder; account: string; a
             const each = i.qty > 1 && !gone && i.line_price != null ? money(i.unit_price ?? (toPaise(i.line_price) / i.qty / 100).toFixed(2)) : null;
             const size = [[i.unit, i.qty > 1 ? `× ${i.qty}` : null].filter(Boolean).join(" "), each && `${each} each`].filter(Boolean).join(" · ");
             return (
-              <li key={k}>
+              <li key={i.id}>
                 <span className="n">{k + 1}.</span>
                 <span className="nm">
                   {i.name}
@@ -398,11 +401,11 @@ function OrderBlock({ o, account, accountId }: { o: ApiOrder; account: string; a
                     {!shared && (
                       <>
                         {size || i.note ? " · " : ""}
-                        <i className="dot" style={{ background: itemCategoryColor(cat) }} />
-                        {cat ?? "Uncategorised"}
+                        <CatButton cat={cat} mine={i.category_by === "user"} onClick={() => toggle(i.id)} />
                       </>
                     )}
                   </small>
+                  {editing === i.id && <CategoryEditor ids={[i.id]} current={cat} onDone={() => setEditing(null)} />}
                 </span>
                 <span className="p">{i.line_price != null && !gone ? money(i.line_price) : ""}</span>
               </li>
@@ -438,6 +441,75 @@ function OrderBlock({ o, account, accountId }: { o: ApiOrder; account: string; a
         </div>
       </div>
       {o.match_state === "assigned" ? <AssignedLine o={o} account={account} accountId={accountId} /> : <span className="ord-sub">Paid by this debit</span>}
+    </div>
+  );
+}
+
+function CatButton({ cat, mine, onClick }: { cat: string | null; mine: boolean; onClick: () => void }) {
+  return (
+    <>
+      <button type="button" className="ord-cat" onClick={onClick}>
+        <i className="dot" style={{ background: itemCategoryColor(cat) }} />
+        {cat ?? "Uncategorised"}
+      </button>
+      {mine && <span className="faint"> · yours</span>}
+    </>
+  );
+}
+
+const NEW = "\0new";
+
+/** Sets your category on these items; the list is the categories your items already use. */
+function CategoryEditor({ ids, current, onDone }: { ids: number[]; current: string | null; onDone: () => void }) {
+  const known = (dataOf(read(api.orderItems({}, 1, 1)))?.totals.by_category ?? []).flatMap((c) => (c.category ? [c.category] : []));
+  const names = current && !known.includes(current) ? [current, ...known] : known;
+  const [pick, setPick] = useState(current ?? "");
+  const [typed, setTyped] = useState("");
+  const [scope, setScope] = useState<ItemCategoryScope>("this");
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
+  const value = pick === NEW ? typed.trim().replace(/\s+/g, " ") : pick || null;
+  const ok = pick !== NEW || !!value;
+  const save = async () => {
+    if (!ok || busy) return;
+    setBusy(true);
+    try {
+      const n = await setItemCategory(ids, value, scope);
+      toast(n > 1 ? `Saved for ${plural(n, scope === "always" ? "purchase" : "item")}` : "Saved");
+      onDone();
+    } catch {
+      toast("Couldn't save the category.");
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="ord-catedit">
+      <select className="inp2" value={pick} disabled={busy} aria-label="Item category" onChange={(e) => setPick(e.target.value)}>
+        {names.map((c) => (
+          <option key={c} value={c}>
+            {c}
+          </option>
+        ))}
+        <option value={NEW}>New category…</option>
+        <option value="">Uncategorised</option>
+      </select>
+      {pick === NEW && (
+        <input className="inp2" value={typed} maxLength={60} autoFocus placeholder="Category name" aria-label="New category" onChange={(e) => setTyped(e.target.value)} onKeyDown={(e) => e.key === "Enter" && save()} />
+      )}
+      <span className="seg">
+        <button type="button" className={scope === "this" ? "on" : ""} onClick={() => setScope("this")}>
+          This item
+        </button>
+        <button type="button" className={scope === "always" ? "on" : ""} onClick={() => setScope("always")}>
+          Every time I buy it
+        </button>
+      </span>
+      <button type="button" className="btn2 sm" onClick={onDone}>
+        Cancel
+      </button>
+      <button type="button" className="btn2 sm primary" disabled={!ok || busy} onClick={save}>
+        {busy ? "Saving…" : "Save"}
+      </button>
     </div>
   );
 }
