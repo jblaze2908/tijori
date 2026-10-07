@@ -355,12 +355,23 @@ function OrderBlock({ o, account, accountId }: { o: ApiOrder; account: string; a
   const zomato = o.source === "zomato";
   const n = o.items.reduce((a, i) => a + i.qty, 0);
   const charges = Object.entries(o.charges).filter(([, v]) => toPaise(v) !== 0);
+  // One category for every item (a Zomato order is all eating out): say it once, not on each line.
+  const shared = o.items.length > 0 && o.items.every((i) => i.category && i.category === o.items[0]!.category) ? o.items[0]!.category : null;
   return (
     <div className="ord">
       <div className="ord-g">
         <span className="lbl">Order</span>
         <span className="ord-sub">
-          {plural(n, "item")} · {o.status} {dayShort(dayIST(o.placed_at))}, {timeIST(o.placed_at)}
+          {plural(n, "item")}
+          {shared && (
+            <>
+              {" · "}
+              <i className="dot" style={{ background: itemCategoryColor(shared) }} />
+              {shared}
+            </>
+          )}
+          {" · "}
+          {o.status} {dayShort(dayIST(o.placed_at))}, {timeIST(o.placed_at)}
           {(zomato ? o.store : o.delivery_address) && (
             <>
               <br />
@@ -384,9 +395,13 @@ function OrderBlock({ o, account, accountId }: { o: ApiOrder; account: string; a
                   {i.name}
                   <small>
                     {[size, i.note].filter(Boolean).join(" · ")}
-                    {size || i.note ? " · " : ""}
-                    <i className="dot" style={{ background: itemCategoryColor(cat) }} />
-                    {cat ?? "Uncategorised"}
+                    {!shared && (
+                      <>
+                        {size || i.note ? " · " : ""}
+                        <i className="dot" style={{ background: itemCategoryColor(cat) }} />
+                        {cat ?? "Uncategorised"}
+                      </>
+                    )}
                   </small>
                 </span>
                 <span className="p">{i.line_price != null && !gone ? money(i.line_price) : ""}</span>
