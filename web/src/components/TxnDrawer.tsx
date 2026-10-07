@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { api, categorize, dataOf, decideRecurring, dismissAliasSuggestion, linkTxn, patchTxn, read, renamePayees, resetPayees, splitTxn, unsplitTxn } from "../lib/api";
-import { categoryColor, monogramColor } from "../lib/colors";
-import { dayLong, dayShort, inr, plural, timeIST, toPaise } from "../lib/format";
+import { api, assignOrders, categorize, dataOf, decideRecurring, dismissAliasSuggestion, linkTxn, patchTxn, read, renamePayees, resetPayees, splitTxn, unsplitTxn } from "../lib/api";
+import { categoryColor, itemCategoryColor, monogramColor } from "../lib/colors";
+import { dayIST, dayLong, dayShort, inr, inr2, plural, timeIST, toPaise } from "../lib/format";
 import { navigate } from "../lib/router";
-import type { AliasSuggestion, Cadence, Category, ClassifiedBy, LinkKind, Scope, Transaction } from "../lib/types";
+import type { AliasSuggestion, ApiOrder, Cadence, Category, ClassifiedBy, LinkKind, Scope, Transaction } from "../lib/types";
 import { G } from "./Glyphs";
 import { LoanLine, LoanPicker } from "./Loans";
 import { useToast } from "./Toast";
@@ -205,6 +205,7 @@ function Body({ id }: { id: string }) {
         </div>
         {renaming && t.payee_key && <RenameBlock t={t} group={alias?.payee_keys ?? [t.payee_key]} onDone={() => setRenaming(false)} />}
         {toLoan && <LoanPicker txnId={id} onDone={() => setCat(null)} />}
+        {raw.orders?.map((o) => <OrderBlock key={`${o.source}${o.order_no}`} o={o} account={t.account} accountId={t.account_id} />)}
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <span className="lbl">Status</span>
           <div className="stepper">
@@ -339,6 +340,126 @@ function Body({ id }: { id: string }) {
         </button>
       </div>
     </>
+  );
+}
+
+/** Whole rupees unless the paise matter: a bill total has to read the same as its debit. */
+const money = (d: string) => {
+  const p = toPaise(d);
+  return p % 100 ? inr2(p) : inr(p);
+};
+const humanise = (k: string) => k.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+
+/** The order behind this txn, with only spacing and type for structure (Draft "A4 · Drawer — numbered list"). */
+function OrderBlock({ o, account, accountId }: { o: ApiOrder; account: string; accountId: string | null }) {
+  const zomato = o.source === "zomato";
+  const n = o.items.reduce((a, i) => a + i.qty, 0);
+  const charges = Object.entries(o.charges).filter(([, v]) => toPaise(v) !== 0);
+  return (
+    <div className="ord">
+      <div className="ord-g">
+        <span className="lbl">Order</span>
+        <span className="ord-sub">
+          {plural(n, "item")} · {o.status} {dayShort(dayIST(o.placed_at))}, {timeIST(o.placed_at)}
+          {(zomato ? o.store : o.delivery_address) && (
+            <>
+              <br />
+              {zomato ? o.store : o.delivery_address}
+            </>
+          )}
+        </span>
+      </div>
+      <div className="ord-g">
+        <span className="lbl">Items</span>
+        <ol className="ord-items">
+          {o.items.map((i, k) => {
+            const cat = i.category ?? o.category;
+            const gone = i.note === "unavailable";
+            const size = [i.unit, i.qty > 1 ? `× ${i.qty}` : null].filter(Boolean).join(" ");
+            return (
+              <li key={k}>
+                <span className="n">{k + 1}.</span>
+                <span className="nm">
+                  {i.name}
+                  <small>
+                    {[size, i.note].filter(Boolean).join(" · ")}
+                    {size || i.note ? " · " : ""}
+                    <i className="dot" style={{ background: itemCategoryColor(cat) }} />
+                    {cat ?? "Uncategorised"}
+                  </small>
+                </span>
+                <span className="p">{i.line_price != null && !gone ? money(i.line_price) : ""}</span>
+              </li>
+            );
+          })}
+        </ol>
+        <div className="ord-tot">
+          {zomato ? (
+            <div className="big">
+              <span>Paid</span>
+              <b>{money(o.bill_total)}</b>
+            </div>
+          ) : (
+            <>
+              {o.item_total != null && (
+                <div>
+                  <span>Items</span>
+                  <b>{money(o.item_total)}</b>
+                </div>
+              )}
+              {charges.map(([k, v]) => (
+                <div key={k}>
+                  <span>{humanise(k)}</span>
+                  <b>{money(v)}</b>
+                </div>
+              ))}
+              <div className="big">
+                <span>Bill total</span>
+                <b>{money(o.bill_total)}</b>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+      {o.match_state === "assigned" ? <AssignedLine o={o} account={account} accountId={accountId} /> : <span className="ord-sub">Paid by this debit</span>}
+    </div>
+  );
+}
+
+/** A receipt txn: the order sits on an account no debit came from. Moving it keeps the txn, so the drawer stays open. */
+function AssignedLine({ o, account, accountId }: { o: ApiOrder; account: string; accountId: string | null }) {
+  const accounts = dataOf(read(api.accounts())) ?? [];
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
+  const move = async (to: number) => {
+    setBusy(true);
+    try {
+      await assignOrders([{ source: o.source, order_no: o.order_no }], to);
+      toast(`Order moved to ${accounts.find((a) => a.id === to)?.label ?? "that account"}`);
+      setOpen(false);
+    } catch {
+      toast("Couldn't move the order. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <span className="ord-sub">
+      On {account} · assigned
+      <button type="button" className="linkish" onClick={() => setOpen((v) => !v)}>
+        {open ? "Cancel" : "Change"}
+      </button>
+      {open && (
+        <select className="inp2 ord-pick" value={accountId ?? ""} disabled={busy} aria-label="Account that paid" onChange={(e) => e.target.value && move(Number(e.target.value))}>
+          {accounts.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.label}
+            </option>
+          ))}
+        </select>
+      )}
+    </span>
   );
 }
 

@@ -20,6 +20,14 @@ export const OTHER = "var(--t3)";
 export const FLOW = { spend: "var(--c1)", invest: "var(--c2)", saved: "var(--c3)", income: "var(--t3)", committed: "var(--t3)" } as const;
 export const slotColor = (slot: number | undefined) => (slot && slot >= 1 && slot <= 8 ? `var(--c${slot})` : OTHER);
 export const categoryColor = (c: string | null) => slotColor(c ? CATEGORY_SLOT[c] : undefined);
+/** Item categories are open-ended (the agent names them), so a stable hash picks the slot: same name, same colour
+ *  everywhere. Lowercased because the server matches them in any case. */
+export function itemCategoryColor(c: string | null): string {
+  if (!c) return OTHER;
+  let h = 0;
+  for (const ch of c.trim().toLowerCase()) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return slotColor((h % 8) + 1);
+}
 /** --c6 is too dark to read as a 1.5–2px line on the dark surface, so lines take a lifted step of the same green. */
 export const lineInk = (c: string) => (c === "var(--c6)" ? "#1fa31f" : c);
 

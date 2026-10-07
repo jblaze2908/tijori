@@ -21,8 +21,8 @@ const KINDS: [TxnKind, string][] = [
   ["cash", "Cash"],
 ];
 
-type Preset = "month" | "last" | "year" | "fy" | "90" | "all";
-function presetRange(p: Preset, app: AppCtx): { from?: ISODate; to?: ISODate } {
+export type Preset = "month" | "last" | "year" | "fy" | "90" | "all";
+export function presetRange(p: Preset, app: AppCtx): { from?: ISODate; to?: ISODate } {
   const today = app.asOf;
   const cur = app.cycle(today.slice(0, 7));
   if (p === "month") return { from: cur.period.start, to: cur.period.end };
@@ -489,7 +489,7 @@ function Row({ t, sel, onOpen }: { t: Transaction; sel: boolean; onOpen: () => v
   const muted = t.bucket === "excluded" || t.bucket === "card";
   const onCard = t.account_kind === "card";
   // A bill payment is a transfer once matched to the card (its purchases are counted there); unmatched, it stands in.
-  const tag = t.split_parts ? ["Split", ""] : t.split_of ? ["Part", ""] : t.category == null ? null : t.loan_id != null || t.category === "Loans" ? ["Loan", ""] : t.bucket === "card" ? ["Card bill", "stand"] : t.bucket === "excluded" ? ["Transfer", ""] : t.bucket === "invest" ? ["Invest", "invest"] : t.bucket === "income" ? ["Income", "income"] : null;
+  const tag = t.split_parts ? ["Split", ""] : t.split_of ? ["Part", ""] : t.category == null ? null : t.loan_id != null || t.category === "Loans" ? ["Loan", ""] : t.bucket === "card" ? ["Card bill", "stand"] : t.bucket === "excluded" ? [t.sources.includes("order") ? "Meal card" : "Transfer", ""] : t.bucket === "invest" ? ["Invest", "invest"] : t.bucket === "income" ? ["Income", "income"] : null;
   const catText = t.split_parts ? `Into ${t.split_parts} parts` : t.settles?.card ? `Paid ${t.settles.card}` : t.settles?.from_account ? `From ${t.settles.from_account}` : t.bucket === "card" ? "Counts as spend" : (t.category ?? "Uncategorized");
   return (
     <button type="button" className={`trow${sel ? " sel" : ""}`} onClick={onOpen}>

@@ -31,6 +31,11 @@ export const G = {
       <path d="M2 4h12M2 8h12M2 12h8" />
     </svg>
   ),
+  orders: (
+    <svg {...g}>
+      <path d="M3 5.25h10l-.8 8.1a.75.75 0 0 1-.75.65h-6.9a.75.75 0 0 1-.75-.65zM5.75 7V4.25a2.25 2.25 0 0 1 4.5 0V7" />
+    </svg>
+  ),
   networth: (
     <svg {...g}>
       <path d="M2 6l6-3.5L14 6M3.5 7v5M8 7v5M12.5 7v5M2 13.5h12" />

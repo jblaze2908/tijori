@@ -687,3 +687,47 @@ main { padding: 24px 40px 56px; display: flex; flex-direction: column; gap: 24px
   .lnr .n { width: 140px }
   .ltr .b { display: none }
 }
+/* Orders: the drawer section groups by spacing and type alone (no rules), the page keeps the table look. */
+.dot { display: inline-block; flex: none; width: 7px; height: 7px; border-radius: 2px; margin-right: 6px; vertical-align: 1px }
+.ord { display: flex; flex-direction: column; gap: 20px }
+.ord-g { display: flex; flex-direction: column; gap: 10px }
+.ord-sub { font-size: 13px; line-height: 20px; color: var(--t2) }
+.ord-sub .linkish { font-size: 13px }
+.ord-pick { display: block; margin-top: 8px; max-width: 100% }
+.ord-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px }
+.ord-items li { display: flex; align-items: flex-start; font-size: 13.5px; line-height: 20px }
+.ord-items .n { width: 22px; flex: none; color: var(--t3) }
+.ord-items .nm { flex: 1; min-width: 0 }
+.ord-items small { display: block; font-size: 12px; line-height: 18px; color: var(--t3) }
+.ord-items .p { flex: none; padding-left: 12px; font-family: var(--mono); font-variant-numeric: tabular-nums }
+.ord-tot { display: flex; flex-direction: column; gap: 6px; padding: 8px 0 0 22px; font-size: 13px; color: var(--t2) }
+.ord-tot > div { display: flex; justify-content: space-between; gap: 12px }
+.ord-tot b { font: 400 13px var(--mono); font-variant-numeric: tabular-nums }
+.ord-tot .big { margin-top: 6px; color: var(--t1); font-size: 14px; font-weight: 600 }
+.ord-tot .big b { font: 600 15px var(--mono) }
+.ordgrid { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; align-items: start }
+.ocats { padding: 16px 20px; gap: 6px }
+.ocats .lbl { padding-bottom: 6px }
+.ocat { display: flex; flex-direction: column; gap: 6px; margin: 0 -8px; padding: 7px 8px; border: 0; border-radius: 6px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer }
+.ocat:hover { background: rgba(255, 255, 255, .03) }
+.ocat.on { background: var(--accent-soft) }
+.ocat .t { display: flex; align-items: center; font-size: 13px }
+.ocat .nm { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis }
+.ocat .bar { display: block; height: 3px; border-radius: 2px; background: var(--s3); overflow: hidden }
+.ocat .bar span { display: block; height: 100%; border-radius: 2px }
+.otable .trow { height: auto; min-height: 56px; padding: 8px 0; align-items: flex-start }
+.otable .trow.static { cursor: default }
+.otable .c-date, .otable .c-cat, .otable .c-qty, .otable .c-amt { line-height: 20px }
+.otable .c-cat { width: 190px }
+.otable .c-cat .dot { margin-right: 0 }
+.otable .nmcol small { font-size: 12px; line-height: 16px }
+.c-ord { width: 170px; flex: none; font-size: 13px; line-height: 20px }
+.c-qty { width: 36px; flex: none; text-align: right; font: 13px var(--mono); color: var(--t2) }
+.otable .c-amt { width: 80px }
+@media (max-width: 1100px) {
+  .ordgrid { grid-template-columns: minmax(0, 1fr) }
+}
+@media (max-width: 820px) {
+  .c-ord, .otable .c-qty { display: none }
+  .otable .c-amt { width: 72px }
+}

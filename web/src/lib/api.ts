@@ -26,6 +26,9 @@ import type {
   InboxStats,
   ISODate,
   LiveNetWorth,
+  OrderItemPage,
+  OrderItemQuery,
+  OrderSource,
   ParseQueue,
   PayeeAlias,
   PayeeMatch,
@@ -445,7 +448,20 @@ export const api = {
   /** Payees whose name contains or looks like q: the candidates to give one name. */
   payees: (q: string) => resource(`/api/payees?${qs({ q })}`, (r: { items: PayeeMatch[] }) => r.items),
   sourcesQueue: () => resource("/api/sources/queue", (r: ParseQueue) => r),
+  orderItems: (f: OrderItemQuery, page: number, pageSize = 50) => resource(`/api/order-items?${orderQueryString(f, page, pageSize)}`, (r: OrderItemPage) => r),
 };
+
+/** Empty values dropped: the server refuses an empty q. */
+function orderQueryString(f: OrderItemQuery, page: number, pageSize: number): string {
+  const p = new URLSearchParams();
+  for (const k of ["from", "to", "q", "source", "category"] as const) {
+    const v = f[k]?.trim();
+    if (v) p.set(k, v);
+  }
+  p.set("page", String(page));
+  p.set("page_size", String(pageSize));
+  return p.toString();
+}
 
 /** Every page of a filtered list (CSV export), capped like range reads. */
 export async function allTxns(f: TxnQuery): Promise<Transaction[]> {
@@ -495,6 +511,7 @@ export const SOURCE_LABEL: Record<TxnSource, string> = {
   upload: "Upload",
   expected: "Predicted from history",
   import: "Sheet import",
+  order: "Order receipt",
 };
 
 // ---------- mutations ----------
@@ -595,4 +612,10 @@ export async function dismissAliasSuggestion(payeeKey: string, name: string): Pr
 export async function setRuleEnabled(id: string, enabled: boolean): Promise<void> {
   await request<unknown>(`/api/rules/${encodeURIComponent(id)}`, "PATCH", { enabled });
   invalidate(["/api/rules", "/api/inbox"]);
+}
+
+/** Puts orders no debit paid on one of your accounts (a meal card); the receipt txn keeps its id when it moves. */
+export async function assignOrders(orders: { source: OrderSource; order_no: string }[], accountId: number | null): Promise<void> {
+  await request<unknown>("/api/orders/assign", "POST", { orders, account_id: accountId });
+  invalidate(["/api/transactions", "/api/order-items"]);
 }

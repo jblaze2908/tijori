@@ -49,7 +49,7 @@ Every total shown is the server's: `/api/summary` and `/api/trends` (`group_by=t
 | `src/lib/api.ts`, `useStore.ts` | request cache and React subscription; mutations `categorize`, `fileInboxPayee`, `saveRemark` |
 | `src/lib/insights.ts`, `periods.ts`, `format.ts` | pure maths: pace, period stats, movers, alerts, allocation; weeks, cycles, quarters, FY; money and dates |
 | `src/charts.ts` | SVG line, columns, diverging bars, heatmap, donut, sparkline. `html``` escapes all text |
-| `src/pages/` | Overview, Activity, Trends (week/month/quarter/FY, derived from cached month slices or `GET /api/trends`), Inbox, Net worth, Welcome, Invite |
+| `src/pages/` | Overview, Activity, Trends (week/month/quarter/FY, derived from cached month slices or `GET /api/trends`), Orders (Blinkit and Zomato items from `GET /api/order-items`), Inbox, Net worth, Welcome, Invite |
 | `src/pages/Onboarding.tsx`, `setup/` | `/onboarding/:step` has six steps: profile (name, month start), your accounts (declare, rename, remove; classify profile), connect mail (test before saving via `POST /api/mail-sources/test`), the label, statement passwords and first upload. The server's `accounts` and `label` steps resume as `profile` and `mail`; the checklist ticks from `GET /api/onboarding`. The same forms back `/settings/:section`: general, mail sources, accounts, statement passwords, upload and household (members from `GET /api/household`, invites with revoke) |
 | `src/lib/setup.ts`, `components/forms.tsx` | onboarding, mail-source, secret, invite and upload calls. Secret inputs are write-only: never prefilled or echoed, and cleared after every submit. Error codes (`auth_error`, IMAP `error_code`) map to the UI's own messages, and server text is never shown |
 

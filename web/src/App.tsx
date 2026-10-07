@@ -12,6 +12,7 @@ import { Inbox } from "./pages/Inbox";
 import { NetWorth } from "./pages/NetWorth";
 import { Invite } from "./pages/Invite";
 import { Onboarding } from "./pages/Onboarding";
+import { Orders } from "./pages/Orders";
 import { Overview } from "./pages/Overview";
 import { SECTIONS, Settings, type Section } from "./pages/Settings";
 import { Spending } from "./pages/Spending";
@@ -20,13 +21,14 @@ import { Subscriptions } from "./pages/Subscriptions";
 import { Transactions } from "./pages/Transactions";
 import { Welcome } from "./pages/Welcome";
 
-type RouteKey = "overview" | "spending" | "subscriptions" | "transactions" | "networth" | "inbox";
-/** `tab` is the phone tab-bar label: six tabs share 390px. */
-const ROUTES: { path: string; key: RouteKey; title: string; tab: string }[] = [
+type RouteKey = "overview" | "spending" | "subscriptions" | "transactions" | "orders" | "networth" | "inbox";
+/** `tab` is the phone tab-bar label: six tabs share 390px, so a route without one stays in the sidebar. */
+const ROUTES: { path: string; key: RouteKey; title: string; tab?: string }[] = [
   { path: "/", key: "overview", title: "Overview", tab: "Overview" },
   { path: "/spending", key: "spending", title: "Spending", tab: "Spending" },
   { path: "/subscriptions", key: "subscriptions", title: "Subscriptions", tab: "Subs" },
   { path: "/transactions", key: "transactions", title: "Transactions", tab: "Activity" },
+  { path: "/orders", key: "orders", title: "Orders" },
   { path: "/networth", key: "networth", title: "Net worth", tab: "Worth" },
   { path: "/inbox", key: "inbox", title: "Inbox", tab: "Inbox" },
 ];
@@ -137,6 +139,9 @@ export function App() {
     case "transactions":
       page = <Transactions app={app} />;
       break;
+    case "orders":
+      page = <Orders app={app} />;
+      break;
     case "inbox":
       page = <Inbox app={app} />;
       break;
@@ -188,7 +193,7 @@ export function App() {
         </main>
       </div>
       <nav className="tabbar" aria-label="Main">
-        {ROUTES.map((r) => (
+        {ROUTES.filter((r) => r.tab).map((r) => (
           <Link key={r.key} href={r.path} className={route?.key === r.key ? "on" : ""} aria-current={route?.key === r.key ? "page" : undefined}>
             {G[r.key]}
             {r.tab}

@@ -57,6 +57,8 @@ export interface ApiTxn {
   split_of?: number | null;
   split_parts?: number;
   loan_id?: number | null;
+  /** Detail only: the Blinkit or Zomato orders this txn paid for; [] in lists. */
+  orders?: ApiOrder[];
 }
 export interface ApiSettles {
   txn_id: number;
@@ -64,7 +66,7 @@ export interface ApiSettles {
   card: string | null;
   from_account: string | null;
 }
-export type TxnSource = "statement" | "alert" | "sms" | "upload" | "expected" | "import";
+export type TxnSource = "statement" | "alert" | "sms" | "upload" | "expected" | "import" | "order";
 
 export interface ApiTotals {
   expense: Decimal;
@@ -594,4 +596,64 @@ export interface ParseQueue {
     diff: Decimal | null;
     reconciled: boolean;
   }[];
+}
+
+// ---------- orders (docs/api.md "Orders") ----------
+
+export type OrderSource = "blinkit" | "zomato";
+export type MatchState = "matched" | "assigned" | "unmatched" | "ambiguous" | "cancelled";
+export interface ApiOrderItem {
+  name: string;
+  unit: string | null;
+  qty: number;
+  /** Add-ons, or "unavailable" for an item the store dropped. */
+  note: string | null;
+  category: string | null;
+  /** Null on Zomato: its history gives no prices. */
+  line_price: Decimal | null;
+  unit_price: Decimal | null;
+}
+export interface ApiOrder {
+  source: OrderSource;
+  order_no: string;
+  placed_at: string;
+  status: "delivered" | "cancelled" | "pending";
+  payment: string | null;
+  store: string | null;
+  delivery_address: string | null;
+  address_label: string | null;
+  category: string | null;
+  item_total: Decimal | null;
+  /** Discounts are negative. */
+  charges: Record<string, Decimal>;
+  bill_total: Decimal;
+  match_state: MatchState;
+  items: ApiOrderItem[];
+}
+export interface OrderItemHit {
+  name: string;
+  unit: string | null;
+  qty: number;
+  note: string | null;
+  /** The item's, else its order's. */
+  category: string | null;
+  line_price: Decimal | null;
+  source: OrderSource;
+  order_no: string;
+  placed_at: string;
+  store: string | null;
+  delivery_address: string | null;
+  match_state: MatchState;
+  txn_id: number | null;
+}
+export interface OrderItemPage extends ApiPage<OrderItemHit> {
+  totals: { line_price: Decimal; priced: number; orders: number; by_category: { category: string | null; items: number; line_price: Decimal }[] };
+}
+export interface OrderItemQuery {
+  from?: ISODate;
+  to?: ISODate;
+  q?: string;
+  source?: OrderSource;
+  /** "none" for uncategorised. */
+  category?: string;
 }
