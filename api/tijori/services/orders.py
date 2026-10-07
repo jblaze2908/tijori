@@ -260,11 +260,11 @@ def search_items(s: Session, member_id: int, *, q: str | None, source: str | Non
                  category: str | None, date_from: date | None, date_to: date | None, page: int,
                  page_size: int) -> dict[str, Any]:
     """Items, not txns: totals add line prices, so "what did I spend on coffee" isn't the whole bill. Zomato items
-    carry no price, so `priced` says how many of the matches the total covers. An item without its own category
-    takes its order's (a Zomato order is eating out as a whole). Three queries: page, totals, per category."""
+    carry no price, so `priced` says how many of the matches the total covers. Three queries: page, totals, per
+    category."""
     from tijori.services.txns import _like
 
-    cat = func.coalesce(MerchantOrderItem.category, MerchantOrder.category)
+    cat = MerchantOrderItem.category
     conds = [MerchantOrderItem.member_id == member_id, MerchantOrder.status != "cancelled"]
     if q:
         p = _like(q)
@@ -293,7 +293,7 @@ def search_items(s: Session, member_id: int, *, q: str | None, source: str | Non
     groups = s.execute(select(cat.label("c"), func.count(), func.coalesce(func.sum(MerchantOrderItem.line_price), 0))
                        .select_from(MerchantOrderItem).join(MerchantOrder, MerchantOrder.id == MerchantOrderItem.order_id)
                        .where(*conds).group_by(cat).order_by(func.coalesce(func.sum(MerchantOrderItem.line_price), 0).desc())).all()
-    return {"items": [{"name": i.name, "unit": i.unit, "qty": i.qty, "note": i.note, "category": i.category or o.category,
+    return {"items": [{"name": i.name, "unit": i.unit, "qty": i.qty, "note": i.note, "category": i.category,
                        "line_price": fmt(i.line_price) if i.line_price is not None else None,
                        "source": o.source, "order_no": o.order_no, "placed_at": o.placed_at, "store": o.store,
                        "delivery_address": o.delivery_address, "match_state": o.match_state, "txn_id": o.txn_id}

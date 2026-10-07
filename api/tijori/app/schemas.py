@@ -1416,7 +1416,7 @@ class OrderItemHit(BaseModel):
     unit: str | None
     qty: int
     note: str | None
-    category: str | None  # the item's, else its order's
+    category: str | None
     line_price: Money | None
     source: str
     order_no: str

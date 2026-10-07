@@ -373,9 +373,10 @@ function OrderBlock({ o, account, accountId }: { o: ApiOrder; account: string; a
         <span className="lbl">Items</span>
         <ol className="ord-items">
           {o.items.map((i, k) => {
-            const cat = i.category ?? o.category;
+            const cat = i.category;
             const gone = i.note === "unavailable";
-            const size = [i.unit, i.qty > 1 ? `× ${i.qty}` : null].filter(Boolean).join(" ");
+            const each = i.qty > 1 && !gone && i.line_price != null ? money(i.unit_price ?? (toPaise(i.line_price) / i.qty / 100).toFixed(2)) : null;
+            const size = [[i.unit, i.qty > 1 ? `× ${i.qty}` : null].filter(Boolean).join(" "), each && `${each} each`].filter(Boolean).join(" · ");
             return (
               <li key={k}>
                 <span className="n">{k + 1}.</span>

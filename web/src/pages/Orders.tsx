@@ -264,12 +264,12 @@ function Table({ items, loading, openId, open }: { items: OrderItemHit[]; loadin
         <span className="c-name">Item</span>
         <span className="c-cat">Category</span>
         <span className="c-ord">Order</span>
-        <span className="c-qty">Qty</span>
         <span className="c-amt">Price</span>
       </div>
       {items.map((i, k) => {
         const id = i.txn_id != null ? String(i.txn_id) : null;
-        const sub = [i.unit, i.note].filter(Boolean).join(" · ");
+        const each = i.qty > 1 && i.line_price != null && i.note !== "unavailable" ? `${inr(Math.round(toPaise(i.line_price) / i.qty))} each` : null;
+        const sub = [[i.unit, i.qty > 1 ? `× ${i.qty}` : null].filter(Boolean).join(" "), each, i.note].filter(Boolean).join(" · ");
         const body = (
           <>
             <span className="c-date">{dayShort(dayIST(i.placed_at))}</span>
@@ -287,7 +287,6 @@ function Table({ items, loading, openId, open }: { items: OrderItemHit[]; loadin
               <span>{i.source === "zomato" ? (i.store ?? "Zomato") : "Blinkit"}</span>
               <small className="faint">{STATE[i.match_state] ?? i.match_state}</small>
             </span>
-            <span className="c-qty">{i.qty}</span>
             <span className="c-amt">{i.line_price != null && i.note !== "unavailable" ? inr(toPaise(i.line_price)) : <span className="faint">—</span>}</span>
           </>
         );

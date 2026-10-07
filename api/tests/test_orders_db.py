@@ -101,7 +101,7 @@ class OrdersDB(unittest.IsolatedAsyncioTestCase):
             order("blinkit", "ORDC", at(date(2025, 5, 6), 19, 3), "466"),
             order("blinkit", "ORDK", at(date(2026, 9, 20), 9, 44), "206", payment="Paid via Card (XXXX XXXX 0002)"),
             order("zomato", "ZD", at(date(2026, 9, 6), 20, 25), "529.58", store="Waffle Place", category="Eating out",
-                  items=[{"name": "Oreo crunch waffle", "qty": 1, "note": "Oreo biscuit"}]),
+                  items=[{"name": "Oreo crunch waffle", "qty": 1, "note": "Oreo biscuit", "category": "Eating out"}]),
             order("zomato", "ZF", at(date(2026, 9, 10), 13), "300"),  # two orders, one debit: never guess
             order("zomato", "ZG", at(date(2026, 9, 10), 20), "300"),
             {**order("blinkit", "ORDH", at(date(2026, 9, 1)), "227"), "status": "cancelled"},
@@ -150,7 +150,7 @@ class OrdersDB(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((hits["total"], hits["totals"]["line_price"], hits["items"][0]["order_no"]), (1, "769.00", "ORDA"))
         by_store = await self.call("search_order_items", {"q": "waffle place"})
         self.assertEqual((by_store["total"], by_store["totals"]["priced"]), (1, 0))
-        # Categories: an item's own, else its order's; filterable in any case, totalled per category.
+        # Item categories: filterable in any case, totalled per category; an order's own label never stands in.
         self.assertEqual(by_store["items"][0]["category"], "Eating out")
         snacks = await self.call("search_order_items", {"category": "snacks & BISCUITS"})
         self.assertEqual((snacks["total"], snacks["items"][0]["name"]), (1, "Potato Chips"))

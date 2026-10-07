@@ -1044,7 +1044,7 @@ Items, not txns.
 | `q` | 1–100 chars. Case-insensitive match on the item, its add-ons, its category, the restaurant or the delivery address. `%` and `_` match literally |
 | `source` | `blinkit` or `zomato` |
 | `store` | Text in the restaurant name |
-| `category` | An item category, any case; `none` for uncategorised items. An item without its own category takes its order's |
+| `category` | An item category, any case; `none` for uncategorised items. An order's category never stands in for its items, so a Zomato agent sets it on each item too |
 | `from`, `to` | `YYYY-MM-DD`, IST, inclusive |
 | `page`, `page_size` | See paging |
 
