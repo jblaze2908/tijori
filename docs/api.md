@@ -983,7 +983,7 @@ Blinkit and Zomato orders, as the line items behind a txn. A bot reads them from
 
 ### `POST /api/orders`
 
-Upserts up to 200 orders by `(source, order_no)`. Resending an order changes nothing. A changed `placed_at`, `status` or `bill_total` unlinks the order and matches it again; other changes, categories included, just update it. Items are replaced whole.
+Upserts up to 200 orders by `(source, order_no)`. Resending an order changes nothing. A changed `placed_at`, `status` or `bill_total` unlinks the order and matches it again; other changes, categories included, just update it. Items are replaced whole, but an item sent without a `category` keeps the one it had, so a stale or partial push never clears categories.
 
 ```json
 {"orders": [{"source": "blinkit", "order_no": "ORD12345678901", "placed_at": "2026-09-27T12:11:00+05:30",

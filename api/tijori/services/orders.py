@@ -69,6 +69,7 @@ def record(s: Session, ctx: MemberContext, actor: str, orders: list[dict[str, An
         MerchantOrder.member_id == ctx.member_id, MerchantOrder.order_no.in_([k[1] for k in keys])))}
     old_items = defaultdict(list)
     mine: dict[int, dict[tuple[str, str | None], str | None]] = defaultdict(dict)  # categories the member set, per order
+    had: dict[int, dict[tuple[str, str | None], str]] = defaultdict(dict)  # an agent's earlier categories, per order
     if have:
         for i in s.scalars(select(MerchantOrderItem).where(MerchantOrderItem.member_id == ctx.member_id,
                                                            MerchantOrderItem.order_id.in_([r.id for r in have.values()]))
@@ -76,12 +77,14 @@ def record(s: Session, ctx: MemberContext, actor: str, orders: list[dict[str, An
             old_items[i.order_id].append((i.name, i.unit, i.qty, i.line_price, i.unit_price, i.note, i.category, i.category_by))
             if i.category_by == "user":
                 mine[i.order_id][(i.name, i.unit)] = i.category
+            elif i.category is not None:
+                had[i.order_id][(i.name, i.unit)] = i.category
     rules = {(r.source, r.name, r.unit): r.category for r in s.scalars(
         select(ItemCategoryRule).where(ItemCategoryRule.member_id == ctx.member_id))}
     created = updated = 0
     for o in orders:
         cur = have.get((o["source"], o["order_no"]))
-        row, items = _row(o), _own(_items(o), o["source"], rules, mine[cur.id] if cur else {})
+        row, items = _row(o), _own(_items(o), o["source"], rules, mine[cur.id] if cur else {}, had[cur.id] if cur else {})
         if cur is None:
             cur = MerchantOrder(member_id=ctx.member_id, source=o["source"], order_no=o["order_no"], **row)
             s.add(cur)
@@ -116,8 +119,9 @@ def record(s: Session, ctx: MemberContext, actor: str, orders: list[dict[str, An
 
 
 def _own(items: list[tuple[Any, ...]], source: str, rules: dict[tuple[str, str, str | None], str],
-         mine: dict[tuple[str, str | None], str | None]) -> list[tuple[Any, ...]]:
-    """The member's categories win over the agent's: an "every time" rule first, then one they set on this order."""
+         mine: dict[tuple[str, str | None], str | None], had: dict[tuple[str, str | None], str]) -> list[tuple[Any, ...]]:
+    """The member's categories win over the agent's: an "every time" rule first, then one they set on this order.
+    An item pushed with no category keeps the one an agent gave it before: a stale or partial push never clears it."""
     out = []
     for name, unit, qty, lp, up, note, cat in items:
         if (source, name, unit) in rules:
@@ -125,7 +129,7 @@ def _own(items: list[tuple[Any, ...]], source: str, rules: dict[tuple[str, str, 
         elif (name, unit) in mine:
             cat, by = mine[(name, unit)], "user"
         else:
-            by = None
+            cat, by = cat if cat is not None else had.get((name, unit)), None
         out.append((name, unit, qty, lp, up, note, cat, by))
     return out
 

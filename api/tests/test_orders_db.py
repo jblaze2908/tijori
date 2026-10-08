@@ -226,6 +226,23 @@ class OrdersDB(unittest.IsolatedAsyncioTestCase):
         with member_session(self.app.state.engine, self.other) as s:
             self.assertEqual(s.scalar(select(func.count()).select_from(ItemCategoryRule)), 0)
 
+    async def test_push_without_categories_keeps_them(self) -> None:
+        # A call held for approval since before item categories existed, approved after a categorised push (2026-10-08).
+        chips = {"name": "Potato Chips", "unit": "52 g", "qty": 1, "line_price": "20"}
+        tea = {"name": "Green Tea", "unit": "25 bags", "qty": 1, "line_price": "160"}
+        fresh = order("blinkit", "ORDSTALE", at(date(2026, 8, 12)), "180",
+                      items=[{**chips, "category": "Snacks & biscuits"}, {**tea, "category": "Tea & coffee"}])
+        await self.call("record_orders", {"orders": [fresh]})
+        stale = await self.call("record_orders", {"orders": [{**fresh, "items": [chips, tea]}]})
+        self.assertEqual((stale["updated"], stale["unchanged"]), (0, 1))
+        # A changed line still rewrites the order; the uncategorised lines keep what they had.
+        more = await self.call("record_orders", {"orders": [{**fresh, "bill_total": "200",
+                                                              "items": [{**chips, "qty": 2, "line_price": "40"}, tea]}]})
+        self.assertEqual(more["updated"], 1)
+        got = await self.call("search_order_items", {"from": "2026-08-12", "to": "2026-08-12", "source": "blinkit"})
+        self.assertEqual({i["name"]: i["category"] for i in got["items"]},
+                         {"Potato Chips": "Snacks & biscuits", "Green Tea": "Tea & coffee"})
+
     async def test_rls_and_owner_lock(self) -> None:
         await self.call("record_orders", {"orders": [order("blinkit", "ORDRLS", at(date(2026, 8, 1)), "10")]})
         with member_session(self.app.state.engine, self.other) as s:
