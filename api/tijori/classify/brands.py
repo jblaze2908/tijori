@@ -1,4 +1,4 @@
-"""Shared brand dictionary (PLAN §7.4 step 3): brand patterns → canonical name → category.
+"""Shared brand dictionary: brand patterns → canonical name → category.
 
 Seeded from the 2026-09-26 regex prototype plus common Indian brands. Brands only: people,
 local shops and personal UPI handles never belong here; those are learned per member.

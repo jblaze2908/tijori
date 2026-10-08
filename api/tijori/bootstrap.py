@@ -1,5 +1,5 @@
 """Household and member bootstrap. Runs on the owner connection: the app role cannot create
-members, by design (PLAN §3: only the household admin invites)."""
+members, by design (only the household admin invites)."""
 
 from sqlalchemy import Engine, func, select
 from sqlalchemy.dialects.postgresql import insert

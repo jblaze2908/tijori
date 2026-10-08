@@ -1,4 +1,4 @@
-"""Statement reconciliation (PLAN §7.5): the lines must explain the footer to the paisa."""
+"""Statement reconciliation: the lines must explain the footer to the paisa."""
 
 from dataclasses import dataclass
 from datetime import date

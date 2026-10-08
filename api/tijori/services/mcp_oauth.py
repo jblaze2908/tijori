@@ -1,4 +1,4 @@
-"""OAuth 2.1 for MCP (PLAN §9 phase 2; MCP authorization, revision 2026-07-28): any MCP client signs in with
+"""OAuth 2.1 for MCP (MCP authorization, revision 2026-07-28): any MCP client signs in with
 the member's Google login instead of taking a pasted token.
 
 A client is a client ID metadata document (an HTTPS URL as client_id, fetched under SSRF guards) or registers

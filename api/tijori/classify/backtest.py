@@ -1,4 +1,4 @@
-"""classify_backtest (PLAN §7.4.5): replay history in time order, learning only from the past.
+"""classify_backtest: replay history in time order, learning only from the past.
 
 Rolling mode: month M is classified with payee memory built from labels of months < M, as if
 the member confirmed every earlier month. Fixed mode (`train_until`): memory comes only from

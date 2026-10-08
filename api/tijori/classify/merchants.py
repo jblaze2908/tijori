@@ -1,4 +1,4 @@
-"""Merchant normalization (PLAN §7.4 step 2) and payee identity.
+"""Merchant normalization and payee identity.
 
 Brand patterns compile once at import; per-txn cost is one scan over ~130 regexes.
 """

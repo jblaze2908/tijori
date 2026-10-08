@@ -9,7 +9,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 RESERVED = ("api", "health", "mcp", "auth", "oauth", ".well-known")
-# Self only: the UI bundles its fonts, so no third party sees a page load (PLAN §10).
+# Self only: the UI bundles its fonts, so no third party sees a page load.
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; "
        "img-src 'self' data:; connect-src 'self'; "
        "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'")

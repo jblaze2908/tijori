@@ -1,4 +1,4 @@
-"""Payee memory (PLAN §7.4 step 3.2): learned from confirmed categories, never from guesses."""
+"""Payee memory: learned from confirmed categories, never from guesses."""
 
 from collections import Counter, defaultdict
 from collections.abc import Iterable

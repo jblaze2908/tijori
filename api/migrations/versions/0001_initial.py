@@ -1,4 +1,4 @@
-"""Initial schema plus row-level security (PLAN §6, §10).
+"""Initial schema plus row-level security.
 
 Revision ID: 0001
 Revises: 

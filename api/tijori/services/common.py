@@ -77,7 +77,7 @@ def account_ref(account_id: int | None, institution: str | None, name: str | Non
 
 def txn_out(row: Any) -> dict[str, Any]:
     """API shape of one txn. UPI handles are shown in full: the member reads only their own data
-    (Jai's call, 2026-09-27). Anything leaving Tijori, such as MCP, must mask them itself."""
+    (a member only ever reads their own data). Anything leaving Tijori, such as MCP, must mask them itself."""
     t: Txn = row.Txn
     vpa, narration = t.vpa, t.narration
     return {

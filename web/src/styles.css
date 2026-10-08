@@ -3,7 +3,7 @@
 @font-face { font-family: "Geist Mono"; src: url("/fonts/GeistMono-Variable.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: swap }
 
 :root {
-  /* nullframe design system tokens, so Tijori and nullframe read as one family */
+  /* design system tokens shared with the author's other apps */
   color-scheme: dark;
   --bg: #121212; --s1: #1b1b1b; --s2: #242424; --s3: #2a2a2a; --s4: #303030;
   --line: #252525; --line-2: #303030;

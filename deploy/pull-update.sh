@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Pull-based deploy, same model as nullframe: the server pulls with a read-only deploy key,
-# so nothing outside host ever holds server access. Run by deploy/tijori.timer every 2 min.
+# Pull-based deploy: the server pulls with a read-only deploy key,
+# so nothing outside the server ever holds access to it. Run by deploy/tijori.timer every 2 min.
 # Under scale0 a stopped api is asleep, not down: the rollout goes through `scale0 restart tijori`
 # and the health check through the address scale0 holds, which wakes it. db and worker stay always on.
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/tijori}"

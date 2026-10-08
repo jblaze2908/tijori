@@ -1,4 +1,4 @@
-"""IMAP collector (PLAN §7.1): every 2 minutes, new mail in each member's label → raw store → parsers.
+"""IMAP collector: every 2 minutes, new mail in each member's label → raw store → parsers.
 
 Read-only on the mailbox: EXAMINE and BODY.PEEK, so nothing is marked read or moved. A UID watermark
 per mailbox (reset when UIDVALIDITY changes) makes each poll fetch only what is new. Every message is

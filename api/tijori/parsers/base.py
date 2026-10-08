@@ -1,4 +1,4 @@
-"""Parser plug-in contract (PLAN §7.1–7.2)."""
+"""Parser plug-in contract."""
 
 from dataclasses import dataclass, field
 from datetime import date

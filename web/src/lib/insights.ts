@@ -239,7 +239,7 @@ export function weekdayAverages(txns: Transaction[], from: ISODate, to: ISODate)
 
 const COMMITTED_CATEGORIES = new Set(["Bills & subscriptions", "Insurance"]);
 
-// Move server-side in M4 (recurring detection, PLAN §7.6).
+// Move server-side in M4 (recurring detection).
 /** Committed = recurring by nature (bills, insurance), a predicted ("expected") charge, or a known recurring payee;
  *  the rest is what you can cut. */
 export function committedSplit(txns: Transaction[], recurring: Recurring[] | null): { committed: Paise; discretionary: Paise } {
@@ -258,7 +258,7 @@ export function committedSplit(txns: Transaction[], recurring: Recurring[] | nul
 
 export type Alert = ServerAlert;
 
-// Move server-side in M4 (recurring/duplicate detection, PLAN §7.6).
+// Move server-side in M4 (recurring/duplicate detection).
 /** Same card, merchant, day and amount twice: likely a double charge worth disputing. */
 export function duplicateCharges(txns: Transaction[]): Alert[] {
   const seen = new Map<string, number>();
@@ -309,7 +309,7 @@ export function unusualAmounts(txns: Transaction[], history: Transaction[]): Ale
   return out;
 }
 
-// Move server-side in M4 (alert table, PLAN §6).
+// Move server-side in M4 (alert table).
 export const salaryCredits = (txns: Transaction[]): Alert[] =>
   txns
     .filter((t) => t.direction === "credit" && t.category === "Salary")
@@ -330,7 +330,7 @@ export const upcoming = <T extends { next_due: ISODate }>(items: T[], from: ISOD
 
 // ---------- net worth ----------
 
-// Move server-side in M4 (idle-cash nudge, PLAN §8 Net worth).
+// Move server-side in M4 (idle-cash nudge).
 /** The largest cash balance, when it's a meaningful share of net worth. */
 export function idleCash(s: Snapshot, minShare = 0.1) {
   const top = s.components.filter((c) => c.assetClass === "cash").sort((a, b) => b.amount - a.amount)[0];

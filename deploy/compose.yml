@@ -1,4 +1,4 @@
-# Tijori on host, from the repo root (deploy/pull-update.sh does this):
+# Tijori, from the repo root (deploy/pull-update.sh does this):
 #   docker compose -f deploy/compose.yml --env-file /etc/tijori/tijori.env up --detach --build --remove-orphans
 # Secrets come only from the env file (chmod 600, never committed); deploy/.env.example lists the names.
 name: tijori
@@ -23,7 +23,7 @@ services:
       timeout: 5s
       retries: 10
 
-  # One-shot: migrations run as the owner role before the API starts (PLAN §11).
+  # One-shot: migrations run as the owner role before the API starts.
   migrate:
     build:
       context: ..
@@ -47,7 +47,7 @@ services:
       # Runtime role: no superuser, no BYPASSRLS, so row-level security always applies.
       TIJORI_DATABASE_URL: postgresql+psycopg://tijori_app:${TIJORI_APP_DB_PASSWORD}@db:5432/tijori
       # Google sign-in; the api refuses to start in prod without these.
-      TIJORI_PUBLIC_URL: ${TIJORI_PUBLIC_URL:-https://tijori.example.com}
+      TIJORI_PUBLIC_URL: ${TIJORI_PUBLIC_URL:?set in the env file}
       TIJORI_OIDC_CLIENT_ID: ${TIJORI_OIDC_CLIENT_ID:?set in the env file}
       TIJORI_OIDC_CLIENT_SECRET: ${TIJORI_OIDC_CLIENT_SECRET:?set in the env file}
       # The one account that may sign in; every other member is refused.
@@ -66,7 +66,7 @@ services:
     volumes:
       - blobs:/data/blobs
     # docker0 gateway only (not public): Traefik reaches host services here. Under scale0
-    # (github.com/jblaze2908/scale0) the env file moves it to 127.0.0.1:8311 and scale0 holds 8310.
+    # (github.com/jblaze2908/scale0, scale-to-zero) the env file moves it to 127.0.0.1:8311 and scale0 holds 8310.
     ports:
       - "${TIJORI_BIND:-172.17.0.1}:${TIJORI_PORT:-8310}:8000"
     networks: [backend, edge]
@@ -74,8 +74,7 @@ services:
     tmpfs: [/tmp]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
-    # Traefik/the SSO proxy route: placeholders only. Enabling it is a network change, confirmed
-    # with Jai when it is made (PLAN §5). Alternative to the loopback port: join the proxy's network.
+    # Traefik route: placeholders only, off by default. Alternative to the loopback port: join the proxy's network.
     # labels:
     #   - traefik.enable=true
     #   - traefik.docker.network=<proxy-network>
@@ -96,7 +95,7 @@ services:
       TIJORI_ENV: prod
       TIJORI_DATABASE_URL: postgresql+psycopg://tijori_app:${TIJORI_APP_DB_PASSWORD}@db:5432/tijori
       # Settings validation in prod needs the sign-in pair even though the worker serves no pages.
-      TIJORI_PUBLIC_URL: ${TIJORI_PUBLIC_URL:-https://tijori.example.com}
+      TIJORI_PUBLIC_URL: ${TIJORI_PUBLIC_URL:?set in the env file}
       TIJORI_OIDC_CLIENT_ID: ${TIJORI_OIDC_CLIENT_ID:?set in the env file}
       TIJORI_OIDC_CLIENT_SECRET: ${TIJORI_OIDC_CLIENT_SECRET:?set in the env file}
       TIJORI_OWNER_EMAIL: ${TIJORI_OWNER_EMAIL:?set in the env file}

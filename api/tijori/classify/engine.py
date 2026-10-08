@@ -1,4 +1,4 @@
-"""Deterministic classifier (PLAN §7.4). No AI: rules, payee memory, brand dictionary, heuristics.
+"""Deterministic classifier. No AI: rules, payee memory, brand dictionary, heuristics.
 
 Resolution order, first hit wins:
   1. member rules (VPA > merchant > narration regex) — a correction always sticks

@@ -1,6 +1,6 @@
 """Default category taxonomy, seeded per household.
 
-`bucket` is the dashboard grouping (PLAN §8): everyday, oneoff and card make up expense;
+`bucket` is the dashboard grouping: everyday, oneoff and card make up expense;
 invest is money moved into assets; income is money earned; excluded never counts. A category with a
 `credit_bucket` (the people categories) counts money sent as spend and money received as income.
 """

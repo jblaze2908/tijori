@@ -84,7 +84,7 @@ Every endpoint that returns transactions uses this shape.
 | `merchant` | Normalised display name, or your own name for the payee (see Payee names) |
 | `named` | `true` when `merchant` is your name for the payee, so it wins over the UPI handle in lists |
 | `counterparty` | The payee as the bank printed it |
-| `vpa` | The UPI handle, in full (Jai's call, 2026-09-27: a member only ever reads their own data). Anything that sends data out of Tijori, such as MCP, must mask a person's handle itself |
+| `vpa` | The UPI handle, in full (a member only ever reads their own data). Anything that sends data out of Tijori, such as MCP, must mask a person's handle itself |
 | `payee_key` | The stable payee identity used by the Inbox and payee memory. It can contain `:` and `\|`, so URL-encode it in paths |
 | `account` | `null` when the txn has no account. `mask` is the last 4 digits only; `label` is ready to display: the account name (or institution) and `••` plus the mask |
 | `category` | `null` while the txn is in the Inbox |
@@ -1124,7 +1124,7 @@ Settings lists connected apps with the tokens (`kind` `app` or `token`, and `can
 
 ### Connecting a client (OAuth)
 
-Add `https://tijori.example.com/mcp` in the client. It finds everything else itself, following the MCP authorization spec (revision `2026-07-28`):
+Add `https://<your-host>/mcp` in the client. It finds everything else itself, following the MCP authorization spec (revision `2026-07-28`):
 
 - **Discovery:** `GET /.well-known/oauth-protected-resource/mcp` (also at the root path) names the resource and the authorization server, which is Tijori itself. `GET /.well-known/oauth-authorization-server` has the endpoints and says `S256`, client ID metadata documents and `iss` are supported.
 - **Client:** a client ID metadata document (an `https` URL as `client_id`) or `POST /oauth/register` (RFC 7591).

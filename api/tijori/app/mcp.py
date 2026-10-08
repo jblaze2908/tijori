@@ -1,4 +1,4 @@
-"""MCP server (PLAN §9): JSON-RPC over streamable HTTP at POST /mcp, one response per request.
+"""MCP server: JSON-RPC over streamable HTTP at POST /mcp, one response per request.
 
 The grouped tools ({action, args}) reach every operation; the ones agents call most also have a typed tool
 with the route's JSON Schema, and describe_action gives any other action's schema on request. All run the
@@ -9,7 +9,7 @@ MCP able to do what the API does.
 Auth is a bearer token only, never the site cookie: a pasted tjm_ token, or an OAuth access token from any
 MCP client (app/oauth.py), whose scope may be read-only. Per tools/call: one token check (lookup and
 last_used_at), then the route's own bind and queries. Person UPI handles are masked in all text returned,
-since the output leaves Tijori (PLAN §10); payee keys stay whole because the writes take them back.
+since the output leaves Tijori; payee keys stay whole because the writes take them back.
 """
 
 import base64

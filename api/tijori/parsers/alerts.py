@@ -1,4 +1,4 @@
-"""Transaction alert emails (PLAN §7.2): one sighting each, matched later to statement lines.
+"""Transaction alert emails: one sighting each, matched later to statement lines.
 
 Each rule is one sentence shape a bank sends. Only INR amounts are taken: a USD card alert is left
 to the statement, which prints the rupee charge. Alerts carry the account's last 4 digits in the

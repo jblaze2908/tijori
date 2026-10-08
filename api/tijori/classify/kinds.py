@@ -1,4 +1,4 @@
-"""Structural kind rules (PLAN §7.4 step 1). Order matters: first hit wins.
+"""Structural kind rules. Order matters: first hit wins.
 
 Fees precede investments (a bounced Groww mandate is a fee), reversals precede self-transfer
 (a reversal names your own handle), and redemptions precede interest ("PRIN AND INT").

@@ -9,9 +9,9 @@ The backend for Tijori. It covers:
 - the same-origin UI,
 - the one-off legacy import.
 
-The design lives in [`../PLAN.md`](../PLAN.md), the HTTP contract in [`../docs/api.md`](../docs/api.md), and deployment in [`../docs/deploy.md`](../docs/deploy.md).
+The HTTP contract lives in [`../docs/api.md`](../docs/api.md), and deployment in [`../docs/deploy.md`](../docs/deploy.md).
 
-The stack is FastAPI, SQLAlchemy 2, Alembic, pydantic/pydantic-settings, psycopg 3, uvicorn, and `cryptography` for SecretBox. PDFs are read by OS tools: `pdftotext` (poppler-utils) and `qpdf`. Tests are limited to the MCP tools (`tests/`, stdlib `unittest`, no extra dependency); otherwise there are none, by Jai's decision on 2026-09-26:
+The stack is FastAPI, SQLAlchemy 2, Alembic, pydantic/pydantic-settings, psycopg 3, uvicorn, and `cryptography` for SecretBox. PDFs are read by OS tools: `pdftotext` (poppler-utils) and `qpdf`. Tests cover the MCP tools and the orders and freshness services (`tests/`, stdlib `unittest`, no extra dependency):
 
 ```sh
 uv run python -m unittest discover -s tests      # offline; the database tests skip

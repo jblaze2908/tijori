@@ -1,4 +1,4 @@
-"""Statement ingest: raw store → parse → resolve → classify → reconcile (PLAN §7.1–7.5), run
+"""Statement ingest: raw store → parse → resolve → classify → reconcile, run
 synchronously for uploads inside the caller's member-scoped session."""
 
 import hashlib

@@ -1,4 +1,4 @@
-"""Database schema (PLAN §6). Every table holding personal data carries `member_id` so
+"""Database schema. Every table holding personal data carries `member_id` so
 row-level security can scope it; see migrations/versions/0001_initial.py for the policies."""
 
 from datetime import date, datetime

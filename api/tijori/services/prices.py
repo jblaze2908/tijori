@@ -1,4 +1,4 @@
-"""Daily prices, kept only for ISINs someone holds: mutual fund NAVs from AMFI (PLAN §7.7), and share and ETF
+"""Daily prices, kept only for ISINs someone holds: mutual fund NAVs from AMFI, and share and ETF
 closes from NSE's end-of-day file (the bhavcopy).
 
 One HTTPS GET of portal.amfiindia.com's NAVAll.txt (≈1.5 MB, every scheme's latest NAV) per day, run

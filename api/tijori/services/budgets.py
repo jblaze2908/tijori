@@ -1,4 +1,4 @@
-"""Monthly budgets per category (PLAN §8): limit, optional rollover of last cycle's unspent amount, and
+"""Monthly budgets per category: limit, optional rollover of last cycle's unspent amount, and
 pace. Spend uses the one spend definition (reports.is_expense). Two grouped queries per call."""
 
 from datetime import date, timedelta

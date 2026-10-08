@@ -9,6 +9,8 @@ ENV_FILE="${TIJORI_ENV_FILE:-/etc/tijori/tijori.env}"
 BACKUP_DIR="${TIJORI_BACKUP_DIR:-/var/backups/tijori}"
 export RESTIC_REPOSITORY="${RESTIC_REPOSITORY:-rclone:tijori-drive:tijori-backup}"
 export RESTIC_PASSWORD_FILE="${RESTIC_PASSWORD_FILE:-/etc/tijori/restic.pass}"
+# Snapshots are tagged with this host; keep it stable across moves so retention still applies.
+RESTIC_HOST="${RESTIC_HOST:-$(hostname)}"
 
 cd "$DEPLOY_DIR"
 install -d -m 700 "$BACKUP_DIR"
@@ -29,15 +31,15 @@ chmod 600 "$dump"
 
 checked=""
 restic cat config >/dev/null 2>&1 || restic init
-restic backup --host host --tag nightly "$dump" "$blobs"
-restic forget --host host --tag nightly --keep-daily 7 --keep-weekly 4 --keep-monthly 12 --prune
+restic backup --host "$RESTIC_HOST" --tag nightly "$dump" "$blobs"
+restic forget --host "$RESTIC_HOST" --tag nightly --keep-daily 7 --keep-weekly 4 --keep-monthly 12 --prune
 
 # On the 1st (or VERIFY=1): prove it restores. The dump must list its table data, and a sample of the
 # repository is read back and checked.
 if [[ "$(date +%d)" == "01" || "${VERIFY:-0}" == "1" ]]; then
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
-  restic restore latest --host host --target "$tmp" --include "$dump"
+  restic restore latest --host "$RESTIC_HOST" --target "$tmp" --include "$dump"
   tables="$(compose exec -T db pg_restore --list <"$tmp$dump" | grep -c 'TABLE DATA')"
   [[ "$tables" -gt 20 ]] || { echo "restored dump lists only $tables tables" >&2; exit 1; }
   restic check --read-data-subset=5%
