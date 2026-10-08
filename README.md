@@ -36,11 +36,11 @@ In `TIJORI_ENV=dev` the header `X-Tijori-Dev-Member` stands in for Google sign-i
 ## Self-host
 
 ```sh
-cp deploy/.env.example /etc/tijori/tijori.env && chmod 600 /etc/tijori/tijori.env   # fill it in
-docker compose -f deploy/compose.yml --env-file /etc/tijori/tijori.env up --detach --build
+cp deploy/.env.example deploy/.env && chmod 600 deploy/.env   # fill it in
+docker compose -f deploy/compose.yml --env-file deploy/.env up --detach --build
 ```
 
-You need a Google OAuth client (redirect `{TIJORI_PUBLIC_URL}/auth/callback`), a master key (`openssl rand -base64 32`), and a reverse proxy with TLS in front of the api's port. Only `TIJORI_OWNER_EMAIL` can sign in. [`docs/deploy.md`](docs/deploy.md) has the auto-deploy timer, backups and restore.
+Runs on any machine with Docker: a laptop, a home server, any VPS. You need a Google OAuth client, a master key (`openssl rand -base64 32`) and a reverse proxy with TLS. Only `TIJORI_OWNER_EMAIL` can sign in. **[`docs/deploy.md`](docs/deploy.md)** is the full guide: requirements, env setup, Google and mail setup, Caddy/nginx/Traefik, backups, updates, optional auto-deploy and troubleshooting.
 
 ## Configuration
 

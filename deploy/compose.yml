@@ -65,10 +65,10 @@ services:
         condition: service_completed_successfully
     volumes:
       - blobs:/data/blobs
-    # docker0 gateway only (not public): Traefik reaches host services here. Under scale0
-    # (github.com/jblaze2908/scale0, scale-to-zero) the env file moves it to 127.0.0.1:8311 and scale0 holds 8310.
+    # Loopback by default: a reverse proxy on the host terminates TLS (docs/deploy.md). A proxy in Docker
+    # needs TIJORI_BIND=172.17.0.1 instead; a scale-to-zero proxy can take 8310 and move the api to another port.
     ports:
-      - "${TIJORI_BIND:-172.17.0.1}:${TIJORI_PORT:-8310}:8000"
+      - "${TIJORI_BIND:-127.0.0.1}:${TIJORI_PORT:-8310}:8000"
     networks: [backend, edge]
     read_only: true
     tmpfs: [/tmp]

@@ -3,14 +3,14 @@ set -euo pipefail
 
 # Pull-based deploy: the server pulls with a read-only deploy key,
 # so nothing outside the server ever holds access to it. Run by deploy/tijori.timer every 2 min.
-# Under scale0 a stopped api is asleep, not down: the rollout goes through `scale0 restart tijori`
-# and the health check through the address scale0 holds, which wakes it. db and worker stay always on.
+# Optional scale-to-zero: if scale0 (github.com/jblaze2908/scale0) manages tijori, a stopped api is asleep, not
+# down: the rollout goes through `scale0 restart tijori` and the health check wakes it. db and worker stay on.
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/tijori}"
 ENV_FILE="${TIJORI_ENV_FILE:-/etc/tijori/tijori.env}"
 BRANCH="${DEPLOY_BRANCH:-main}"
 STATE_DIR="${TIJORI_STATE_DIR:-/var/lib/tijori}"
 BACKUP_DIR="${TIJORI_BACKUP_DIR:-/var/backups/tijori}"
-HEALTH_URL="${TIJORI_HEALTH_URL:-http://172.17.0.1:8310/health}"
+HEALTH_URL="${TIJORI_HEALTH_URL:-http://127.0.0.1:8310/health}"
 export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -i /root/.ssh/tijori_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes}"
 
 # A build can outlast the 2-min timer interval; overlapping runs would race on checkout.
