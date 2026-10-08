@@ -979,7 +979,7 @@ Pushes go through ntfy (`TIJORI_NTFY_URL`, with `TIJORI_NTFY_TOKEN` when the ser
 
 ## Orders
 
-Blinkit and Zomato orders, as the line items behind a txn. A bot reads them from the apps (Pitcrew) and posts them here. Tijori keeps them, matches each to the debit that paid it, and makes items searchable.
+Blinkit, Zomato and Amazon orders, as the line items behind a txn. A bot reads them from the apps (Pitcrew) and posts them here. Tijori keeps them, matches each to the debit that paid it, and makes items searchable.
 
 ### `POST /api/orders`
 
@@ -995,22 +995,23 @@ Upserts up to 200 orders by `(source, order_no)`. Resending an order changes not
 
 | Field | Notes |
 |---|---|
-| `source` | `blinkit` or `zomato` |
-| `order_no` | 1–64 of `A-Z a-z 0-9 _ -` |
-| `placed_at` | With its offset. Zomato's history prints no year, so take it from the month the bot asked for |
-| `status` | `delivered`, `cancelled` or `pending`. Only delivered orders are matched |
+| `source` | `blinkit`, `zomato` or `amazon` |
+| `order_no` | 1–64 of `A-Z a-z 0-9 _ -` (Amazon's `406-3765602-0818736` as shown) |
+| `placed_at` | With its offset. Zomato's history prints no year, so take it from the month the bot asked for. Amazon shows only the date: send midnight IST |
+| `status` | `delivered`, `cancelled`, `pending` or `unknown` (the receipt shows none, as on older Amazon orders). Delivered and unknown orders are matched |
 | `store` | The restaurant, on a Zomato order |
 | `category` | Up to 60 chars: an agent's label for the whole order ("Eating out"; for Blinkit, where most of the money went). It never changes the txn's category or totals |
-| `charges` | Up to 20 named amounts (`[a-z0-9_]`). Discounts are negative |
+| `charges` | Up to 20 named amounts (`[a-z0-9_]`, so `shipping`, not `Shipping`). Discounts are negative |
+| `bill_total` | What was paid, after discounts (Amazon's grand total). Required: a cancelled order that shows none sends `"0"` |
 | `items[]` | `name`, `qty` (1–999), and optional `unit`, `line_price`, `unit_price`, `note` (add-ons), `category` (e.g. "Snacks & biscuits"). Zomato's history gives no prices |
 
 Returns `{"received", "created", "updated", "unchanged", "states": {"matched": 1}, "orders": [{"source", "order_no", "match_state", "txn_id"}]}`. A batch naming one order twice gets 422.
 
 **Matching.** Each open order of yours is matched again after every post, after every statement or alert Tijori reads, and when the worker starts. So an order recorded before its debit arrives (an SBI line comes only with the next statement) links when that debit lands. One query fetches the candidate debits.
-- An order matches a debit of its brand's payee (`brand:blinkit`, `brand:zomato`) with the same amount to the paisa, on the order day or the next.
-- Orders placed in the same minute may share one debit for their sum.
+- An order matches a debit of its brand's payee (`brand:blinkit`, `brand:zomato`, `brand:amazon`) with the same amount to the paisa: on the order day or the next, or for Amazon from the day before to two days after.
+- Orders placed in the same minute may share one debit for their sum. For Amazon, orders of the same day may: one checkout becomes an order per seller and is charged once.
 - If two orders could take one debit, both are `ambiguous`; Tijori never guesses.
-- Measured on 2026-10-07: 107 of 131 Blinkit orders and 15 of 20 Zomato orders matched this way, none ambiguously.
+- Measured on 2026-10-07: 107 of 131 Blinkit orders and 15 of 20 Zomato orders matched this way, none ambiguously. On 2026-10-08, 72 of 145 Amazon orders (51 one-to-one, 21 in same-day groups); most of the rest were paid from Amazon Pay balance, on delivery, or from cards Tijori doesn't read.
 
 | `match_state` | Meaning |
 |---|---|
@@ -1021,7 +1022,7 @@ Returns `{"received", "created", "updated", "unchanged", "states": {"matched": 1
 | `cancelled` | Never matched |
 
 **Paid from an account Tijori doesn't see** (a meal card): nothing is guessed.
-- **Card on the receipt:** when the order's `payment` ends in the last 4 digits of exactly one of your accounts (`Paid via Card (XXXX XXXX 0001)`), the order goes on that account at once.
+- **Card on the receipt:** when the order's `payment` ends in the last 4 digits of exactly one of your accounts (`Paid via Card (XXXX XXXX 0001)`), the order goes on that account at once. Not when it also names a balance (`Visa ending in 0003 · Amazon Pay Balance`): the card paid only part.
 - **Assigned by hand:** otherwise someone assigns it (below). Zomato's history never says how an order was paid.
 - **What the account gets:** a txn built from the receipt, with `sources: ["order"]`, `rule_id` `order:card` or `order:assigned`, and the brand's category (Groceries, Eating out).
 - **Out of totals:** its `bucket` is `excluded`, because the money arrived where Tijori never saw it, so counting the spend would be one-sided. Filing it under another category, or back to the Inbox, keeps it excluded.
@@ -1051,7 +1052,7 @@ Items, not txns.
 | Param | Notes |
 |---|---|
 | `q` | 1–100 chars. Case-insensitive match on the item, its add-ons, its category, the restaurant or the delivery address. `%` and `_` match literally |
-| `source` | `blinkit` or `zomato` |
+| `source` | `blinkit`, `zomato` or `amazon` |
 | `store` | Text in the restaurant name |
 | `category` | An item category, any case; `none` for uncategorised items. An order's category never stands in for its items, so a Zomato agent sets it on each item too |
 | `from`, `to` | `YYYY-MM-DD`, IST, inclusive |

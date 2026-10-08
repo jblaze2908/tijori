@@ -373,7 +373,9 @@ function OrderBlock({ o, account, accountId }: { o: ApiOrder; account: string; a
             </>
           )}
           {" · "}
-          {o.status} {dayShort(dayIST(o.placed_at))}, {timeIST(o.placed_at)}
+          {o.status !== "unknown" && `${o.status} `}
+          {dayShort(dayIST(o.placed_at))}
+          {o.source !== "amazon" && `, ${timeIST(o.placed_at)}`}
           {(zomato ? o.store : o.delivery_address) && (
             <>
               <br />

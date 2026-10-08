@@ -160,7 +160,7 @@ def raw_attachment(request: Request, db: MemberDep, attachment_id: Annotated[int
 def search_order_items(
     db: MemberDep,
     q: Annotated[str | None, Query(min_length=1, max_length=100, description="text in the item, add-ons, category, restaurant or delivery address")] = None,
-    source: Literal["blinkit", "zomato"] | None = None,
+    source: Literal["blinkit", "zomato", "amazon"] | None = None,
     store: Annotated[str | None, Query(min_length=1, max_length=100, description="text in the restaurant name")] = None,
     category: Annotated[str | None, Query(min_length=1, max_length=60, description="an item category, any case; none for uncategorised items")] = None,
     date_from: Annotated[date | None, Query(alias="from")] = None,

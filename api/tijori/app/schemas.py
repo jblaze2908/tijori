@@ -1377,10 +1377,10 @@ class OrderIn(BaseModel):
         "address_label": "Home", "category": "Groceries", "item_total": "1082", "charges": {"handling_charge": "9", "product_discount": "-194"},
         "bill_total": "1092", "items": [{"name": "Instant Coffee", "unit": "100 g", "qty": 1, "line_price": "769",
                                          "unit_price": "769", "category": "Tea & coffee"}]}]})
-    source: Literal["blinkit", "zomato"]
+    source: Literal["blinkit", "zomato", "amazon"]
     order_no: Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")]
     placed_at: AwareDatetime  # with its offset, e.g. +05:30; Zomato's list has no year, so take it from the month asked for
-    status: Literal["delivered", "cancelled", "pending"]
+    status: Literal["delivered", "cancelled", "pending", "unknown"]  # unknown: the receipt shows none (older Amazon orders)
     payment: Annotated[str, Field(max_length=80)] | None = None
     store: Annotated[str, Field(max_length=160)] | None = None
     delivery_address: Annotated[str, Field(max_length=500)] | None = None
@@ -1468,7 +1468,7 @@ class ItemCategoryOut(BaseModel):
 
 class OrderKey(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    source: Literal["blinkit", "zomato"]
+    source: Literal["blinkit", "zomato", "amazon"]
     order_no: Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")]
 
 

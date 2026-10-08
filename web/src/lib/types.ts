@@ -600,7 +600,7 @@ export interface ParseQueue {
 
 // ---------- orders (docs/api.md "Orders") ----------
 
-export type OrderSource = "blinkit" | "zomato";
+export type OrderSource = "blinkit" | "zomato" | "amazon";
 export type MatchState = "matched" | "assigned" | "unmatched" | "ambiguous" | "cancelled";
 /** "always": this product (source, name, pack) in every past and later order. */
 export type ItemCategoryScope = "this" | "always";
@@ -622,7 +622,7 @@ export interface ApiOrder {
   source: OrderSource;
   order_no: string;
   placed_at: string;
-  status: "delivered" | "cancelled" | "pending";
+  status: "delivered" | "cancelled" | "pending" | "unknown";
   payment: string | null;
   store: string | null;
   delivery_address: string | null;

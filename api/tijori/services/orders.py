@@ -1,9 +1,11 @@
-"""Merchant orders (docs/api.md, Orders): Blinkit and Zomato receipts as the line items behind a txn.
+"""Merchant orders (docs/api.md, Orders): Blinkit, Zomato and Amazon receipts as the line items behind a txn.
 
 record() upserts a batch by (source, order_no), then re-matches every open order of the member against one query
-of candidate debits. A debit matches when it is the brand's payee, the same amount to the paisa, on the order day or
-the next (measured 2026-10-07: 107 of 131 Blinkit and 15 of 20 Zomato orders matched this way, none ambiguously).
-Orders placed in the same minute may share one debit. Nothing is guessed past that: an order no debit pays is put on
+of candidate debits. A debit matches when it is the brand's payee, the same amount to the paisa, inside the source's
+WINDOW of days (measured 2026-10-07: 107 of 131 Blinkit and 15 of 20 Zomato orders matched this way, none ambiguously).
+Orders placed together may share one debit: in the same minute, or for Amazon the same day, since one checkout splits
+into an order per seller and is charged once (measured 2026-10-08 over 145 Amazon orders: 51 one-to-one and 21 in
+same-day groups, none ambiguously). Nothing is guessed past that: an order no debit pays is put on
 an account only when its receipt names the card (`payment` ends in an account's last 4 digits) or when someone
 assigns it (assign()). That txn is built from the receipt and kept out of totals (bucket excluded): it was paid from
 money Tijori never saw arrive, such as a meal card, so counting the spend would be one-sided. A debit that turns up
@@ -32,11 +34,15 @@ from tijori.money import fmt
 from tijori.services.common import IST, audit, category_by_ref, sha256_hex
 from tijori.services.errors import Invalid, NotFound
 
-SOURCES = ("blinkit", "zomato")  # each is also its brand key in classify/brands.py
+SOURCES = ("blinkit", "zomato", "amazon")  # each is also its brand key in classify/brands.py
 OPEN = ("unmatched", "ambiguous", "assigned")
-MATCH_LAG_DAYS = 1
+PAID = ("delivered", "unknown")  # Amazon's older receipts show no status, but it charged them at checkout
+# Debit day minus order day. Amazon's 51 one-to-one matches fell at -1 (3), 0 (40), 1 (5), 2 (2), 7 (1) days.
+WINDOW = {"blinkit": (0, 1), "zomato": (0, 1), "amazon": (-1, 2)}
+TOGETHER = {"amazon": "day"}  # else "minute"; Amazon's order pages show only the date
 CARD_RULE, ASSIGNED_RULE = "order:card", "order:assigned"  # receipt txn's rule_id: the card on the receipt, or a person
 LAST4 = re.compile(r"(?<!\d)\d{4}(?!\d)")  # "Paid via Card (XXXX XXXX 0001)"
+SPLIT = re.compile(r"balance", re.IGNORECASE)  # "Visa ending in 0003 · Amazon Pay Balance": the card paid only part of the bill
 _BRANDS = {b.key: b for b in BRANDS if b.key in SOURCES}
 
 
@@ -181,7 +187,7 @@ def rematch(s: Session, ctx: MemberContext) -> None:
             _unlink(s, ctx, o)
             o.match_state = "cancelled"
     # A matched order whose debit was deleted (txn_id set null) is open again.
-    live = [o for o in orders if o.status == "delivered" and (o.match_state in OPEN or o.txn_id is None)]
+    live = [o for o in orders if o.status in PAID and (o.match_state in OPEN or o.txn_id is None)]
     if not live:
         return
     days = [_day(o.placed_at) for o in live]
@@ -190,11 +196,14 @@ def rematch(s: Session, ctx: MemberContext) -> None:
     debits = s.execute(select(Txn.id, Txn.payee_key, Txn.occurred_at, Txn.amount).where(
         Txn.member_id == ctx.member_id, Txn.direction == "debit", Txn.split_of.is_(None),
         Txn.payee_key.in_([f"brand:{o.source}" for o in live]), ~Txn.sources.contains(["order"]),
-        Txn.occurred_at.between(min(days), max(days) + timedelta(days=MATCH_LAG_DAYS)), Txn.id.not_in(claimed))).all()
+        Txn.occurred_at.between(min(days) + timedelta(days=min(WINDOW[o.source][0] for o in live)),
+                                max(days) + timedelta(days=max(WINDOW[o.source][1] for o in live))),
+        Txn.id.not_in(claimed))).all()
 
     def fits(source: str, day: date, amount: Decimal) -> list[int]:
+        lo, hi = WINDOW[source]
         return [d.id for d in debits if d.payee_key == f"brand:{source}" and d.amount == amount
-                and 0 <= (d.occurred_at - day).days <= MATCH_LAG_DAYS]
+                and lo <= (d.occurred_at - day).days <= hi]
 
     cands = {o.id: fits(o.source, _day(o.placed_at), o.bill_total) for o in live}
     uses: dict[int, int] = defaultdict(int)
@@ -207,19 +216,22 @@ def rematch(s: Session, ctx: MemberContext) -> None:
         if len(c) == 1 and uses[c[0]] == 1:
             to[o.id] = c[0]
     taken = set(to.values())
-    together: dict[tuple[str, datetime], list[MerchantOrder]] = defaultdict(list)
+    together: dict[tuple[str, date | datetime], list[MerchantOrder]] = defaultdict(list)
     for o in live:
         if not cands[o.id]:
-            together[(o.source, o.placed_at.replace(second=0, microsecond=0))].append(o)
-    for (source, at), group in together.items():
+            at = _day(o.placed_at) if TOGETHER.get(o.source) == "day" else o.placed_at.replace(second=0, microsecond=0)
+            together[(o.source, at)].append(o)
+    for (source, _), group in together.items():
         if len(group) > 1:
-            c = [d for d in fits(source, _day(at), sum((o.bill_total for o in group), Decimal(0))) if d not in taken]
+            c = [d for d in fits(source, _day(group[0].placed_at), sum((o.bill_total for o in group), Decimal(0)))
+                 if d not in taken]
             if len(c) == 1:
                 taken.add(c[0])
                 to.update({o.id: c[0] for o in group})
     cards = _cards(s, ctx.member_id)
     for o in live:
-        card = next((cards[d] for d in reversed(LAST4.findall(o.payment or "")) if d in cards), None)
+        card = None if SPLIT.search(o.payment or "") else next(
+            (cards[d] for d in reversed(LAST4.findall(o.payment or "")) if d in cards), None)
         if o.id in to:
             if o.match_state == "assigned":
                 _unlink(s, ctx, o)

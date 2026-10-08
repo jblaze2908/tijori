@@ -21,6 +21,7 @@ const PRESETS: [Preset, string][] = [
 const SOURCES: [OrderSource, string][] = [
   ["blinkit", "Blinkit"],
   ["zomato", "Zomato"],
+  ["amazon", "Amazon"],
 ];
 const STATE: Record<MatchState, string> = { matched: "matched", assigned: "on another account", unmatched: "unmatched", ambiguous: "ambiguous", cancelled: "cancelled" };
 
@@ -284,7 +285,7 @@ function Table({ items, loading, openId, open }: { items: OrderItemHit[]; loadin
               <span>{catName(i.category)}</span>
             </span>
             <span className="c-ord nmcol">
-              <span>{i.source === "zomato" ? (i.store ?? "Zomato") : "Blinkit"}</span>
+              <span>{i.source === "zomato" ? (i.store ?? "Zomato") : SOURCES.find(([s]) => s === i.source)?.[1]}</span>
               <small className="faint">{STATE[i.match_state] ?? i.match_state}</small>
             </span>
             <span className="c-amt">{i.line_price != null && i.note !== "unavailable" ? inr(toPaise(i.line_price)) : <span className="faint">—</span>}</span>

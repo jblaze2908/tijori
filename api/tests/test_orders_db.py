@@ -183,6 +183,30 @@ class OrdersDB(unittest.IsolatedAsyncioTestCase):
         back = await self.call("assign_orders", {"orders": [{"source": "zomato", "order_no": "ZF"}], "account_id": None})
         self.assertEqual((off["orders"][0]["match_state"], back["orders"][0]["match_state"]), ("assigned", "ambiguous"))
 
+    async def test_amazon_orders(self) -> None:
+        with Session(self.admin) as s, s.begin():
+            for n, (d, amount) in enumerate(((date(2026, 7, 14), "1499"), (date(2026, 7, 21), "1188"))):
+                s.add(Txn(member_id=self.owner.member_id, account_id=self.bank, occurred_at=d, amount=Decimal(amount),
+                          direction="debit", kind="spend", payee_key="brand:amazon", dedupe_key=f"{self.tag}amz{n}"))
+        midnight = lambda d: at(d, 0)  # Amazon's order pages show only the date
+        batch = [
+            {**order("amazon", "406-0000000-0000001", midnight(date(2026, 7, 15)), "1499"), "status": "unknown"},
+            # One checkout, two sellers: two orders, one charge the next day.
+            order("amazon", "406-0000000-0000002", midnight(date(2026, 7, 20)), "389", charges={"shipping": "0"}),
+            order("amazon", "406-0000000-0000003", midnight(date(2026, 7, 20)), "799"),
+            # The card paid only what the balance didn't, so the receipt's card can't take the whole bill.
+            order("amazon", "406-0000000-0000004", midnight(date(2026, 7, 22)), "250",
+                  payment="Visaending in 0002Amazon Pay Balance"),
+        ]
+        item = {"name": "USB-C cable", "qty": 1, "note": "Sold by Example Retail"}  # the seller rides in the note
+        out = await self.call("record_orders", {"orders": [{**o, "items": [item]} for o in batch]})
+        states = {o["order_no"][-1]: o for o in out["orders"]}
+        self.assertEqual({k: v["match_state"] for k, v in states.items()},
+                         {"1": "matched", "2": "matched", "3": "matched", "4": "unmatched"})
+        self.assertEqual(states["2"]["txn_id"], states["3"]["txn_id"])
+        found = await self.call("search_order_items", {"source": "amazon"})
+        self.assertEqual(found["totals"]["orders"], 4)
+
     async def test_statement_links_an_order_recorded_before_its_debit(self) -> None:
         late = order("zomato", "ZLATE", at(date(2026, 8, 20), 20, 5), "777.77", store="Momo Place")
         self.assertEqual((await self.call("record_orders", {"orders": [late]}))["orders"][0]["match_state"], "unmatched")
