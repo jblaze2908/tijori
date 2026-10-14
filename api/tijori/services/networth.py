@@ -11,11 +11,11 @@ from sqlalchemy.orm import Session
 
 from tijori.db import MemberContext
 from tijori.legacy import SheetRow
-from tijori.models import Account, ComponentValue, Holding, Price, Snapshot, Statement, Txn
+from tijori.models import Account, ComponentValue, Holding, Observation, Price, Snapshot, Statement, Txn
 from tijori.money import ZERO, fmt
 from tijori.services.common import audit
 from tijori.services import loans
-from tijori.services.recurring import balances
+from tijori.services.recurring import alerts_from, balances
 
 COMPONENT_KEYS = ("sbi", "hdfc", "fd", "stocks", "mf", "ppf", "epf", "gold", "other")
 MANUAL_KEYS = ("epf", "gold", "other")  # no feed: the member sets these; the rest come from statements and prices
@@ -155,6 +155,10 @@ def _add_months(d: date, n: int) -> date:
     return date(d.year + y, m + 1, min(d.day, 28))
 
 
+def _equity_key(isin: str | None, name: str | None) -> str:
+    return "stocks" if (isin or "").startswith("INE") or ETF.search(name or "") else "mf"
+
+
 def _priced(s: Session, member_id: int, today: date) -> dict[str, tuple[Decimal, date, date]]:
     """Stocks and funds at the newest daily price (NSE close, AMFI NAV) on the latest CAS holdings; only when
     a price is newer than the CAS. Units bought since the CAS show up with the next one. One query."""
@@ -170,7 +174,7 @@ def _priced(s: Session, member_id: int, today: date) -> dict[str, tuple[Decimal,
     for isin, name, units, close, day in rows:
         if close is None:
             continue
-        key = "stocks" if (isin or "").startswith("INE") or ETF.search(name or "") else "mf"
+        key = _equity_key(isin, name)
         v = out.setdefault(key, [ZERO, latest])
         v[0] += (units * close).quantize(Decimal("0.01"))
         v[1] = max(v[1], day)
@@ -346,6 +350,101 @@ def live(s: Session, member_id: int, today: date) -> dict[str, Any]:
     return {"as_of": today, "net_worth": fmt(total), "liquid": fmt(liquid), "components": comps,
             "by_asset_class": {k: fmt(v) for k, v in by_class.items()}, "changes": changes,
             "history": history, "months": months, "projection": projection}
+
+
+def _bank_days(s: Session, member_id: int, institution: str, today: date) -> list[Entry]:
+    """Each day's balance summed over the institution's accounts: the newest balance printed that day (statement
+    lines, balance mails), then pending alerts after the newest one, as `recurring.balances` does. Three queries."""
+    ids = list(s.scalars(select(Account.id).where(Account.member_id == member_id, Account.kind == "bank",
+                                                  func.upper(Account.institution) == institution)))
+    per: dict[int, dict[date, Decimal]] = {}
+    anchor: dict[int, date] = {}
+    for aid, day, bal, parser in s.execute(
+            select(Observation.account_id, Observation.occurred_at, Observation.balance_after, Observation.parser)
+            .where(Observation.member_id == member_id, Observation.account_id.in_(ids or [0]),
+                   Observation.balance_after.is_not(None), Observation.occurred_at <= today)
+            .order_by(Observation.occurred_at, Observation.id)):
+        per.setdefault(aid, {})[day] = bal
+        anchor[aid] = alerts_from(day, parser)
+    for aid, day, direction, amount in s.execute(
+            select(Txn.account_id, Txn.occurred_at, Txn.direction, Txn.amount)
+            .where(Txn.member_id == member_id, Txn.account_id.in_(list(anchor) or [0]), Txn.status == "pending",
+                   Txn.split_of.is_(None), Txn.occurred_at <= today)
+            .order_by(Txn.occurred_at, Txn.id)):
+        if day < anchor[aid]:
+            continue
+        days = per[aid]
+        now = days[max(days)]
+        days[day] = now + amount if direction == "credit" else now - amount
+    held: dict[int, Decimal] = {}
+    out: list[Entry] = []
+    for day in sorted({d for days in per.values() for d in days}):
+        held.update({aid: days[day] for aid, days in per.items() if day in days})
+        out.append((day, sum(held.values(), ZERO), "statement", day))
+    return out
+
+
+def _priced_days(s: Session, member_id: int, today: date) -> dict[str, list[Entry]]:
+    """Stocks and funds on every day a price is stored: the newest CAS on or before it × each holding's newest
+    price up to that day, kept only when a price is newer than that CAS, as `_priced` does. Two queries."""
+    cas: dict[date, list[tuple[str, str, Decimal]]] = {}
+    for as_of, isin, name, units in s.execute(
+            select(Holding.as_of, Holding.isin, Holding.name, Holding.units)
+            .where(Holding.member_id == member_id, Holding.source == "cdsl_cas", Holding.isin.is_not(None),
+                   Holding.as_of <= today)):
+        cas.setdefault(as_of, []).append((isin, name, units))
+    if not cas:
+        return {}
+    isins = {i for rows in cas.values() for i, _, _ in rows}
+    by_day: dict[date, list[tuple[str, Decimal]]] = {}
+    for isin, day, close in s.execute(select(Price.isin_or_symbol, Price.date, Price.close)
+                                      .where(Price.isin_or_symbol.in_(isins), Price.date <= today)):
+        by_day.setdefault(day, []).append((isin, close))
+    cas_days = sorted(cas)
+    last: dict[str, tuple[Decimal, date]] = {}
+    out: dict[str, list[Entry]] = {}
+    for day in sorted(by_day):
+        last.update({isin: (close, day) for isin, close in by_day[day]})
+        c = max((d for d in cas_days if d <= day), default=None)
+        if c is None:
+            continue
+        sums: dict[str, list[Any]] = {}
+        for isin, name, units in cas[c]:
+            if isin not in last:
+                continue
+            close, px_day = last[isin]
+            v = sums.setdefault(_equity_key(isin, name), [ZERO, c])
+            v[0] += (units * close).quantize(Decimal("0.01"))
+            v[1] = max(v[1], px_day)
+        for key, (amount, newest) in sums.items():
+            if newest > c:
+                out.setdefault(key, []).append((day, amount, "prices", c))
+    return out
+
+
+def component_history(s: Session, member_id: int, key: str, today: date) -> dict[str, Any]:
+    """One component's value on every day from its first known value to today, ending at what `live` shows.
+    Banks read every printed balance; stocks and funds every stored price (none before prices were collected,
+    so the CAS steps until then); the rest carry each value forward. Per request, at most ~8 queries."""
+    bank = {v: k for k, v in BANK_KEYS.items()}.get(key)
+    if bank:
+        series = _bank_days(s, member_id, bank, today)
+        bought: list[tuple[date, Decimal]] = []
+        priced_from = None
+    else:
+        series = _series(s, member_id, today).get(key, [])
+        priced = _priced_days(s, member_id, today).get(key, []) if key in ("stocks", "mf") else []
+        priced_from = priced[0][0] if priced else None
+        series = sorted(series + priced, key=lambda e: e[0])
+        bought = _bought(s, member_id, series[0][0]).get(key, []) if series else []
+    points, d, i = [], series[0][0] if series else today, -1
+    while series and d <= today:
+        while i + 1 < len(series) and series[i + 1][0] <= d:
+            i += 1
+        e = series[i]
+        points.append({"date": d, "value": fmt(e[1] + sum((a for b, a in bought if e[3] < b <= d), ZERO))})
+        d += timedelta(days=1)
+    return {"key": key, "label": LABELS[key][0], "points": points, "priced_from": priced_from}
 
 
 def set_component(s: Session, ctx: MemberContext, actor: str, key: str, amount: Decimal, as_of: date) -> dict[str, Any]:

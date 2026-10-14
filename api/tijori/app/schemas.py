@@ -1089,6 +1089,18 @@ class HistoryPoint(BaseModel):
     kind: Literal["snapshot", "live"]
 
 
+class ComponentPoint(BaseModel):
+    date: date
+    value: Money
+
+
+class ComponentHistory(BaseModel):
+    key: str
+    label: str
+    points: list[ComponentPoint]
+    priced_from: date | None  # stocks and funds: the first day valued at stored prices; CAS steps before it
+
+
 class MonthChange(BaseModel):
     start: date
     end: date

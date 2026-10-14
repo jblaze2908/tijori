@@ -22,6 +22,7 @@ from tijori.app.schemas import (
     Accounts,
     Alerts,
     CardList,
+    ComponentHistory,
     FilingStats,
     Freshness,
     Holdings,
@@ -292,6 +293,13 @@ def get_payees(db: MemberDep, q: Annotated[str, Query(min_length=1, max_length=1
 @router.get("/networth/live", response_model=LiveNetWorth)
 def networth_live(db: MemberDep) -> dict:
     return networth.live(db.session, db.ctx.member_id, today_ist())
+
+
+@router.get("/networth/components/{key}/history", response_model=ComponentHistory)
+def component_history(db: MemberDep, key: str) -> dict:
+    if key not in networth.COMPONENT_KEYS:
+        raise NotFound("unknown component")
+    return networth.component_history(db.session, db.ctx.member_id, key, today_ist())
 
 
 @router.get("/holdings", response_model=Holdings)

@@ -27,6 +27,7 @@ import type {
   ISODate,
   ItemCategoryScope,
   LiveNetWorth,
+  ComponentHistory,
   OrderItemPage,
   OrderItemQuery,
   OrderSource,
@@ -442,6 +443,7 @@ export const api = {
   trendsBy: (group: "category" | "merchant" | "account", granularity: Granularity, periods: number, end: string) =>
     resource(`/api/trends?${qs({ granularity, periods, end, group_by: group, limit: 50 })}`, flattenTrends),
   liveNetWorth: () => resource("/api/networth/live", (r: LiveNetWorth) => r),
+  componentHistory: (key: string) => resource(`/api/networth/components/${encodeURIComponent(key)}/history`, (r: ComponentHistory) => r),
   holdings: () => resource("/api/holdings", (r: { items: Holding[] }) => r.items),
   inboxStats: (month: MonthKey) => resource(`/api/inbox/stats?${qs({ month })}`, (r: InboxStats) => r),
   rules: () => resource("/api/rules", (r: { items: Rule[] }) => r.items),

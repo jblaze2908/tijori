@@ -266,6 +266,12 @@ def detect(s: Session, member_id: int, today: date | None = None, *, include_dis
     return out
 
 
+def alerts_from(as_of: date, parser: str) -> date:
+    """First day whose pending alerts move a balance read on `as_of`: a statement line takes same-day alerts (a line
+    that day would have matched them); a balance mail is the end-of-day figure, so only later ones."""
+    return as_of + timedelta(days=parser == BALANCE_PARSER)
+
+
 def balances(s: Session, member_id: int) -> dict[int, tuple[Decimal, date]]:
     """Latest known balance per account: the balance printed after its newest statement line, moved on by the bank
     alerts since. Alerts carry no balance; once a statement matches one it turns `reconciled` (or `flagged` if
@@ -283,9 +289,7 @@ def balances(s: Session, member_id: int) -> dict[int, tuple[Decimal, date]]:
     out = {r.account_id: (r.balance_after, r.occurred_at) for r in rows}
     if not out:
         return out
-    # A statement anchor takes same-day alerts (a line that day would have matched them); a balance mail is
-    # the end-of-day figure, so only later ones.
-    base = {r.account_id: r.occurred_at + timedelta(days=r.parser == BALANCE_PARSER) for r in rows}
+    base = {r.account_id: alerts_from(r.occurred_at, r.parser) for r in rows}
     for account_id, day, direction, amount in s.execute(
             select(Txn.account_id, Txn.occurred_at, Txn.direction, Txn.amount)
             .join(Account, Account.id == Txn.account_id)

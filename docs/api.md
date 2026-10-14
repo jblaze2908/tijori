@@ -664,6 +664,19 @@ The current net worth. Each component takes its **newest** dated value. The impo
 
 No data at all gives `net_worth: null` and empty lists.
 
+## `GET /api/networth/components/{key}/history`
+
+One component's value on every day, oldest first, from its first known value to today. The last point is the value `GET /api/networth/live` shows. `key` is one of `sbi`, `hdfc`, `fd`, `stocks`, `mf`, `ppf`, `epf`, `gold` or `other`; any other key is a 404.
+
+- **`sbi`, `hdfc`:** the balance printed after each day's last statement line, or in the bank's daily balance mail, summed over the bank's accounts. After the newest one, pending alerts move it on.
+- **`stocks`, `mf`:** on each day a price is stored, the holdings of the newest CAS on or before that day × each holding's newest price up to it. Prices are kept from the day collection started, with no backfill. Before `priced_from`, the line steps from one CAS value to the next.
+- **The rest:** each value carries forward until the next, with the same "invested since" and EPF estimate rules as `live`.
+
+```json
+{"key": "hdfc", "label": "HDFC savings", "priced_from": null,
+ "points": [{"date": "2026-10-12", "value": "520000.00"}, {"date": "2026-10-13", "value": "425000.00"}]}
+```
+
 ## `PUT /api/networth/components/{key}`
 
 Body: `{"amount": "235000.00" | 235000, "as_of"?: "YYYY-MM-DD"}`. `key` is one of the nine sheet keys. `as_of` defaults to today, and a future date is a 422. It upserts by (key, `as_of`) and returns `{"key", "amount", "as_of"}`. Audit-logged.

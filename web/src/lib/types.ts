@@ -533,6 +533,12 @@ export interface LiveNetWorth {
   }[];
   projection: { monthly_change: Decimal; basis_months: number; points: { date: ISODate; net_worth: Decimal }[] } | null;
 }
+export interface ComponentHistory {
+  key: string;
+  label: string;
+  points: { date: ISODate; value: Decimal }[];
+  priced_from: ISODate | null;
+}
 export interface Holding {
   name: string;
   isin: string | null;

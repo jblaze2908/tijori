@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { NetWorthChart } from "../components/charts";
 import { LoansPanel } from "../components/Loans";
 import { useToast } from "../components/Toast";
 import { ErrorState, Loading } from "../components/ui";
 import { api, dataOf, invalidate, read, setComponent } from "../lib/api";
-import { dayShort, daysBetween, inr, monthApos, toPaise } from "../lib/format";
+import { dayNum, dayShort, daysBetween, fromDayNum, inr, monthApos, toPaise } from "../lib/format";
 import type { LiveComponent, LiveNetWorth } from "../lib/types";
 import { CLASS_LABEL } from "./Overview";
 
@@ -57,6 +57,12 @@ const signed = (v: number) => `${v >= 0 ? "+" : "−"}${inr(Math.abs(v))}`;
 
 function Body({ nw }: { nw: LiveNetWorth }) {
   const [range, setRange] = useState<(typeof RANGES)[number][0]>("1y");
+  const [picked, setPicked] = useState<LiveComponent | null>(null);
+  const historyRef = useRef<HTMLElement>(null);
+  const pick = (c: LiveComponent) => {
+    setPicked(picked?.key === c.key ? null : c);
+    historyRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  };
   const total = toPaise(nw.net_worth!);
   const n = RANGES.find((r) => r[0] === range)![2];
   const hist = nw.history.map((h) => ({ date: h.date, value: toPaise(h.net_worth) }));
@@ -95,9 +101,9 @@ function Body({ nw }: { nw: LiveNetWorth }) {
         </div>
       </section>
 
-      <section className="panel" aria-label="History">
+      <section className="panel" aria-label="History" ref={historyRef}>
         <div className="panel-h">
-          <h2>History</h2>
+          <h2>History{picked && ` · ${picked.label}`}</h2>
           <div className="seg">
             {RANGES.map(([k, l]) => (
               <button key={k} type="button" className={range === k ? "on" : ""} onClick={() => setRange(k)}>
@@ -107,23 +113,32 @@ function Body({ nw }: { nw: LiveNetWorth }) {
           </div>
           <div className="legend" style={{ marginLeft: "auto" }}>
             <span>
-              <i className="sq" style={{ background: "var(--in)", height: 2, width: 14 }} />
-              Net worth
+              <i className="sq" style={{ background: picked ? COLOR[picked.key] : "var(--in)", height: 2, width: 14 }} />
+              {picked ? picked.label : "Net worth"}
             </span>
-            {proj.length > 0 && <span>··· Projected</span>}
+            {!picked && proj.length > 0 && <span>··· Projected</span>}
+            {picked && (
+              <button type="button" className="linkish" onClick={() => setPicked(null)}>
+                Back to net worth
+              </button>
+            )}
           </div>
         </div>
-        <div className="chart2">
-          <NetWorthChart history={shown} projection={proj} label={(d) => monthApos(d)} />
-        </div>
-        {nw.projection && (
+        {picked ? (
+          <ComponentChart c={picked} months={n} asOf={nw.as_of} />
+        ) : (
+          <div className="chart2">
+            <NetWorthChart history={shown} projection={proj} label={(d) => monthApos(d)} />
+          </div>
+        )}
+        {!picked && nw.projection && (
           <span className="foot">
             Projection: {signed(toPaise(nw.projection.monthly_change))} a month, the average monthly change of the last {nw.projection.basis_months} months, continued.
           </span>
         )}
       </section>
 
-      <Allocation nw={nw} total={total} />
+      <Allocation nw={nw} total={total} picked={picked?.key ?? null} onPick={pick} />
       <LoansPanel />
       <MonthByMonth nw={nw} />
       <Holdings />
@@ -131,7 +146,24 @@ function Body({ nw }: { nw: LiveNetWorth }) {
   );
 }
 
-function Allocation({ nw, total }: { nw: LiveNetWorth; total: number }) {
+function ComponentChart({ c, months, asOf }: { c: LiveComponent; months: number; asOf: string }) {
+  const st = read(api.componentHistory(c.key));
+  if (st.status === "loading") return <Loading />;
+  if (st.status === "error") return <ErrorState error={st.error} title={`Couldn't load ${c.label} history`} onRetry={() => invalidate([`/api/networth/components/${c.key}`])} />;
+  const from = months ? fromDayNum(dayNum(asOf) - Math.round(months * 30.44)) : "";
+  const pts = st.data.points.filter((p) => p.date >= from).map((p) => ({ date: p.date, value: toPaise(p.value) }));
+  if (!pts.length) return <p className="muted" style={{ margin: 0 }}>No values in this range.</p>;
+  return (
+    <>
+      <div className="chart2">
+        <NetWorthChart history={pts} projection={[]} label={dayShort} name={c.label} color={COLOR[c.key]} dots={pts.length <= 40} />
+      </div>
+      {st.data.priced_from && <span className="foot">Valued at daily prices from {dayShort(st.data.priced_from)}; before that, at each CAS.</span>}
+    </>
+  );
+}
+
+function Allocation({ nw, total, picked, onPick }: { nw: LiveNetWorth; total: number; picked: string | null; onPick: (c: LiveComponent) => void }) {
   const [editing, setEditing] = useState<string | null>(null);
   const classes = Object.entries(nw.by_asset_class).sort((a, b) => toPaise(b[1]) - toPaise(a[1]));
   const sinceTotal = nw.components.reduce((a, c) => a + (c.change_since ? toPaise(c.change_since) : 0), 0);
@@ -165,20 +197,32 @@ function Allocation({ nw, total }: { nw: LiveNetWorth; total: number }) {
           </tr>
         </thead>
         <tbody>
-          {nw.components.map((c) => (
-            <tr key={c.key}>
+          {nw.components.map((c) => {
+            const charted = c.asset_class !== "loans";
+            return (
+            <tr key={c.key} className={charted ? `click${picked === c.key ? " on" : ""}` : undefined} onClick={charted ? () => onPick(c) : undefined}>
               <td>
-                <span className="nm">
-                  <i className="sq" style={{ background: COLOR[c.key] ?? "var(--t3)" }} />
-                  {c.label}
-                </span>
+                {charted ? (
+                  <button type="button" className="nm" aria-pressed={picked === c.key} title={`Show ${c.label} over time`} onClick={(e) => {
+                    e.stopPropagation();
+                    onPick(c);
+                  }}>
+                    <i className="sq" style={{ background: COLOR[c.key] ?? "var(--t3)" }} />
+                    {c.label}
+                  </button>
+                ) : (
+                  <span className="nm">
+                    <i className="sq" style={{ background: COLOR[c.key] ?? "var(--t3)" }} />
+                    {c.label}
+                  </span>
+                )}
               </td>
               <td className="r">{inr(toPaise(c.amount))}</td>
               <td className="r muted">{c.share_pct.toFixed(1)}%</td>
               <td className="r" style={{ color: c.change_since && toPaise(c.change_since) > 0 ? "var(--in)" : "var(--t2)" }}>
                 {c.change_since != null ? (toPaise(c.change_since) === 0 ? "₹0" : signed(toPaise(c.change_since))) : "—"}
               </td>
-              <td>
+              <td onClick={editing === c.key ? (e) => e.stopPropagation() : undefined}>
                 {editing === c.key ? (
                   <EditValue c={c} done={() => setEditing(null)} />
                 ) : (
@@ -188,7 +232,7 @@ function Allocation({ nw, total }: { nw: LiveNetWorth; total: number }) {
                   </span>
                 )}
               </td>
-              <td className="r" style={{ fontFamily: "inherit" }}>
+              <td className="r" style={{ fontFamily: "inherit" }} onClick={(e) => e.stopPropagation()}>
                 {editing !== c.key && c.editable && (
                   <button type="button" className="linkish" onClick={() => setEditing(c.key)}>
                     Edit
@@ -196,7 +240,8 @@ function Allocation({ nw, total }: { nw: LiveNetWorth; total: number }) {
                 )}
               </td>
             </tr>
-          ))}
+            );
+          })}
           <tr className="total">
             <td>Net worth</td>
             <td className="r">{inr(total)}</td>

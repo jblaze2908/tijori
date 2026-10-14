@@ -78,6 +78,7 @@ TOOLS: dict[str, tuple[str, str, dict[str, tuple[str, str]]]] = {
         "live": ("networth_live", "net worth now by component and asset class, with month, year and FY change"),
         "history": ("get_networth", "monthly snapshots, with remarks"),
         "holdings": ("get_holdings", "funds and stocks with units and value"),
+        "component_history": ("component_history", "one component's value on every day, oldest first"),
     }),
     "get_setup": (("Accounts, categories, rules, payees, settings and household. Call coverage before claiming there were "
                    "no transactions in a period: a missing day may be a feed that is behind."), READ, {

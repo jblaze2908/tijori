@@ -194,6 +194,8 @@ main { padding: 24px 40px 56px; display: flex; flex-direction: column; gap: 24px
 .t2 tr.total td { font-weight: 600; border-bottom: 0 }
 .t2 tr.click { cursor: pointer }
 .t2 tr.click:hover td { background: rgba(255, 255, 255, .02) }
+.t2 tr.on td { background: var(--s2) }
+.t2 button.nm { background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer }
 .t2 .nm { display: flex; align-items: center; gap: 10px }
 /* Outranks the phone rule that hides Spending's columns 3 and 6–8: here every column is a compared series. */
 .t2.months th:nth-child(n), .t2.months td:nth-child(n) { display: table-cell }

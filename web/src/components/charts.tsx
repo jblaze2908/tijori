@@ -390,7 +390,9 @@ export function LineChart(o: { labels: string[]; tips?: string[]; series: Line[]
 }
 
 /** Net worth history (solid) and projection points (dotted), a dot on every point, labels on the key points. */
-export function NetWorthChart(o: { history: { date: string; value: Paise }[]; projection: { date: string; value: Paise }[]; label: (d: string) => string; height?: number; width?: number }) {
+export function NetWorthChart(o: { history: { date: string; value: Paise }[]; projection: { date: string; value: Paise }[]; label: (d: string) => string; height?: number; width?: number; name?: string; color?: string; dots?: boolean }) {
+  const ink = o.color ?? GREEN;
+  const name = o.name ?? "Net worth";
   const [box, W] = useBoxWidth(o.width ?? 1100);
   const H = o.height ?? (W < 600 ? 200 : 260);
   const L = 48, R = W - 16, T = 24, B = H - 30;
@@ -413,7 +415,7 @@ export function NetWorthChart(o: { history: { date: string; value: Paise }[]; pr
   const projected = hi != null && hi >= o.history.length;
   return (
     <div className="cbox" ref={box}>
-      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Net worth over time" {...pointer} {...keys}>
+      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${name} over time`} {...pointer} {...keys}>
         {ticks.map((t) => (
           <g key={t}>
             <path d={`M${L} ${y(t)}H${R}`} className="grid" />
@@ -423,22 +425,22 @@ export function NetWorthChart(o: { history: { date: string; value: Paise }[]; pr
           </g>
         ))}
         {o.projection.length > 0 && now && <rect x={x(now.date)} y={T} width={R - x(now.date)} height={B - T} fill="#ffffff" fillOpacity={0.02} />}
-        {hx.length > 1 && <path d={`${pts(hx, hy)}L${hx.at(-1)} ${B}L${hx[0]} ${B}Z`} fill={GREEN} fillOpacity={0.08} />}
+        {hx.length > 1 && <path d={`${pts(hx, hy)}L${hx.at(-1)} ${B}L${hx[0]} ${B}Z`} fill={ink} fillOpacity={0.08} />}
         {hp && <path d={`M${x(hp.date)} ${T}V${B}`} className="xhair" />}
-        <path d={pts(hx, hy)} stroke={GREEN} strokeWidth={2} fill="none" strokeLinejoin="round" />
-        {hx.slice(0, -1).map((cx, i) => (
-          <circle key={i} cx={cx} cy={hy[i]} r={2.5} fill={GREEN} />
+        <path d={pts(hx, hy)} stroke={ink} strokeWidth={2} fill="none" strokeLinejoin="round" />
+        {o.dots !== false && hx.slice(0, -1).map((cx, i) => (
+          <circle key={i} cx={cx} cy={hy[i]} r={2.5} fill={ink} />
         ))}
-        {proj.length > 1 && <path d={pts(proj.map((p) => x(p.date)), proj.map((p) => y(p.value)))} stroke={GREEN} strokeWidth={2} strokeDasharray="2.5 3.5" fill="none" />}
+        {proj.length > 1 && <path d={pts(proj.map((p) => x(p.date)), proj.map((p) => y(p.value)))} stroke={ink} strokeWidth={2} strokeDasharray="2.5 3.5" fill="none" />}
         {proj.map((p, i) => (
           <g key={p.date}>
-            <circle cx={x(p.date)} cy={y(p.value)} r={i === 0 ? 4 : 3.5} fill="var(--s1)" stroke={GREEN} strokeWidth={i === 0 ? 2 : 1.5} />
+            <circle cx={x(p.date)} cy={y(p.value)} r={i === 0 ? 4 : 3.5} fill="var(--s1)" stroke={ink} strokeWidth={i === 0 ? 2 : 1.5} />
             <text x={x(p.date)} y={y(p.value) - 12} textAnchor={i === proj.length - 1 ? "end" : "middle"} className="ax now" fontSize={12}>
               {compact(p.value)}
             </text>
           </g>
         ))}
-        {hp && <circle cx={x(hp.date)} cy={y(hp.value)} r={5.5} fill={projected ? "var(--s1)" : GREEN} stroke={projected ? GREEN : "var(--s1)"} strokeWidth={2} pointerEvents="none" />}
+        {hp && <circle cx={x(hp.date)} cy={y(hp.value)} r={5.5} fill={projected ? "var(--s1)" : ink} stroke={projected ? ink : "var(--s1)"} strokeWidth={2} pointerEvents="none" />}
         {[o.history[0], now, o.projection.at(-1)].filter((p, i, a) => p && a.findIndex((q) => q?.date === p.date) === i).map((p, i, a) => (
           <text key={p!.date} x={x(p!.date)} y={H - 8} textAnchor={i === 0 ? "start" : i === a.length - 1 ? "end" : "middle"} className={`ax${p === now ? " now" : ""}`}>
             {p === now ? "Now" : o.label(p!.date)}
@@ -452,7 +454,7 @@ export function NetWorthChart(o: { history: { date: string; value: Paise }[]; pr
           x={x(hp.date)}
           y={y(hp.value)}
           title={o.label(hp.date)}
-          rows={[{ color: GREEN, dash: projected, label: projected ? "Projected" : "Net worth", value: inr(hp.value), note: hi! > 0 ? signedK(hp.value - all[hi! - 1]!.value) : undefined }]}
+          rows={[{ color: ink, dash: projected, label: projected ? "Projected" : name, value: inr(hp.value), note: hi! > 0 ? signedK(hp.value - all[hi! - 1]!.value) : undefined }]}
         />
       )}
     </div>
