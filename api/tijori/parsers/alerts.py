@@ -8,6 +8,7 @@ payload (`institution`, `account_kind`, `mask`) so the resolver can find or crea
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Callable
 
 from tijori.money import parse_amount
@@ -84,6 +85,28 @@ RULES: tuple[_Rule, ...] = (
 # coverage only vouches for live alerts on accounts some rule can read.
 SENDER_INSTITUTION: dict[str, str] = {s: r.institution for r in RULES for s in r.senders}
 COVERED: frozenset[tuple[str, str]] = frozenset((r.institution, r.kind) for r in RULES)
+
+
+@dataclass(frozen=True, slots=True)
+class BalanceReading:
+    institution: str
+    mask: str
+    amount: Decimal
+    as_of: date
+
+
+# HDFC's daily "Account update" mail: the balance at the end of `as_of`, arriving next morning. Kept out of RULES,
+# which read transactions (coverage counts those).
+BALANCE_PARSER = "hdfc_balance"
+_HDFC_BALANCE = re.compile(rf"available balance in your account ending XX(?P<mask>\d{{4}}) is {_AMT} as of "
+                           r"(?P<date>\d\d-[A-Z]{3}-\d\d)\b")
+
+
+def parse_balance(msg: Message) -> BalanceReading | None:
+    if _sender(msg) not in _HDFC or not (m := _HDFC_BALANCE.search(_flat(msg))):
+        return None
+    return BalanceReading("HDFC", m["mask"], parse_amount(m["amt"]),
+                          datetime.strptime(m["date"].title(), "%d-%b-%y").date())
 
 
 def _sender(msg: Message) -> str:

@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from tijori.classify.brands import SUBSCRIPTIONS
 from tijori.models import Account, Category, Observation, Recurring, Txn
 from tijori.money import fmt
+from tijori.parsers.alerts import BALANCE_PARSER
 from tijori.services.common import MemberContext, account_label, audit, cycle_bounds, today_ist
 from tijori.services.errors import NotFound
 
@@ -266,18 +267,35 @@ def detect(s: Session, member_id: int, today: date | None = None, *, include_dis
 
 
 def balances(s: Session, member_id: int) -> dict[int, tuple[Decimal, date]]:
-    """Latest known balance per account: the balance printed after its newest statement line."""
+    """Latest known balance per account: the balance printed after its newest statement line, moved on by the bank
+    alerts since. Alerts carry no balance; once a statement matches one it turns `reconciled` (or `flagged` if
+    missing), so only `pending` ones apply. Two queries per call."""
     ranked = (
-        select(Observation.account_id, Observation.balance_after, Observation.occurred_at,
+        select(Observation.account_id, Observation.balance_after, Observation.occurred_at, Observation.parser,
                func.row_number().over(partition_by=Observation.account_id,
                                       order_by=(Observation.occurred_at.desc(), Observation.id.desc())).label("rn"))
         .where(Observation.member_id == member_id, Observation.balance_after.is_not(None),
                Observation.account_id.is_not(None))
         .subquery()
     )
-    rows = s.execute(select(ranked.c.account_id, ranked.c.balance_after, ranked.c.occurred_at)
+    rows = s.execute(select(ranked.c.account_id, ranked.c.balance_after, ranked.c.occurred_at, ranked.c.parser)
                      .where(ranked.c.rn == 1)).all()
-    return {r.account_id: (r.balance_after, r.occurred_at) for r in rows}
+    out = {r.account_id: (r.balance_after, r.occurred_at) for r in rows}
+    if not out:
+        return out
+    # A statement anchor takes same-day alerts (a line that day would have matched them); a balance mail is
+    # the end-of-day figure, so only later ones.
+    base = {r.account_id: r.occurred_at + timedelta(days=r.parser == BALANCE_PARSER) for r in rows}
+    for account_id, day, direction, amount in s.execute(
+            select(Txn.account_id, Txn.occurred_at, Txn.direction, Txn.amount)
+            .join(Account, Account.id == Txn.account_id)
+            .where(Txn.member_id == member_id, Txn.account_id.in_(out), Account.kind == "bank",
+                   Txn.status == "pending", Txn.split_of.is_(None))):
+        if day < base[account_id]:
+            continue
+        amount_now, as_of = out[account_id]
+        out[account_id] = (amount_now + amount if direction == "credit" else amount_now - amount, max(as_of, day))
+    return out
 
 
 def _change(x: Series) -> dict[str, Any] | None:

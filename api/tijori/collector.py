@@ -39,11 +39,11 @@ from tijori.models import ComponentValue, Holding, MailSource, Price, RawAttachm
 from tijori.parsers.cams_statement import CamsStatementParser
 from tijori.parsers.cdsl_cas import CdslCasParser
 from tijori.parsers import Message, ParseError, route
-from tijori.parsers.alerts import SENDER_INSTITUTION, AlertParser
+from tijori.parsers.alerts import SENDER_INSTITUTION, AlertParser, parse_balance
 from tijori.pdf import PdfError, is_pdf, pdf_to_text
 from tijori.services import cards, loans, notify, orders, prices, retention, txn_edit
 from tijori.services import secrets as vault
-from tijori.services.ingest import ingest_alert, ingest_statement, load_classifier
+from tijori.services.ingest import ingest_alert, ingest_balance, ingest_statement, load_classifier
 from tijori.settings import Settings, get_settings
 
 log = logging.getLogger("tijori.collector")
@@ -160,6 +160,9 @@ def _route(s: Session, ctx: MemberContext, settings: Settings, rm: RawMessage, m
         cards.link_card_payments(s, ctx.member_id)
         txn_edit.link_refunds_by_ref(s, ctx)
         orders.rematch(s, ctx)  # per alert email, not per txn: two queries
+        status = "parsed"
+    elif bal := parse_balance(m):
+        ingest_balance(s, ctx, bal, rm)
         status = "parsed"
     for att, data in atts:
         status = _statement(s, ctx, settings, rm.sender or "", rm, att, data) or status

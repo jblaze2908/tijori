@@ -35,6 +35,7 @@ from tijori.money import fmt
 from tijori.parsers import Observation as Line
 from tijori.parsers import Statement as ParsedStatement
 from tijori.parsers import reconcile
+from tijori.parsers.alerts import BALANCE_PARSER, BalanceReading
 from tijori.services import cards, orders, txn_edit
 from tijori.services.common import account_ref, audit
 from tijori.services.errors import Invalid
@@ -347,3 +348,15 @@ def ingest_alert(s: Session, ctx: MemberContext, clf: Classifier, obs: Line, msg
     s.execute(pg_insert(TxnObservation).on_conflict_do_nothing().values(txn_id=txn_id, observation_id=obs_id,
                                                                         member_id=ctx.member_id))
     return txn_id
+
+
+def ingest_balance(s: Session, ctx: MemberContext, b: BalanceReading, msg: RawMessage) -> None:
+    """A bank's balance mail → a balance-only observation (no txn) that `recurring.balances` anchors on. Once per
+    message: the hourly retry re-routes unparsed mail."""
+    if s.scalar(select(Observation.id).where(Observation.member_id == ctx.member_id, Observation.raw_message_id == msg.id,
+                                             Observation.parser == BALANCE_PARSER)) is not None:
+        return
+    account = ensure_account(s, ctx.member_id, b.institution, b.mask, "bank")
+    s.execute(insert(Observation).values(
+        member_id=ctx.member_id, raw_message_id=msg.id, parser=BALANCE_PARSER, parser_version="1.0.0",
+        account_id=account.id, occurred_at=b.as_of, amount=0, direction="credit", balance_after=b.amount))
