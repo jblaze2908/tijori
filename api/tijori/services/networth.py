@@ -434,7 +434,11 @@ def component_history(s: Session, member_id: int, key: str, today: date) -> dict
     else:
         series = _series(s, member_id, today).get(key, [])
         priced = _priced_days(s, member_id, today).get(key, []) if key in ("stocks", "mf") else []
-        priced_from = priced[0][0] if priced else None
+        # Start of the newest unbroken run (≤ a week between prices): a stray older price isn't daily valuation.
+        run = len(priced) - 1
+        while run > 0 and (priced[run][0] - priced[run - 1][0]).days <= 7:
+            run -= 1
+        priced_from = priced[run][0] if priced else None
         series = sorted(series + priced, key=lambda e: e[0])
         bought = _bought(s, member_id, series[0][0]).get(key, []) if series else []
     points, d, i = [], series[0][0] if series else today, -1
