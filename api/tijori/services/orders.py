@@ -2,10 +2,9 @@
 
 record() upserts a batch by (source, order_no), then re-matches every open order of the member against one query
 of candidate debits. A debit matches when it is the brand's payee, the same amount to the paisa, inside the source's
-WINDOW of days (measured 2026-10-07: 107 of 131 Blinkit and 15 of 20 Zomato orders matched this way, none ambiguously).
-Orders placed together may share one debit: in the same minute, or for Amazon the same day, since one checkout splits
-into an order per seller and is charged once (measured 2026-10-08 over 145 Amazon orders: 51 one-to-one and 21 in
-same-day groups, none ambiguously). Nothing is guessed past that: an order no debit pays is put on
+WINDOW of days, where each source's card charges land. Orders placed together may share one debit: in the same
+minute, or for Amazon the same day, since one checkout splits into an order per seller and is charged once.
+Nothing is guessed past that: an order no debit pays is put on
 an account only when its receipt names the card (`payment` ends in an account's last 4 digits) or when someone
 assigns it (assign()). That txn is built from the receipt and kept out of totals (bucket excluded): it was paid from
 money Tijori never saw arrive, such as a meal card, so counting the spend would be one-sided. A debit that turns up

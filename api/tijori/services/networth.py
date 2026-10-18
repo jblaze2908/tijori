@@ -10,7 +10,6 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from tijori.db import MemberContext
-from tijori.legacy import SheetRow
 from tijori.models import Account, ComponentValue, Holding, Observation, Price, Snapshot, Statement, Txn
 from tijori.money import ZERO, fmt
 from tijori.services.common import audit
@@ -104,25 +103,6 @@ def update_remark(s: Session, ctx: MemberContext, actor: str, day: date, remark:
         return None
     audit(s, ctx, actor, "snapshot.remark", f"snapshot:{day.isoformat()}", {"remark_length": len(remark or "")})
     return {"date": row.date, "remark": row.remark}
-
-
-def upsert_sheet(s: Session, member_id: int, sheet: list[SheetRow]) -> int:
-    """Idempotent. A remark edited in Tijori wins over the sheet's on re-import."""
-    if not sheet:
-        return 0
-    stmt = insert(Snapshot).values([
-        dict(member_id=member_id, date=r.month, components_json={k: str(v) for k, v in r.components.items()},
-             net_worth=r.net_worth, liquid=r.liquid, remark=r.remark, commentary=r.commentary, locked=True)
-        for r in sheet
-    ])
-    s.execute(stmt.on_conflict_do_update(
-        constraint="uq_snapshot_member_id_date",
-        set_={"components_json": stmt.excluded.components_json, "net_worth": stmt.excluded.net_worth,
-              "liquid": stmt.excluded.liquid,
-              "remark": func.coalesce(Snapshot.remark, stmt.excluded.remark),
-              "commentary": func.coalesce(stmt.excluded.commentary, Snapshot.commentary)},
-    ))
-    return len(sheet)
 
 
 # --- live net worth -----------------------------------------------------------------------------

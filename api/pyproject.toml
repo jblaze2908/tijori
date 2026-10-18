@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.13",
-    # SecretBox (AES-256-GCM envelope); approved by Jai, pinned exactly.
+    # SecretBox (AES-256-GCM envelope); pinned exactly.
     "cryptography==50.0.1",
     "fastapi>=0.115",
     "psycopg[binary]>=3.2",

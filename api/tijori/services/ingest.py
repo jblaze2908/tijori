@@ -42,7 +42,7 @@ from tijori.services.errors import Invalid
 
 
 def line_dedupe_key(account_id: int, line: Line, occurrence: int) -> str:
-    """Identity of one statement line. Shared by uploads and the legacy import, so re-sending a
+    """Identity of one statement line. Shared by uploads and the collector, so re-sending a
     statement never duplicates a txn."""
     raw = (f"line|{account_id}|{line.occurred_at.isoformat()}|{line.amount}|{line.direction}|"
            f"{line.balance_after}|{line.ref_no or ''}|{occurrence}")
@@ -62,7 +62,7 @@ def line_keys(account_id: int, lines: tuple[Line, ...] | list[Line]) -> list[str
 def ensure_account(s: Session, member_id: int, institution: str, mask: str | None, kind: str = "bank",
                    name: str | None = None) -> Account:
     """Match on (institution, kind, mask); adopt a mask-less account of the same bank and kind (e.g. from
-    the legacy import or setup) before creating a new one. A statement's product name ("HDFC Platinum")
+    setup) before creating a new one. A statement's product name ("HDFC Platinum")
     replaces the generic name an alert gave the account."""
     q = select(Account).where(Account.member_id == member_id, Account.institution == institution,
                               Account.kind == kind)

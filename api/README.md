@@ -6,12 +6,13 @@ The backend for Tijori. It covers:
 - the deterministic classifier,
 - the Postgres schema with row-level security,
 - the HTTP API: reads, writes, uploads, Google sign-in and onboarding,
-- the same-origin UI,
-- the one-off legacy import.
+- the same-origin UI.
 
 The HTTP contract lives in [`../docs/api.md`](../docs/api.md), and deployment in [`../docs/deploy.md`](../docs/deploy.md).
 
 The stack is FastAPI, SQLAlchemy 2, Alembic, pydantic/pydantic-settings, psycopg 3, uvicorn, and `cryptography` for SecretBox. PDFs are read by OS tools: `pdftotext` (poppler-utils) and `qpdf`. Tests cover the MCP tools and the orders and freshness services (`tests/`, stdlib `unittest`, no extra dependency):
+
+`../scripts/check.sh --db` runs all of them against a throwaway Postgres, with uv or Docker. By hand:
 
 ```sh
 uv run python -m unittest discover -s tests      # offline; the database tests skip
@@ -64,7 +65,7 @@ export TIJORI_DATABASE_URL=postgresql+psycopg://tijori_app:dev-only-app@127.0.0.
 uv run uvicorn tijori.app.main:app --port 8310     # schema browser at /api/docs in dev
 ```
 
-Members come from Google sign-in (an allowlisted email or an invite), or from the legacy import below. In dev, the header `X-Tijori-Dev-Member: <email>` authenticates as an existing member:
+Members come from Google sign-in (an allowlisted email or an invite). In dev, the header `X-Tijori-Dev-Member: <email>` authenticates as an existing member:
 
 ```sh
 curl -s -XPOST localhost:8310/api/uploads -H 'X-Tijori-Dev-Member: me@example.com' -H 'X-Requested-With: tijori' \
@@ -76,25 +77,21 @@ Google sign-in needs a real OAuth client with the redirect URI `http://localhost
 ## CLI
 
 ```sh
-uv run python -m tijori.cli import-legacy --data data.json --sheet sheet.csv --member you@example.com \
-  [--statement sbi.txt --statement hdfc.txt] [--profile profile.json]
-uv run python -m tijori.cli backtest --labels data.json --statement sbi.txt --statement hdfc.txt \
-  --profile profile.json [--train-until 2026-07]
+uv run python -m tijori.cli lock-to-owner
 TIJORI_MASTER_KEY=<new> TIJORI_MASTER_KEY_OLD=<current> uv run python -m tijori.cli rotate-master-key
 ```
 
-- **import-legacy** is idempotent. With `--statement`, txns get the same line identity an upload gives them, so uploading those statements later matches rather than duplicates.
 - **lock-to-owner** ends every session, pasted token, connected app and invite held by anyone but `TIJORI_OWNER_EMAIL`. Other members' data is kept. Runs on the owner connection.
 - **rotate-master-key** re-wraps every data key under the new master key; the secrets themselves aren't re-encrypted. It runs on the owner (superuser) connection. Afterwards, drop `TIJORI_MASTER_KEY_OLD`.
-- **Real data** (statements, labels, profiles) never enters git. Keep those files outside the repo.
+- **Real data** (statements, exports, profiles) never enters git. Keep those files outside the repo.
 
 ## Layout
 
 | Path | What it holds |
 |---|---|
 | `tijori/parsers/` | Parser registry, SBI and HDFC statement parsers, reconciliation |
-| `tijori/classify/` | Taxonomy, narration parsing, brand dictionary, kind rules, payee memory, engine, backtest |
+| `tijori/classify/` | Taxonomy, narration parsing, brand dictionary, kind rules, payee memory, engine |
 | `tijori/services/` | SQLAlchemy service layer: ingest, txns, reports and trends, net worth, members, onboarding, mail, secrets |
 | `tijori/app/` | FastAPI app: auth (dev header, session cookie), Google sign-in, routes, uploads, onboarding, SPA and security headers |
 | `tijori/secretbox.py`, `tijori/imap_check.py`, `tijori/pdf.py`, `tijori/blobs.py` | AES-GCM envelope, read-only IMAP test, PDF → text, raw blob store |
-| `tijori/models.py`, `migrations/versions/` | Schema and Alembic migrations 0001–0004, including RLS policies and grants |
+| `tijori/models.py`, `migrations/versions/` | Schema and the Alembic migrations (sequential, expand-only), including RLS policies and grants |

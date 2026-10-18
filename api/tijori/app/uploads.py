@@ -15,10 +15,9 @@ from tijori.app.deps import AuthDep, require_upload_header, run_as_member
 from tijori.app.multipart import read_multipart
 from tijori.blobs import store_blob
 from tijori.db import MemberContext
-from tijori.legacy import load_sheet_text
 from tijori.parsers import Message, ParseError, route
 from tijori.pdf import PdfError, PdfUnavailable, is_pdf, pdf_to_text
-from tijori.services import ingest, networth
+from tijori.services import ingest
 from tijori.services import secrets as vault
 from tijori.services.errors import Invalid
 
@@ -26,7 +25,6 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", dependencies=[Depends(require_upload_header)])
 
 MAX_PASSWORD = 256
-MAX_SHEET_BYTES = 2 * 1024 * 1024
 
 
 async def _pdf_text(request: Request, identity: Identity, data: bytes, password: str | None) -> str:
@@ -124,21 +122,3 @@ async def upload(request: Request, identity: AuthDep) -> JSONResponse:
 
     code, payload = await run_in_threadpool(run_as_member, request.app.state, identity, work)
     return JSONResponse(jsonable_encoder(payload), status_code=code)
-
-
-@router.post("/networth/import")
-async def import_sheet(request: Request, identity: AuthDep) -> JSONResponse:
-    """The net-worth Google Sheet as CSV: idempotent upsert by month."""
-    parts = await read_multipart(request, MAX_SHEET_BYTES)
-    sheet = parts.get("sheet")
-    if sheet is None:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT,
-                            [{"loc": ["body", "sheet"], "msg": "required (CSV file)"}])
-    try:
-        rows = load_sheet_text(sheet.data.decode("utf-8-sig"))
-    except (UnicodeDecodeError, ValueError, KeyError, StopIteration) as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT,
-                            "not a net-worth sheet export (needs a 'Month' header row)") from exc
-    n = await run_in_threadpool(run_as_member, request.app.state, identity,
-                                lambda s, ctx, _actor: networth.upsert_sheet(s, ctx.member_id, rows))
-    return JSONResponse({"snapshots_upserted": n})

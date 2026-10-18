@@ -56,11 +56,11 @@ Every error body is JSON. None carries a stack trace or SQL.
 | `direction` | `debit` (money out), `credit` (money in) |
 | `kind` | `spend`, `income`, `transfer`, `investment`, `refund`, `fee`, `cash` |
 | `bucket` | `everyday`, `oneoff`, `card`, `invest`, `income`, `excluded`, or `null` while a txn waits in the Inbox |
-| `classified_by` | `rule`, `payee_memory`, `dictionary`, `heuristic`, `user`, `system` (the legacy import), or `null` while in the Inbox |
+| `classified_by` | `rule`, `payee_memory`, `dictionary`, `heuristic`, `user`, `system`, or `null` while in the Inbox |
 | `status` | `pending`, `posted`, `reconciled` (matched to a statement that balanced to ₹0), `flagged` |
 | `sources[]` | `statement`, `alert`, `sms`, `upload`, `expected`, `import` |
 | `review_reason` / Inbox `reason` | `person` (a personal UPI handle or named transfer), `merchant_over_cap` (a merchant-QR payment above the local-shop cap), `conflict` (payee memory disagrees with itself), `new_payee`, or `null` |
-| `rule_id` | What decided the txn, or why it is in the Inbox: `rule:<id>`, `kind:salary`, `dict:blinkit`, `memory:<payee_key>`, `upi:merchant_qr`, `upi:person`, `memory:conflict`, `link:reversal`, `user`, `legacy:2026-09-26`. Show it on hover; don't parse it |
+| `rule_id` | What decided the txn, or why it is in the Inbox: `rule:<id>`, `kind:salary`, `dict:blinkit`, `memory:<payee_key>`, `upi:merchant_qr`, `upi:person`, `memory:conflict`, `link:reversal`, `user`. Show it on hover; don't parse it |
 
 ### Transaction object (`Txn`)
 
@@ -136,8 +136,8 @@ Month cycles that contain at least one txn, oldest first. `start` and `end` are 
 ## `GET /api/accounts`
 
 ```json
-{"items": [{"id": 51, "institution": "HDFC", "name": "HDFC savings", "kind": "bank", "mask": "9876",
-            "label": "HDFC ••9876", "currency": "INR", "txn_count": 8,
+{"items": [{"id": 51, "institution": "HDFC", "name": "HDFC savings", "kind": "bank", "mask": "0001",
+            "label": "HDFC ••0001", "currency": "INR", "txn_count": 8,
             "first_txn_at": "2026-04-01", "last_txn_at": "2026-04-30",
             "last_statement": {"period_start": "2026-04-01", "period_end": "2026-04-30", "reconciled": true, "diff": "0.00"},
             "statement_passwords": [], "has_statement_password": false, "has_extra_statement_password": false, "balance": {"amount": "184500.00", "as_of": "2026-08-31"},
@@ -181,8 +181,8 @@ Each day of each account gets a `state`:
  "mailboxes": [{"id": 1, "label": "tijori", "email": "asha@example.test", "status": "ok", "collecting": true,
                 "last_poll_at": "2026-10-04T04:28:10Z", "last_ok_poll_at": "2026-10-04T04:28:00Z", "last_poll_error": null,
                 "last_tested_at": "2026-09-26T18:10:22Z", "healthy": true, "problem": null}],
- "accounts": [{"account": {"id": 51, "institution": "HDFC", "name": "HDFC savings", "label": "HDFC savings ••9876",
-                           "kind": "bank", "mask": "9876"},
+ "accounts": [{"account": {"id": 51, "institution": "HDFC", "name": "HDFC savings", "label": "HDFC savings ••0001",
+                           "kind": "bank", "mask": "0001"},
                "alerts": true, "covered_through": "2026-09-30", "last_seen_at": "2026-10-01T07:31:02Z",
                "live_through": "2026-10-04T04:28:00Z", "coverage_pct": 62.5,
                "days": [{"date": "2026-09-30", "state": "confirmed", "reason": null, "txn_count": 3},
@@ -198,8 +198,6 @@ Dashboard totals for one month cycle and the cycle before it. `period` gives the
 | Param | Required | Notes |
 |---|---|---|
 | `month` | yes | `YYYY-MM`, a cycle per `month_start_day` |
-
-These definitions match the 2026-09-26 report exactly. That was checked on the real data through the legacy import: every month's totals come out equal.
 
 | Field | Meaning |
 |---|---|
@@ -284,7 +282,7 @@ One txn with everything behind it. Returns 404 when the txn doesn't exist or isn
 }
 ```
 
-- `observations` lists every sighting behind the txn. Legacy-imported txns have none until their statement is uploaded.
+- `observations` lists every sighting behind the txn.
 - `links` is empty in M0; the resolver fills it in M1.
 - `transaction.orders` lists the Blinkit or Zomato orders the txn paid for, items included (see [Orders](#orders)). It holds two when one payment covered two orders. Only this route fills it; in lists it is `[]`.
 - `payee` gives this payee's totals in the same direction, and its 12 most recent txns. It is `null` without a `payee_key`. When you named the payee, every payee sharing the name counts: `alias` is `{"name", "original", "payee_keys"}`, where `original` is this payee's name before. Otherwise `alias` is `null`, and `suggest` is `{"name", "why", "like"}` when the payee's name matches one of your names (see Payee names), else `null`.
@@ -434,7 +432,7 @@ The member's `month_start_day` shifts month, quarter and FY boundaries. For exam
 
 ## `GET /api/networth`
 
-Replaces the sheet one to one. Snapshots are **newest first**.
+Monthly snapshots, **newest first**.
 
 ```json
 {"snapshots": [{"date": "2026-05-01",
@@ -451,11 +449,11 @@ Replaces the sheet one to one. Snapshots are **newest first**.
 
 | Field | Notes |
 |---|---|
-| `components` | Always all nine keys. `null` means the sheet cell was blank |
-| `liquid` | `sbi + hdfc + fd`, the sheet's definition (it matches every row of the real sheet) |
+| `components` | Always all nine keys. `null` means no value was recorded |
+| `liquid` | `sbi + hdfc + fd` |
 | `net_change`, `liquid_change` | Against the previous (older) snapshot. `null` on the oldest |
-| `remark` | The member's own note (the sheet's "Remarks" column) |
-| `commentary` | The monthly commentary (the sheet's "My Understanding" column). When none is stored, it is generated from a template with no AI; `commentary_source` then says `template` instead of `stored` |
+| `remark` | The member's own note |
+| `commentary` | The monthly commentary. When none is stored, it is generated from a template with no AI; `commentary_source` then says `template` instead of `stored` |
 | `latest.components` | Sorted by amount desc. `share_pct` is a number, not money |
 | no snapshots | `{"snapshots": [], "latest": null}` |
 
@@ -467,15 +465,7 @@ Errors:
 - 404: no snapshot on that date for you.
 - 422: bad date or body.
 
-The change is audit-logged. A later sheet re-import keeps a remark you edited here.
-
-## `POST /api/networth/import`
-
-Multipart, with the header `X-Requested-With: tijori`. Field `sheet` holds the Google Sheet exported as CSV, with the header row `Month,SBI,HDFC Bank,HDFC FD,Stocks,Mutual Funds,PPF,EPF,Gold,Other,Net Worth,...,Liquid Cash,...,Remarks,My Understanding`.
-
-- Idempotent: it upserts by date.
-- Returns `{"snapshots_upserted": 11}`.
-- Returns 422 when the file isn't a sheet export.
+The change is audit-logged.
 
 ## `GET /api/recurring`
 
@@ -503,7 +493,7 @@ Recurring series (the Subscriptions page), detected from the member's own histor
             "state": "upcoming", "variable": false, "amount_expected": "799.00", "amount_min": "649.00",
             "amount_max": "799.00", "monthly_cost": "799.00", "yearly_cost": "9588.00", "next_due": "2026-10-14",
             "first_at": "2025-10-14", "last_at": "2026-09-14", "seen_through": "2026-09-26", "count": 12,
-            "category": "Bills & subscriptions", "account": "HDFC Platinum ••4242", "confirmed": false,
+            "category": "Bills & subscriptions", "account": "HDFC Platinum ••0003", "confirmed": false,
             "manual": false, "change": {"from": "649.00", "to": "799.00", "at": "2026-07-14"},
             "charges": [{"date": "2026-09-14", "amount": "799.00", "txn_id": 612}]}],
  "dismissed": [{"id": "vpa:someone@okaxis", "merchant": "Someone"}],
@@ -534,7 +524,7 @@ Card accounts and their bill payments. A card purchase is spend on the card. A b
 Anything else stays in the `card` bucket and stands in for the card's purchases. Matching runs after every ingest (statements, alerts, uploads) and once when the collector starts, so a deploy applies a changed rule to history.
 
 ```json
-{"items": [{"account": {"id": 3, "label": "HDFC Platinum ••4242"},
+{"items": [{"account": {"id": 3, "label": "HDFC Platinum ••0003"},
             "statement": {"period_start": "2026-08-15", "period_end": "2026-09-14", "total": "40058.00",
                           "due_date": "2026-10-03", "purchases": 19, "paid": "0.00", "paid_at": null,
                           "paid_from": null, "state": "unpaid"},
@@ -563,7 +553,7 @@ Rule flags for the month cycle. Every one is computed from data; none is written
 
 ```json
 {"month": "2026-09", "items": [{"id": "dup:579", "kind": "duplicate", "severity": "bad",
-  "title": "OpenRouter charged 2×", "detail": "₹1,037.44 × 2 on 18 Sep", "txn_ids": [579, 580]}]}
+  "title": "Streamly charged 2×", "detail": "₹499.00 × 2 on 18 Sep", "txn_ids": [579, 580]}]}
 ```
 
 ## `GET /api/inbox/stats?month=YYYY-MM`
@@ -628,7 +618,7 @@ A payee matches when any of its names (merchant or counterparty), compared on le
 
 ## `GET /api/networth/live`
 
-The current net worth. Each component takes its **newest** dated value. The imported sheet isn't read: its EPF, gold and other rows were imported as values set by hand.
+The current net worth. Each component takes its **newest** dated value.
 
 - **`statement`:** for `sbi` and `hdfc`, each statement's closing balance and the balance after the newest line. For others, a value read from a statement: the CAS month-end `stocks` and `mf`, PPF, FD, or an EPF passbook.
 - **`prices`:** `stocks` and `mf` at the newest daily price on the latest CAS holdings. That's NSE's closing price for shares and ETFs, and AMFI's NAV for funds. It's used only when the price is newer than the CAS.
@@ -679,7 +669,7 @@ One component's value on every day, oldest first, from its first known value to 
 
 ## `PUT /api/networth/components/{key}`
 
-Body: `{"amount": "235000.00" | 235000, "as_of"?: "YYYY-MM-DD"}`. `key` is one of the nine sheet keys. `as_of` defaults to today, and a future date is a 422. It upserts by (key, `as_of`) and returns `{"key", "amount", "as_of"}`. Audit-logged.
+Body: `{"amount": "235000.00" | 235000, "as_of"?: "YYYY-MM-DD"}`. `key` is one of the nine component keys. `as_of` defaults to today, and a future date is a 422. It upserts by (key, `as_of`) and returns `{"key", "amount", "as_of"}`. Audit-logged.
 
 ## `GET /api/holdings`
 
@@ -702,7 +692,7 @@ The Settings view of source health.
 {"unparsed": [{"sender": "upload", "subject": "icici_card_aug.pdf", "status": "parser_needed", "count": 1,
                "first_seen": "2026-09-26T17:26:45Z", "last_seen": "2026-09-26T17:26:45Z"}],
  "uploads": [{"id": 86, "filename": "sbi_aug.pdf", "received_at": "2026-09-02T09:10:00Z", "status": "parsed",
-              "account": "SBI savings ••7373", "period_start": "2026-08-01", "period_end": "2026-08-31",
+              "account": "SBI savings ••0002", "period_start": "2026-08-01", "period_end": "2026-08-31",
               "diff": "0.00", "reconciled": true}]}
 ```
 
@@ -712,7 +702,7 @@ How current the member's data is, in one compact block; MCP adds it to ledger re
 
 ```json
 {"generated_at": "2026-10-04T05:00:12Z",
- "accounts": [{"id": 51, "label": "HDFC savings ••9876", "kind": "bank", "last_txn_at": "2026-10-03",
+ "accounts": [{"id": 51, "label": "HDFC savings ••0001", "kind": "bank", "last_txn_at": "2026-10-03",
                "last_recorded_at": "2026-10-03T09:01:40Z", "last_seen_at": "2026-10-03T08:58:00Z",
                "covered_through": "2026-09-30", "last_statement_end": "2026-09-30",
                "live_through": "2026-10-04T04:58:00Z"}],
@@ -748,7 +738,7 @@ Uploads one bank statement. The api stores the raw file, then parses → resolve
   | `password` | Optional. The PDF password. It reaches `qpdf` on stdin only, and is never logged, stored or echoed back. Without it, a locked PDF is retried with the member's [saved statement passwords](#statement-passwords), most recent first |
 
 - **Parsers:** SBI savings e-statements and HDFC savings statements. Anything else is kept as `parser_needed`.
-- **Resolve:** each statement line has a stable identity, so re-sending a statement never duplicates a txn. That covers both the same file and another export of the same lines, and lines already loaded by the legacy import. Matching txns gain `"statement"` in `sources` and turn `reconciled` when the statement balances.
+- **Resolve:** each statement line has a stable identity, so re-sending a statement never duplicates a txn. That covers both the same file and another export of the same lines. Matching txns gain `"statement"` in `sources` and turn `reconciled` when the statement balances.
 - **Storage:** the raw file is kept for re-parsing, content-addressed per member.
 - **Empty periods:** a statement with no lines is stored (`txns.lines: 0`) only when it reconciles, i.e. its printed totals are zero and opening equals closing. It then proves the period had no transactions (see [`/api/coverage`](#get-apicoverage)). If the totals show activity the parser didn't read, it is refused with 422 `parse_status: "failed"`. SBI e-statement accounts with no activity print no balances, and SBI Quick statements print no totals, so those two still can't prove an empty month.
 
@@ -821,7 +811,7 @@ Invites made before the owner lock no longer register anyone; `lock-to-owner` de
 These are the facts the structural rules need to recognise a member's own money. `PUT` replaces all five lists. The member's `local_shop_cap` is kept.
 
 ```json
-{"own_names": ["ASHA VERMA"], "own_vpas": ["asha.verma@okhdfcbank"], "own_account_masks": ["1234", "9876"],
+{"own_names": ["ASHA VERMA"], "own_vpas": ["asha.verma@okhdfcbank"], "own_account_masks": ["1234", "0001"],
  "investment_account_masks": ["5555"], "employer_patterns": ["ACME WIDGETS"]}
 ```
 
@@ -1024,7 +1014,7 @@ Returns `{"received", "created", "updated", "unchanged", "states": {"matched": 1
 - An order matches a debit of its brand's payee (`brand:blinkit`, `brand:zomato`, `brand:amazon`) with the same amount to the paisa: on the order day or the next, or for Amazon from the day before to two days after.
 - Orders placed in the same minute may share one debit for their sum. For Amazon, orders of the same day may: one checkout becomes an order per seller and is charged once.
 - If two orders could take one debit, both are `ambiguous`; Tijori never guesses.
-- Measured on 2026-10-07: 107 of 131 Blinkit orders and 15 of 20 Zomato orders matched this way, none ambiguously. On 2026-10-08, 72 of 145 Amazon orders (51 one-to-one, 21 in same-day groups); most of the rest were paid from Amazon Pay balance, on delivery, or from cards Tijori doesn't read.
+- Orders paid from a wallet balance, on delivery, or from a card Tijori doesn't read have no debit to match.
 
 | `match_state` | Meaning |
 |---|---|
@@ -1092,7 +1082,7 @@ A Model Context Protocol server, so any MCP client (Claude, ChatGPT, Cursor and 
 - **Typed tools for the common calls.** Ten operations have their own tool: `search_transactions`, `get_month_summary`, `list_accounts`, `get_budgets`, `get_alerts`, `list_inbox`, `get_transaction`, `get_net_worth_live`, `get_filing_stats` and `list_recurring`. They are the ten agents called most, 66 of the 79 Tijori calls in Engram's trace on 2026-10-02/03, all reads. `get_freshness` is typed too, and so are the order tools, which no grouped tool carries: `record_orders` (write), `search_order_items` (read) and `assign_orders` (write). Each runs one `/api` route in-process as the token's member, so it validates, audit-logs (actor `mcp:<token id>`) and fails exactly as that route does, owner lock included. Its `inputSchema` is the route's own JSON Schema (fields flat, `$ref`s inlined, `additionalProperties: false`, required fields, enums and patterns), and its description says what it returns. Arguments are checked against that schema before the route runs: a missing or unknown argument, a wrong type, a value outside an enum or a pattern miss returns `isError` naming the field. The route still applies its own bounds.
 - **Grouped tools.** The 11 grouped tools reach every operation, the ten above included. Each takes `{"action": "…", "args": {…}}`. Their listing is exactly what it was before the typed tools: gateways that pin tool text (Engram) block a tool whose text changes until it is approved, so change it only when it must change.
 - **`describe_action`** `{tool, action}` returns any grouped action's exact argument JSON Schema, its return shape, its typed tool if it has one, its kind and whether it is destructive. It reads no data and runs no route, so the ~60 other operations stay discoverable without being listed. The API refuses to start if an `/api` route has no action and isn't in the table of routes left out, below.
-- **Arguments:** path, query and body fields all go flat (in `args`, for a grouped tool), under the names this document uses. `link_transactions` and `unlink_transactions` take the other txn as `other_txn_id`. `upload_statement` takes `text` (pdftotext `-layout` output) or `pdf_base64`, and a locked PDF is tried with the saved passwords. `import_net_worth_sheet` takes `csv`.
+- **Arguments:** path, query and body fields all go flat (in `args`, for a grouped tool), under the names this document uses. `link_transactions` and `unlink_transactions` take the other txn as `other_txn_id`. `upload_statement` takes `text` (pdftotext `-layout` output) or `pdf_base64`, and a locked PDF is tried with the saved passwords.
 - **Results:** the route's JSON; a 204 becomes `{"ok": true}`. A 4xx returns `isError: true` with `<status>: <detail>`, and validation errors are cut down to `field: message`. A 5xx returns `internal error`.
 - **No transactions ≠ nothing happened:** `get_setup` and `find_transactions`, and the typed ledger reads, tell the agent to call `get_setup` `coverage` (`from?`, `to?`) before saying a period had no transactions.
 - **Freshness:** ledger reads (`get_month_summary`, `get_budgets`, `get_alerts`, `get_filing_stats`, `list_recurring`, `search_transactions`, `list_inbox`, `get_net_worth_live`, and the grouped actions `months`, `trends`, `cards` and `loans` `list`, plus the same actions through the grouped tools) add a `freshness` key: the body of [`GET /api/freshness`](#get-apifreshness), fetched as the same member. If that lookup fails, the answer comes back without it.
@@ -1109,10 +1099,10 @@ A Model Context Protocol server, so any MCP client (Claude, ChatGPT, Cursor and 
 | `edit_transactions` | write | `notes`, `split`, `unsplit`, `link`, `unlink` |
 | `plan_spending` | write | `set_budget`, `set_recurring` |
 | `edit_loans` | write | `create`, `edit`, `attach_txns`, `detach_txns`, `settle`, `reopen`, `write_off` |
-| `edit_net_worth` | write | `set_value`, `set_remark`, `import_sheet` |
+| `edit_net_worth` | write | `set_value`, `set_remark` |
 | `edit_setup` | destructive | `add_account`, `edit_account`, `delete_account`, `upload_statement`, `remove_statement_password`, `edit_mail_source`, `delete_mail_source`, `test_mail_source`, `update_settings`, `rename_me`, `set_onboarding`, `set_classify_profile`, `test_notification`, `revoke_invite` |
 
-Read tools carry `readOnlyHint`, so a client can allow them and still ask before a write. The grouped `edit_setup` keeps `destructiveHint`, since it can delete. Per action, `describe_action` (and any typed write tool) marks as destructive only what deletes, overwrites or can't be undone: `delete_account`, `delete_mail_source`, `remove_statement_password`, `revoke_invite`, `set_classify_profile` (replaces the profile), `import_sheet` (overwrites snapshots by month) and `update_settings` (a retention window purges raw files). `add_account`, `upload_statement` and the rest are not. A read-only connection lists only the read tools (18: 10 typed, `get_freshness`, `search_order_items`, `describe_action` and the 5 grouped reads); calling a write tool gets 403 with `error="insufficient_scope"`.
+Read tools carry `readOnlyHint`, so a client can allow them and still ask before a write. The grouped `edit_setup` keeps `destructiveHint`, since it can delete. Per action, `describe_action` (and any typed write tool) marks as destructive only what deletes, overwrites or can't be undone: `delete_account`, `delete_mail_source`, `remove_statement_password`, `revoke_invite`, `set_classify_profile` (replaces the profile) and `update_settings` (a retention window purges raw files). `add_account`, `upload_statement` and the rest are not. A read-only connection lists only the read tools (18: 10 typed, `get_freshness`, `search_order_items`, `describe_action` and the 5 grouped reads); calling a write tool gets 403 with `error="insufficient_scope"`.
 
 **Left out, on purpose (web only):**
 

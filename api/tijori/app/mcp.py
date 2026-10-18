@@ -128,10 +128,9 @@ TOOLS: dict[str, tuple[str, str, dict[str, tuple[str, str]]]] = {
         "reopen": ("reopen_loan", "open it again"),
         "write_off": ("write_off_loan", "give up on the rest, filed under category_id"),
     }),
-    "edit_net_worth": ("Manual net-worth values, snapshot remarks and the sheet import.", WRITE, {
+    "edit_net_worth": ("Manual net-worth values and snapshot remarks.", WRITE, {
         "set_value": ("put_component", f"set a manual component ({'|'.join(MANUAL_KEYS)}) as of a date; the rest come from statements"),
         "set_remark": ("patch_remark", "the remark on a monthly snapshot"),
-        "import_sheet": ("import_sheet", "the net-worth Google Sheet as CSV text; upserts by month"),
     }),
     "edit_setup": ("Accounts, statements, mailboxes, settings and household. Deletes cannot be undone.", DESTRUCTIVE, {
         "add_account": ("create_account", "a new bank, card or investment account"),
@@ -177,13 +176,10 @@ UPLOADS: dict[str, tuple[str, str, dict[str, Any], list[str], str]] = {
         "filename": {"type": "string", "maxLength": 200}}, [],
         "{statement_id: int, raw_message_id: int, duplicate: bool, account: obj, period_start: YYYY-MM-DD, "
         "period_end: YYYY-MM-DD, reconciliation: obj, txns: obj}"),
-    "import_sheet": ("sheet", "csv: str", {"csv": {"type": "string", "description": "the sheet exported as CSV"}}, ["csv"],
-                     "{snapshots_upserted: int}"),
 }
 
 # Typed tools for the operations agents call, each with the route's JSON Schema, so the common calls need no
-# guessing. Picked from Engram's trace and the Pitcrew rollouts, 2026-10-02/03: these ten were 66 of the 79
-# Tijori calls, all reads. Every other action stays reachable through its grouped tool, with describe_action for
+# guessing. Picked from agent traces: these ten reads were most of the calls agents made. Every other action stays reachable through its grouped tool, with describe_action for
 # its exact schema, so the listing every agent loads each turn stays small. The grouped tools' text is untouched:
 # gateways that pin tool text (Engram) block a tool whose text changes.
 TYPED: dict[str, tuple[str, str]] = {  # typed tool: (grouped tool, action)
@@ -210,7 +206,7 @@ DESCRIBE = "describe_action"
 # Actions that delete, overwrite or can't be undone (route names): a typed tool and describe_action report these
 # alone as destructive. The grouped tools keep their original hints, so their listing stays exactly as it was.
 DESTRUCTIVE_OPS = frozenset({"delete_account", "delete_mail_source", "remove_statement_password", "revoke_invite",
-                             "put_profile", "import_sheet", "patch_settings"})  # profile replace, sheet upsert, retention purge
+                             "put_profile", "patch_settings"})  # profile replace, retention purge
 # Ledger reads whose result also carries `freshness` (GET /api/freshness): one more in-process request per call.
 FRESH = frozenset({"summary", "get_months", "trends", "get_budgets", "get_recurring", "get_alerts", "inbox_stats",
                    "transactions", "inbox", "get_cards", "get_loans", "networth_live"})

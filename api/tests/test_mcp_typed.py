@@ -124,7 +124,7 @@ class Listing(unittest.TestCase):
             self.assertFalse(TYPED[name].listing["annotations"]["destructiveHint"], name)
         self.assertTrue(TYPED["get_freshness"].read_only)
         self.assertEqual(mcp.DESTRUCTIVE_OPS, {"delete_account", "delete_mail_source", "remove_statement_password",
-                                               "revoke_invite", "put_profile", "import_sheet", "patch_settings"})
+                                               "revoke_invite", "put_profile", "patch_settings"})
         hints = {n: REG.tools[n].listing["annotations"]["destructiveHint"] for n in mcp.TOOLS}
         self.assertEqual({n for n, d in hints.items() if d}, {"edit_setup"})  # unchanged from before the typed tools
 
