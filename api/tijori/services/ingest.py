@@ -19,7 +19,6 @@ from tijori.db import MemberContext
 from tijori.models import (
     Account,
     Category,
-    ComponentValue,
     Member,
     Observation,
     PayeeAlias,
@@ -36,7 +35,7 @@ from tijori.parsers import Observation as Line
 from tijori.parsers import Statement as ParsedStatement
 from tijori.parsers import reconcile
 from tijori.parsers.alerts import BALANCE_PARSER, BalanceReading
-from tijori.services import cards, orders, txn_edit
+from tijori.services import cards, networth, orders, txn_edit
 from tijori.services.common import account_ref, audit
 from tijori.services.errors import Invalid
 
@@ -282,11 +281,7 @@ def ingest_statement(s: Session, ctx: MemberContext, actor: str, st: ParsedState
         Txn.member_id == ctx.member_id, Txn.account_id == account.id, Txn.status == "pending", Txn.sources == ["alert"],
         Txn.occurred_at.between(st.period_start + timedelta(days=ALERT_DAYS), st.period_end - timedelta(days=ALERT_DAYS)),
     ).values(status="flagged", bucket="excluded", review_reason="not_in_statement"))
-    for key, amount in st.components:  # newest value wins in networth.live; an older statement never overrides
-        cv = pg_insert(ComponentValue).values(member_id=ctx.member_id, key=key, amount=amount, as_of=st.period_end,
-                                              source="statement")
-        s.execute(cv.on_conflict_do_update(constraint="uq_component_value_member_id_key_as_of",
-                                           set_={"amount": cv.excluded.amount}))
+    networth.record_components(s, ctx.member_id, st.institution, st.components, st.period_end)
     linked = cards.link_card_payments(s, ctx.member_id)
     refunds = txn_edit.link_refunds_by_ref(s, ctx)
     orders.rematch(s, ctx)  # a debit that arrives after its order was recorded links it now

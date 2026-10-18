@@ -138,6 +138,8 @@ Month cycles that contain at least one txn, oldest first. `start` and `end` are 
 ```json
 {"items": [{"id": 51, "institution": "HDFC", "name": "HDFC savings", "kind": "bank", "mask": "0001",
             "label": "HDFC ••0001", "currency": "INR", "txn_count": 8,
+            "subtype": null, "side": "asset", "in_net_worth": true, "opened_at": null,
+            "liquid": true, "liquid_default": true, "asset_class": "cash", "asset_class_default": "cash",
             "first_txn_at": "2026-04-01", "last_txn_at": "2026-04-30",
             "last_statement": {"period_start": "2026-04-01", "period_end": "2026-04-30", "reconciled": true, "diff": "0.00"},
             "statement_passwords": [], "has_statement_password": false, "has_extra_statement_password": false, "balance": {"amount": "184500.00", "as_of": "2026-08-31"},
@@ -145,6 +147,7 @@ Month cycles that contain at least one txn, oldest first. `start` and `end` are 
             "live_through": "2026-10-04T04:28:00Z", "alerts": true}]}
 ```
 
+- **Net worth settings.** `kind` gives the defaults: `side` (asset or liability), `asset_class` and whether it is `liquid`. The member can override `liquid` and `asset_class` (`*_default` is the kind's), leave the account out (`in_net_worth: false`), and set `opened_at` (see [`/api/networth/live`](#get-apinetworthlive), `history`).
 - `balance` is the balance printed after the account's newest statement line, or `null` when no statement had one.
 - `last_seen_at`: when the newest alert for the account arrived, or `null` when none has.
 - `coverage_pct`: of the statement lines dated on or after the account's first alert, the share also seen as an alert. `null` without alerts or such lines. Bank charges, interest and some transfer kinds never send an alert, so 100 is not the norm.
@@ -156,9 +159,25 @@ Accounts are created automatically from uploaded statements. They can also be de
 
 | Endpoint | Behaviour |
 |---|---|
-| `POST /api/accounts` `{"institution", "kind", "name"?, "mask"?}` | `kind` is one of `bank`, `card`, `wallet`, `deposit`, `holding`, `cash`; `mask` is 4 digits. 201 with the account. A later statement for the same institution and mask lands on it |
-| `PATCH /api/accounts/{id}` `{"name"?, "mask"?}` | Returns the account; send `null` to clear a field |
+| `POST /api/accounts` `{"institution", "kind", "name"?, "mask"?, "subtype"?, "liquid"?, "asset_class"?, "in_net_worth"?, "opened_at"?}` | `mask` is 4 digits. 201 with the account. A later statement for the same institution and mask lands on it |
+| `PATCH /api/accounts/{id}` `{"name"?, "mask"?, "kind"?, "subtype"?, "liquid"?, "asset_class"?, "in_net_worth"?, "opened_at"?}` | Returns the account. Only the fields sent change; `null` clears a field, and for `liquid` and `asset_class` goes back to the kind's default. A new `kind` drops a `subtype` it doesn't have |
 | `DELETE /api/accounts/{id}` | 204. 422 if the account has transactions or statements, since history is never orphaned |
+
+| `kind` | Side | Asset class | Liquid | `subtype` |
+|---|---|---|---|---|
+| `bank`, `wallet` | asset | `cash` | yes | |
+| `cash` | asset | `cash` | yes | |
+| `card` | liability | `credit` | yes | |
+| `deposit` | asset | `deposits` | yes | `fd`, `rd` |
+| `holding` | asset | `equity` | no | `stocks`, `mf` |
+| `retirement` | asset | `retirement` | no | `epf`, `ppf`, `nps` |
+| `gold` | asset | `gold` | no | |
+| `property` | asset | `property` | no | |
+| `loan` | liability | `loans` | no | `home`, `car`, `personal`, `education`, `gold` |
+| `other_asset` | asset | `other` | no | |
+| `other_liability` | liability | `other` | no | |
+
+`asset_class` takes any of `cash`, `deposits`, `equity`, `retirement`, `gold`, `property`, `credit`, `loans`, `other`. A card counts as liquid because its outstanding is short-term debt against the same cash.
 
 ---
 
@@ -430,43 +449,6 @@ The member's `month_start_day` shifts month, quarter and FY boundaries. For exam
 - `count` is the number of contributing txns.
 - For `category`, the key `Uncategorized` holds the Inbox.
 
-## `GET /api/networth`
-
-Monthly snapshots, **newest first**.
-
-```json
-{"snapshots": [{"date": "2026-05-01",
-                "components": {"sbi": "3000.00", "hdfc": "229425.00", "fd": "50000.00", "stocks": "20500.00",
-                               "mf": "86000.00", "ppf": "60000.00", "epf": "80000.00", "gold": "10000.00", "other": "0.00"},
-                "net_worth": "538925.00", "net_change": "116925.00", "liquid": "282425.00", "liquid_change": "110425.00",
-                "remark": null, "commentary": "Net worth +₹1.17L. Biggest mover: HDFC savings +₹1.09L.",
-                "commentary_source": "template", "locked": true}],
- "latest": {"date": "2026-05-01", "net_worth": "538925.00",
-            "components": [{"key": "hdfc", "label": "HDFC savings", "asset_class": "cash", "amount": "229425.00", "share_pct": 42.6}],
-            "by_asset_class": {"cash": "232425.00", "equity": "106500.00", "retirement": "140000.00",
-                               "deposits": "50000.00", "gold": "10000.00", "other": "0.00"}}}
-```
-
-| Field | Notes |
-|---|---|
-| `components` | Always all nine keys. `null` means no value was recorded |
-| `liquid` | `sbi + hdfc + fd` |
-| `net_change`, `liquid_change` | Against the previous (older) snapshot. `null` on the oldest |
-| `remark` | The member's own note |
-| `commentary` | The monthly commentary. When none is stored, it is generated from a template with no AI; `commentary_source` then says `template` instead of `stored` |
-| `latest.components` | Sorted by amount desc. `share_pct` is a number, not money |
-| no snapshots | `{"snapshots": [], "latest": null}` |
-
-## `PATCH /api/networth/snapshots/{date}`
-
-Body: `{"remark": "Paid the annual premium"}`, where `remark` is a string of at most 2,000 chars, or `null`/`""` to clear it. Returns `{"date": "2026-05-01", "remark": "Paid the annual premium"}`.
-
-Errors:
-- 404: no snapshot on that date for you.
-- 422: bad date or body.
-
-The change is audit-logged.
-
 ## `GET /api/recurring`
 
 Recurring series (the Subscriptions page), detected from the member's own history on every call. There's no AI. Only your decisions are stored.
@@ -618,20 +600,25 @@ A payee matches when any of its names (merchant or counterparty), compared on le
 
 ## `GET /api/networth/live`
 
-The current net worth. Each component takes its **newest** dated value.
+Net worth now: every account with `in_net_worth`, each at its **newest** dated value, assets added and liabilities subtracted. Open loans to and from people add the rows `loans_given` and `loans_taken`.
 
-- **`statement`:** for `sbi` and `hdfc`, each statement's closing balance and the balance after the newest line. For others, a value read from a statement: the CAS month-end `stocks` and `mf`, PPF, FD, or an EPF passbook.
-- **`prices`:** `stocks` and `mf` at the newest daily price on the latest CAS holdings. That's NSE's closing price for shares and ETFs, and AMFI's NAV for funds. It's used only when the price is newer than the CAS.
-- **`manual`:** a value the member set (below). Only `epf`, `gold` and `other` can be set (`editable: true`); the rest have feeds, and `PUT` on them is a 422.
-- **`estimate`:** EPF after its newest value. The usual monthly credit (the commonest month-on-month rise over the last 6 months) is added on each 1st, for up to 6 months.
-- **Invested since:** money invested into a component after what its value includes is added at cost, until the next statement shows it. Examples: an SIP after the CAS date, or a PPF or FD deposit before the next statement. The component is picked by the payee label: SIP/NACH → `mf`, stocks → `stocks`, PPF → `ppf`, FD → `fd`.
-- **Gold and other** hold their first value before it was set, as a base.
+- **`statement`:** a balance printed after a statement line or in a bank's daily balance mail, moved on by the pending alerts since; a card's statement total due; or a value a statement prints for another account (a PPF balance on a savings statement, a CAS's demat and fund totals). That value lands on the member's account of that kind and subtype at that institution, else their only one of that kind and subtype, else a new one named after the institution.
+- **`prices`:** a `holding` account's securities at the newest daily price, on the account's newest statement holdings. That's NSE's closing price for shares and ETFs, and AMFI's NAV for funds. A security held in two accounts counts once, in the one read most recently.
+- **`manual`** and **`imported`:** a value the member set ([below](#put-apiaccountsidvaluations)), or one moved over from the old monthly snapshots.
+- **`estimate`:** an `epf` account after its newest value. The usual monthly credit (the commonest month-on-month rise over the last 6 months) is added on each 1st, for up to 6 months.
+- **Since its newest value**, an account moves by what it can see. A card adds its purchases and subtracts payments and refunds, so net worth drops when you spend, not when the bill is paid. An investment debit adds at cost to the account it went into, until the next statement shows it: SIP/NACH/MF → the `mf` account, stocks → `stocks`, PPF → `ppf`, FD → `fd` (with several of a subtype, the most recently valued).
+- **Before its first value**, an account with no feed (only values set by hand or imported) and any gold, property, cash or other account holds that first value, as a base, back to its `opened_at` if set. A fed account (statements, prices) has no value before its first one.
+- On the same day, the more direct value wins: prices, then a statement, then a value set by hand, then an imported one, then an estimate.
 
 ```json
 {"as_of": "2026-09-27", "net_worth": "4875000.00", "liquid": "752300.00",
- "components": [{"key": "gold", "label": "Gold", "asset_class": "gold", "amount": "235000.00", "share_pct": 4.8,
-                 "source": "manual", "as_of": "2026-09-27", "stale": false, "editable": true, "change_since": "15000.00"}],
- "by_asset_class": {"cash": "542300.00", "...": "..."},
+ "components": [{"key": "12", "account_id": 12, "label": "Gold", "kind": "gold", "subtype": null, "side": "asset",
+                 "asset_class": "gold", "liquid": false, "amount": "235000.00", "share_pct": 4.8, "source": "manual",
+                 "as_of": "2026-09-27", "stale": false, "editable": true, "change_since": "15000.00"},
+                {"key": "3", "account_id": 3, "label": "HDFC Platinum ••0003", "kind": "card", "subtype": null,
+                 "side": "liability", "asset_class": "credit", "liquid": true, "amount": "-40058.00", "share_pct": 100.0,
+                 "source": "statement", "as_of": "2026-09-14", "stale": false, "editable": true, "change_since": "-5200.00"}],
+ "by_asset_class": {"cash": "542300.00", "credit": "-40058.00", "...": "..."},
  "changes": [{"period": "month", "since": "2026-09-01", "amount": "15000.00", "pct": 0.3},
              {"period": "year", "since": "2026-01-01", "amount": "645000.00", "pct": 15.2},
              {"period": "fy", "since": "2026-04-01", "amount": "485000.00", "pct": 11.1}],
@@ -645,39 +632,48 @@ The current net worth. Each component takes its **newest** dated value.
 
 | Field | Notes |
 |---|---|
-| `stale` | The value is more than 30 days old |
+| `components` | One per counted account with a value, largest first, then the loan rows. `amount` is signed: a liability is negative. `share_pct` is of what you own, or for a liability of what you owe, never of the net total. `key` is the account id as a string, or `loans_given`/`loans_taken` (`account_id: null`) |
+| `liquid` | The sum of accounts that are `liquid` (the account's setting) |
+| `stale` | The value is more than 30 days old and nothing has moved it since |
 | `change_since` | Against the month-end before the 1st of this month |
 | `changes` | Against the month-end before the 1st of the month, 1 Jan, and 1 Apr (FY). `null` before history starts |
-| `history` | Month-end points, oldest first, from the first month each core component held (`sbi`, `hdfc`, `stocks`, `mf`, `ppf`, `epf`) has a value; then today as `live`. Each point is every component's value on that date, computed the same way |
-| `months` | The last 6 intervals between points, newest first: `change = cash_change + contributions + market`. Cash is `sbi + hdfc + fd`. Contributions are `invest`-bucket debits in the interval. Market is the rest, including anything set by hand. |
+| `history` | Month-end points, oldest first, then today as `live`. It starts at the first month-end on which every asset account with a feed (statements, prices) has a value, so a sum isn't missing an account. An account with `opened_at` isn't waited for (before it, it held nothing), one with only values set by hand never holds history back, and liabilities count from their first value |
+| `months` | The last 6 intervals between points, newest first: `change = cash_change + contributions + market`. Cash is the liquid accounts. Contributions are `invest`-bucket debits in the interval. Market is the rest, including anything set by hand. |
 | `projection` | The average monthly change over up to the last 12 intervals, continued 3 and 6 months. `null` with fewer than 3 points |
 
 No data at all gives `net_worth: null` and empty lists.
 
-## `GET /api/networth/components/{key}/history`
+## `GET /api/accounts/{id}/history`
 
-One component's value on every day, oldest first, from its first known value to today. The last point is the value `GET /api/networth/live` shows. `key` is one of `sbi`, `hdfc`, `fd`, `stocks`, `mf`, `ppf`, `epf`, `gold` or `other`; any other key is a 404.
+One account's value on every day, oldest first, from its first known value to today, and the dated values behind it. The last point is what `GET /api/networth/live` shows for a counted account. 404 if the account isn't yours.
 
-- **`sbi`, `hdfc`:** the balance printed after each day's last statement line, or in the bank's daily balance mail, summed over the bank's accounts. After the newest one, pending alerts move it on.
-- **`stocks`, `mf`:** on each day a price is stored, the holdings of the newest CAS on or before that day × each holding's newest price up to it. Prices are kept from the day collection started, with no backfill. Before `priced_from`, the line steps from one CAS value to the next.
-- **The rest:** each value carries forward until the next, with the same "invested since" and EPF estimate rules as `live`.
+- **Balances:** the balance printed after each day's last statement line, or in the bank's daily balance mail. After the newest one, pending alerts move it on.
+- **Cards:** what is owed, from each statement's total due, moved by purchases, payments and refunds since.
+- **Holdings:** on each day a price is stored, the account's newest holdings on or before that day × each security's newest price up to it. Prices are kept from the day collection started, with no backfill. Before `priced_from`, the line steps from one statement value to the next.
+- **The rest:** each value carries forward until the next, with the same investment and EPF estimate rules as `live`.
+
+`value` is what the account is worth, or what is owed for a liability (`side`). `valuations` (newest first) are the values set by hand, read from a statement or imported.
 
 ```json
-{"key": "hdfc", "label": "HDFC savings", "priced_from": null,
- "points": [{"date": "2026-10-12", "value": "520000.00"}, {"date": "2026-10-13", "value": "425000.00"}]}
+{"account_id": 51, "label": "HDFC savings ••0001", "side": "asset", "priced_from": null,
+ "points": [{"date": "2026-10-12", "value": "520000.00"}, {"date": "2026-10-13", "value": "425000.00"}],
+ "valuations": [{"as_of": "2026-06-01", "amount": "410000.00", "source": "manual"}]}
 ```
 
-## `PUT /api/networth/components/{key}`
+## `PUT /api/accounts/{id}/valuations`
 
-Body: `{"amount": "235000.00" | 235000, "as_of"?: "YYYY-MM-DD"}`. `key` is one of the nine component keys. `as_of` defaults to today, and a future date is a 422. It upserts by (key, `as_of`) and returns `{"key", "amount", "as_of"}`. Audit-logged.
+Body: `{"amount": "235000.00" | 235000, "as_of"?: "YYYY-MM-DD"}`: what the account is worth on that day, or what is owed on a liability (≥ 0). `as_of` defaults to today, and a future date is a 422. It replaces any value on that day and returns `{"account_id", "amount", "as_of", "source": "manual"}`. Any account takes one: the newest value wins, so it also stands in for an account with no feed, until its next statement. Audit-logged.
+
+`DELETE /api/accounts/{id}/valuations/{as_of}` removes a value set by hand or imported: 204, 404 when there's none that day, 422 for a value read from a statement (set your own on that day instead).
 
 ## `GET /api/holdings`
 
-Funds and stocks. Each holding shows its latest units times the newest price. The list is empty until the CDSL CAS parser lands (M1/M5).
+Funds and stocks, from the CDSL CAS and fund-house (CAMS) statements, per account they sit in. Each holding shows its latest units times the newest price.
 
 ```json
-{"items": [{"name": "…", "isin": "INF…", "units": "6812.450000", "units_as_of": "2026-09-03", "source": "cas",
-            "price": "86.4200", "price_date": "2026-09-26", "value": "588722.98"}]}
+{"items": [{"name": "…", "isin": "INF…", "units": "6812.450000", "units_as_of": "2026-09-03", "source": "cdsl_cas",
+            "account_id": 9, "account": "CDSL Mutual funds", "price": "86.4200", "price_date": "2026-09-26",
+            "value": "588722.98"}]}
 ```
 
 ## `GET /api/sources/queue`
@@ -1079,7 +1075,7 @@ A Model Context Protocol server, so any MCP client (Claude, ChatGPT, Cursor and 
   - A request carrying `_meta["io.modelcontextprotocol/protocolVersion"]` is served as `2026-07-28`. `MCP-Protocol-Version`, `Mcp-Method` and, for `tools/call`, `Mcp-Name` must match the body (else 400, `-32020`). Any other version gets 400 with `-32022` and the supported list. The methods are `server/discover`, `tools/list` and `tools/call`; anything else gets 404 with `-32601`. Results carry `resultType` and `serverInfo`.
   - Anything else is an `initialize`-based client (`2025-03-26` to `2025-11-25`), with `initialize`, `ping`, `tools/list` and `tools/call`.
 - **Origin:** a browser client's `Origin` must be `https`, or `http` on localhost, else 403. `/mcp` and the OAuth token, register and revoke endpoints answer CORS without credentials.
-- **Typed tools for the common calls.** Ten operations have their own tool: `search_transactions`, `get_month_summary`, `list_accounts`, `get_budgets`, `get_alerts`, `list_inbox`, `get_transaction`, `get_net_worth_live`, `get_filing_stats` and `list_recurring`. They are the ten agents called most, 66 of the 79 Tijori calls in Engram's trace on 2026-10-02/03, all reads. `get_freshness` is typed too, and so are the order tools, which no grouped tool carries: `record_orders` (write), `search_order_items` (read) and `assign_orders` (write). Each runs one `/api` route in-process as the token's member, so it validates, audit-logs (actor `mcp:<token id>`) and fails exactly as that route does, owner lock included. Its `inputSchema` is the route's own JSON Schema (fields flat, `$ref`s inlined, `additionalProperties: false`, required fields, enums and patterns), and its description says what it returns. Arguments are checked against that schema before the route runs: a missing or unknown argument, a wrong type, a value outside an enum or a pattern miss returns `isError` naming the field. The route still applies its own bounds.
+- **Typed tools for the common calls.** Ten operations have their own tool: `search_transactions`, `get_month_summary`, `list_accounts`, `get_budgets`, `get_alerts`, `list_inbox`, `get_transaction`, `get_net_worth_live`, `get_filing_stats` and `list_recurring`. They are the reads agents call most. `get_freshness` is typed too, and so are the order tools, which no grouped tool carries: `record_orders` (write), `search_order_items` (read) and `assign_orders` (write). Each runs one `/api` route in-process as the token's member, so it validates, audit-logs (actor `mcp:<token id>`) and fails exactly as that route does, owner lock included. Its `inputSchema` is the route's own JSON Schema (fields flat, `$ref`s inlined, `additionalProperties: false`, required fields, enums and patterns), and its description says what it returns. Arguments are checked against that schema before the route runs: a missing or unknown argument, a wrong type, a value outside an enum or a pattern miss returns `isError` naming the field. The route still applies its own bounds.
 - **Grouped tools.** The 11 grouped tools reach every operation, the ten above included. Each takes `{"action": "…", "args": {…}}`. Their listing is exactly what it was before the typed tools: gateways that pin tool text (Engram) block a tool whose text changes until it is approved, so change it only when it must change.
 - **`describe_action`** `{tool, action}` returns any grouped action's exact argument JSON Schema, its return shape, its typed tool if it has one, its kind and whether it is destructive. It reads no data and runs no route, so the ~60 other operations stay discoverable without being listed. The API refuses to start if an `/api` route has no action and isn't in the table of routes left out, below.
 - **Arguments:** path, query and body fields all go flat (in `args`, for a grouped tool), under the names this document uses. `link_transactions` and `unlink_transactions` take the other txn as `other_txn_id`. `upload_statement` takes `text` (pdftotext `-layout` output) or `pdf_base64`, and a locked PDF is tried with the saved passwords.
@@ -1093,16 +1089,16 @@ A Model Context Protocol server, so any MCP client (Claude, ChatGPT, Cursor and 
 | `get_reports` | read | `summary` (`get_month_summary`), `months`, `trends`, `budgets` (`get_budgets`), `recurring` (`list_recurring`), `alerts` (`get_alerts`), `filing_stats` (`get_filing_stats`) |
 | `find_transactions` | read | `search` (`search_transactions`), `get` (`get_transaction`), `sources`, `link_candidates`, `inbox` (`list_inbox`) |
 | `get_loans` | read | `list`, `get`, `for_txn` |
-| `get_net_worth` | read | `live` (`get_net_worth_live`), `history`, `holdings` |
+| `get_net_worth` | read | `live` (`get_net_worth_live`), `holdings`, `account_history` |
 | `get_setup` | read | `me`, `accounts` (`list_accounts`), `coverage`, `cards`, `categories`, `rules`, `payees`, `payee_names`, `settings`, `onboarding`, `classify_profile`, `household`, `mail_sources`, `statement_queue`, `backup` |
 | `classify` | write | `set_category`, `file_payee`, `undo`, `set_rule`, `rename_payees`, `reset_payee_names`, `dismiss_name_suggestion` |
 | `edit_transactions` | write | `notes`, `split`, `unsplit`, `link`, `unlink` |
 | `plan_spending` | write | `set_budget`, `set_recurring` |
 | `edit_loans` | write | `create`, `edit`, `attach_txns`, `detach_txns`, `settle`, `reopen`, `write_off` |
-| `edit_net_worth` | write | `set_value`, `set_remark` |
+| `edit_net_worth` | write | `set_value`, `delete_value` |
 | `edit_setup` | destructive | `add_account`, `edit_account`, `delete_account`, `upload_statement`, `remove_statement_password`, `edit_mail_source`, `delete_mail_source`, `test_mail_source`, `update_settings`, `rename_me`, `set_onboarding`, `set_classify_profile`, `test_notification`, `revoke_invite` |
 
-Read tools carry `readOnlyHint`, so a client can allow them and still ask before a write. The grouped `edit_setup` keeps `destructiveHint`, since it can delete. Per action, `describe_action` (and any typed write tool) marks as destructive only what deletes, overwrites or can't be undone: `delete_account`, `delete_mail_source`, `remove_statement_password`, `revoke_invite`, `set_classify_profile` (replaces the profile) and `update_settings` (a retention window purges raw files). `add_account`, `upload_statement` and the rest are not. A read-only connection lists only the read tools (18: 10 typed, `get_freshness`, `search_order_items`, `describe_action` and the 5 grouped reads); calling a write tool gets 403 with `error="insufficient_scope"`.
+Read tools carry `readOnlyHint`, so a client can allow them and still ask before a write. The grouped `edit_setup` keeps `destructiveHint`, since it can delete. Per action, `describe_action` (and any typed write tool) marks as destructive only what deletes, overwrites or can't be undone: `delete_account`, `delete_mail_source`, `remove_statement_password`, `revoke_invite`, `set_classify_profile` (replaces the profile), `delete_value` (a value set by hand) and `update_settings` (a retention window purges raw files). `add_account`, `upload_statement` and the rest are not. A read-only connection lists only the read tools (18: 10 typed, `get_freshness`, `search_order_items`, `describe_action` and the 5 grouped reads); calling a write tool gets 403 with `error="insufficient_scope"`.
 
 **Left out, on purpose (web only):**
 

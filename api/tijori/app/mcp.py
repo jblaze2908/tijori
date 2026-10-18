@@ -40,7 +40,6 @@ from tijori.app.web import origin_ok
 from tijori.db import bind_member_by_mcp_token
 from tijori.models import McpToken
 from tijori.services import mcp_oauth as oauth
-from tijori.services.networth import MANUAL_KEYS
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -75,10 +74,9 @@ TOOLS: dict[str, tuple[str, str, dict[str, tuple[str, str]]]] = {
         "for_txn": ("loan_picker", "open loans a txn could be filed under"),
     }),
     "get_net_worth": ("Net worth, its history and holdings.", READ, {
-        "live": ("networth_live", "net worth now by component and asset class, with month, year and FY change"),
-        "history": ("get_networth", "monthly snapshots, with remarks"),
-        "holdings": ("get_holdings", "funds and stocks with units and value"),
-        "component_history": ("component_history", "one component's value on every day, oldest first"),
+        "live": ("networth_live", "net worth now by account and asset class, with month, year and FY change"),
+        "holdings": ("get_holdings", "funds and stocks with units, value and the account they sit in"),
+        "account_history": ("account_history", "one account's value on every day, oldest first, and the values behind it"),
     }),
     "get_setup": (("Accounts, categories, rules, payees, settings and household. Call coverage before claiming there were "
                    "no transactions in a period: a missing day may be a feed that is behind."), READ, {
@@ -128,13 +126,13 @@ TOOLS: dict[str, tuple[str, str, dict[str, tuple[str, str]]]] = {
         "reopen": ("reopen_loan", "open it again"),
         "write_off": ("write_off_loan", "give up on the rest, filed under category_id"),
     }),
-    "edit_net_worth": ("Manual net-worth values and snapshot remarks.", WRITE, {
-        "set_value": ("put_component", f"set a manual component ({'|'.join(MANUAL_KEYS)}) as of a date; the rest come from statements"),
-        "set_remark": ("patch_remark", "the remark on a monthly snapshot"),
+    "edit_net_worth": ("An account's value on a day, for accounts with no feed or to correct one.", WRITE, {
+        "set_value": ("put_valuation", "set an account's value as of a date (what is owed, for a liability); the newest value wins"),
+        "delete_value": ("delete_valuation", "remove a value set by hand on a date"),
     }),
     "edit_setup": ("Accounts, statements, mailboxes, settings and household. Deletes cannot be undone.", DESTRUCTIVE, {
-        "add_account": ("create_account", "a new bank, card or investment account"),
-        "edit_account": ("patch_account", "rename it or change its last digits"),
+        "add_account": ("create_account", "a new account: bank, card, investments, retirement, gold, property, loan or other"),
+        "edit_account": ("patch_account", "rename it, change its last digits, kind, or how it counts in net worth"),
         "delete_account": ("delete_account", "delete the account"),
         "upload_statement": ("upload", "a statement as pdftotext -layout text, or a PDF as base64; locked PDFs try the saved passwords"),
         "remove_statement_password": ("remove_statement_password", "forget one saved statement password"),
@@ -206,7 +204,7 @@ DESCRIBE = "describe_action"
 # Actions that delete, overwrite or can't be undone (route names): a typed tool and describe_action report these
 # alone as destructive. The grouped tools keep their original hints, so their listing stays exactly as it was.
 DESTRUCTIVE_OPS = frozenset({"delete_account", "delete_mail_source", "remove_statement_password", "revoke_invite",
-                             "put_profile", "patch_settings"})  # profile replace, retention purge
+                             "put_profile", "patch_settings", "delete_valuation"})  # profile replace, retention purge, a value set by hand
 # Ledger reads whose result also carries `freshness` (GET /api/freshness): one more in-process request per call.
 FRESH = frozenset({"summary", "get_months", "trends", "get_budgets", "get_recurring", "get_alerts", "inbox_stats",
                    "transactions", "inbox", "get_cards", "get_loans", "networth_live"})

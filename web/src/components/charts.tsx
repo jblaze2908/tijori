@@ -403,9 +403,11 @@ export function NetWorthChart(o: { history: { date: string; value: Paise }[]; pr
   if (!all.length) return null;
   const vals = all.map((p) => p.value);
   const lo = Math.min(...vals), hi2 = Math.max(...vals);
-  const pad = (hi2 - lo) * 0.15 || hi2 * 0.05 || 1;
-  const min = Math.max(0, lo - pad), max = hi2 + pad;
+  const pad = (hi2 - lo) * 0.15 || Math.abs(hi2) * 0.05 || 1;
+  // A floor at 0 while everything is positive; net worth can be negative (a home loan), and then the scale follows it.
+  const min = lo >= 0 ? Math.max(0, lo - pad) : lo - pad, max = hi2 + pad;
   const y = (v: number) => B - ((v - min) / (max - min)) * (B - T);
+  const base = min < 0 && max > 0 ? y(0) : B; // the area fills to zero when the line crosses it
   const hx = o.history.map((p) => x(p.date));
   const hy = o.history.map((p) => y(p.value));
   const now = o.history.at(-1);
@@ -425,7 +427,7 @@ export function NetWorthChart(o: { history: { date: string; value: Paise }[]; pr
           </g>
         ))}
         {o.projection.length > 0 && now && <rect x={x(now.date)} y={T} width={R - x(now.date)} height={B - T} fill="#ffffff" fillOpacity={0.02} />}
-        {hx.length > 1 && <path d={`${pts(hx, hy)}L${hx.at(-1)} ${B}L${hx[0]} ${B}Z`} fill={ink} fillOpacity={0.08} />}
+        {hx.length > 1 && <path d={`${pts(hx, hy)}L${hx.at(-1)} ${base}L${hx[0]} ${base}Z`} fill={ink} fillOpacity={0.08} />}
         {hp && <path d={`M${x(hp.date)} ${T}V${B}`} className="xhair" />}
         <path d={pts(hx, hy)} stroke={ink} strokeWidth={2} fill="none" strokeLinejoin="round" />
         {o.dots !== false && hx.slice(0, -1).map((cx, i) => (

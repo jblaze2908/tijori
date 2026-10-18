@@ -1,191 +1,128 @@
-"""Net-worth snapshots: the sheet, 1:1. Liquid = SBI + HDFC savings + FD, as the sheet defines it."""
+"""Net worth by account (account_kinds). Every account the member counts is valued from its own evidence, and on any
+day takes its newest value: a printed balance moved on by the alerts since (banks), the card statement plus card
+txns since (cards, as what is owed), units × that day's price (holdings), or a dated value set by hand or printed by
+a statement; EPF also gets an estimate. Assets add, liabilities subtract, and open loans to and from people add two
+rows of their own. Which accounts count, which are liquid and their asset class are the member's settings."""
 
 import re
+from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, select, true, update
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from tijori.account_kinds import COMPONENT_ACCOUNTS, KINDS, SUBTYPE_LABELS, asset_class, liquid
 from tijori.db import MemberContext
-from tijori.models import Account, ComponentValue, Holding, Observation, Price, Snapshot, Statement, Txn
+from tijori.models import Account, AccountValuation, Holding, Observation, Price, Statement, Txn
 from tijori.money import ZERO, fmt
-from tijori.services.common import audit
 from tijori.services import loans
+from tijori.services.common import account_label, audit
+from tijori.services.errors import Invalid, NotFound
 from tijori.services.recurring import alerts_from, balances
-
-COMPONENT_KEYS = ("sbi", "hdfc", "fd", "stocks", "mf", "ppf", "epf", "gold", "other")
-MANUAL_KEYS = ("epf", "gold", "other")  # no feed: the member sets these; the rest come from statements and prices
-LIQUID_KEYS = ("sbi", "hdfc", "fd")
-LABELS = {
-    "sbi": ("SBI savings", "cash"), "hdfc": ("HDFC savings", "cash"), "fd": ("Fixed deposits", "deposits"),
-    "stocks": ("Stocks", "equity"), "mf": ("Mutual funds", "equity"), "ppf": ("PPF", "retirement"),
-    "epf": ("EPF", "retirement"), "gold": ("Gold", "gold"), "other": ("Other", "other"),
-}
-MAX_REMARK = 2000
-
-
-def _inr_short(v: Decimal) -> str:
-    sign = "+" if v >= 0 else "−"
-    a = abs(v)
-    if a >= 100_000:
-        return f"{sign}₹{a / 100_000:.2f}L"
-    if a >= 1_000:
-        return f"{sign}₹{a / 1_000:.1f}K"
-    return f"{sign}₹{a:.0f}"
-
-
-def build_commentary(prev: dict[str, Any] | None, cur: dict[str, Any]) -> str | None:
-    """Template commentary (no AI), e.g. "Net worth +₹2.19L. Biggest mover: HDFC savings +₹1.66L."."""
-    if prev is None:
-        return None
-    text = f"Net worth {_inr_short(cur['net_worth'] - prev['net_worth'])}."
-    deltas = {k: cur["components"].get(k, ZERO) - prev["components"].get(k, ZERO)
-              for k in set(cur["components"]) | set(prev["components"])}
-    if deltas:
-        key = max(sorted(deltas), key=lambda k: abs(deltas[k]))
-        if deltas[key] != 0:
-            text += f" Biggest mover: {LABELS.get(key, (key.title(),))[0]} {_inr_short(deltas[key])}."
-    return text
-
-
-def _liquid(components: dict[str, Decimal]) -> Decimal | None:
-    parts = [components[k] for k in LIQUID_KEYS if k in components]
-    return sum(parts, ZERO) if parts else None
-
-
-def list_networth(s: Session, member_id: int) -> dict[str, Any]:
-    rows = s.scalars(select(Snapshot).where(Snapshot.member_id == member_id).order_by(Snapshot.date)).all()
-    snaps: list[dict[str, Any]] = []
-    prev: dict[str, Any] | None = None
-    for r in rows:
-        comps = {k: Decimal(v) for k, v in r.components_json.items()}
-        liquid = _liquid(comps)
-        cur = {"date": r.date, "components": comps, "net_worth": r.net_worth, "liquid": liquid}
-        commentary, source = r.commentary, "stored"
-        if not commentary:
-            commentary, source = build_commentary(prev, cur), "template"
-        snaps.append({
-            "date": r.date,
-            "components": {k: fmt(comps[k]) if k in comps else None for k in COMPONENT_KEYS},
-            "net_worth": fmt(r.net_worth),
-            "net_change": fmt(r.net_worth - prev["net_worth"]) if prev else None,
-            "liquid": fmt(liquid) if liquid is not None else None,
-            "liquid_change": fmt(liquid - prev["liquid"])
-            if prev and liquid is not None and prev["liquid"] is not None else None,
-            "remark": r.remark, "commentary": commentary,
-            "commentary_source": source if commentary else None, "locked": r.locked,
-        })
-        prev = cur
-    latest = None
-    if prev is not None:
-        total = sum(prev["components"].values(), ZERO)
-        comps_out, by_class = [], {}
-        for key, amount in sorted(prev["components"].items(), key=lambda kv: (-kv[1], kv[0])):
-            label, asset_class = LABELS.get(key, (key.replace("_", " ").title(), "other"))
-            by_class[asset_class] = by_class.get(asset_class, ZERO) + amount
-            comps_out.append({"key": key, "label": label, "asset_class": asset_class, "amount": fmt(amount),
-                              "share_pct": float(round(amount * 100 / total, 1)) if total else 0.0})
-        latest = {"date": prev["date"], "net_worth": fmt(prev["net_worth"]), "components": comps_out,
-                  "by_asset_class": {k: fmt(v) for k, v in by_class.items()}}
-    snaps.reverse()  # newest first
-    return {"snapshots": snaps, "latest": latest}
-
-
-def update_remark(s: Session, ctx: MemberContext, actor: str, day: date, remark: str | None) -> dict[str, Any] | None:
-    row = s.execute(
-        update(Snapshot).where(Snapshot.member_id == ctx.member_id, Snapshot.date == day)
-        .values(remark=remark).returning(Snapshot.date, Snapshot.remark)
-    ).first()
-    if row is None:
-        return None
-    audit(s, ctx, actor, "snapshot.remark", f"snapshot:{day.isoformat()}", {"remark_length": len(remark or "")})
-    return {"date": row.date, "remark": row.remark}
-
-
-# --- live net worth -----------------------------------------------------------------------------
-# Each component takes its newest dated value from statements, the CAS, daily prices or a value set by hand;
-# history is those values at each month-end. The imported sheet isn't read here.
 
 STALE_DAYS = 30
 PROJECTION_MONTHS = 12
-BANK_KEYS = {"SBI": "sbi", "HDFC": "hdfc"}
-HISTORY_CORE = ("sbi", "hdfc", "stocks", "mf", "ppf", "epf")  # history starts once each of these (if held) is known
-CARRY_BACK = ("gold", "other")  # before its first value, a component holds that value as a base
 ETF = re.compile(r"\bETF\b|BEES", re.I)
+# Same day, the more direct evidence wins: a price over a statement's total, a statement over a value set by hand.
+RANK = {"estimate": 0, "imported": 1, "manual": 2, "statement": 3, "prices": 4}
+# Where an investment debit lands, by the payee label or narration: the subtype of the account it adds to.
+INVESTS_INTO = ((re.compile(r"MF|SIP|NACH", re.I), "mf"), (re.compile(r"stock", re.I), "stocks"),
+                (re.compile(r"PPF", re.I), "ppf"), (re.compile(r"\bFD\b|fixed deposit", re.I), "fd"))
+
+Entry = tuple[date, Decimal, str, date]  # as of, value (what is owed, for a liability), source, what it already includes
+Flow = tuple[date, Decimal]  # money into (out of) the account after its newest value, not yet in it
 
 
-def _bank_balances(s: Session, member_id: int) -> dict[str, tuple[Decimal, date]]:
-    kinds = dict(s.execute(select(Account.id, Account.institution).where(
-        Account.member_id == member_id, Account.kind == "bank")).all())
-    out: dict[str, tuple[Decimal, date]] = {}
-    for account_id, (amount, as_of) in balances(s, member_id).items():
-        key = BANK_KEYS.get((kinds.get(account_id) or "").upper())
-        if key is None:
-            continue
-        prev = out.get(key)
-        out[key] = (amount + (prev[0] if prev else ZERO), max(as_of, prev[1]) if prev else as_of)
+@dataclass(frozen=True, slots=True)
+class Acct:
+    id: int
+    label: str
+    kind: str
+    subtype: str | None
+    asset_class: str
+    liquid: bool
+    opened_at: date | None
+
+    @property
+    def liability(self) -> bool:
+        return KINDS[self.kind].side == "liability"
+
+
+def _accounts(s: Session, member_id: int) -> dict[int, Acct]:
+    rows = s.scalars(select(Account).where(Account.member_id == member_id, Account.in_net_worth)).all()
+    return {a.id: Acct(a.id, account_label(a.institution, a.name, a.mask) or a.institution, a.kind, a.subtype,
+                       asset_class(a.kind, a.asset_class), liquid(a.kind, a.liquid), a.opened_at) for a in rows}
+
+
+def _equity(isin: str | None, name: str | None) -> bool:
+    return (isin or "").startswith("INE") or bool(ETF.search(name or ""))
+
+
+def _latest_holdings(s: Session, member_id: int, accts: dict[int, Acct], today: date) -> dict[int, tuple[date, list[Any]]]:
+    """Each account's holdings at its newest statement date. A security held in two accounts (a fund on a CAMS
+    statement and again in the CAS) counts once, in the account read most recently. One query."""
+    newest = (select(Holding.account_id, func.max(Holding.as_of).label("as_of"))
+              .where(Holding.member_id == member_id, Holding.as_of <= today).group_by(Holding.account_id).subquery())
+    rows = s.execute(select(Holding.account_id, Holding.as_of, Holding.isin, Holding.name, Holding.units)
+                     .join(newest, (newest.c.account_id == Holding.account_id) & (newest.c.as_of == Holding.as_of))
+                     .where(Holding.member_id == member_id)).all()
+    owner: dict[str, tuple[date, int]] = {}
+    for r in rows:
+        if r.account_id in accts and r.isin:
+            owner[r.isin] = max(owner.get(r.isin, (r.as_of, -r.account_id)), (r.as_of, -r.account_id))
+    out: dict[int, tuple[date, list[Any]]] = {}
+    for r in rows:
+        if r.account_id in accts and (not r.isin or owner[r.isin] == (r.as_of, -r.account_id)):
+            out.setdefault(r.account_id, (r.as_of, []))[1].append(r)
     return out
 
 
-def _add_months(d: date, n: int) -> date:
-    y, m = divmod(d.month - 1 + n, 12)
-    return date(d.year + y, m + 1, min(d.day, 28))
-
-
-def _equity_key(isin: str | None, name: str | None) -> str:
-    return "stocks" if (isin or "").startswith("INE") or ETF.search(name or "") else "mf"
-
-
-def _priced(s: Session, member_id: int, today: date) -> dict[str, tuple[Decimal, date, date]]:
-    """Stocks and funds at the newest daily price (NSE close, AMFI NAV) on the latest CAS holdings; only when
-    a price is newer than the CAS. Units bought since the CAS show up with the next one. One query."""
-    latest = s.scalar(select(func.max(Holding.as_of)).where(Holding.member_id == member_id, Holding.source == "cdsl_cas"))
-    if latest is None:
+def _priced(s: Session, member_id: int, accts: dict[int, Acct], today: date) -> dict[int, tuple[Decimal, date, date]]:
+    """Holdings at the newest daily price (NSE close, AMFI NAV) up to today: (value, price date, holdings date).
+    Units bought since the statement show up with the next one."""
+    latest = _latest_holdings(s, member_id, accts, today)
+    isins = {r.isin for _, rows in latest.values() for r in rows if r.isin}
+    if not isins:
         return {}
-    px = (select(Price.close, Price.date).where(Price.isin_or_symbol == Holding.isin, Price.date <= today)
-          .order_by(Price.date.desc()).limit(1).lateral())
-    rows = s.execute(select(Holding.isin, Holding.name, Holding.units, px.c.close, px.c.date)
-                     .outerjoin(px, true())
-                     .where(Holding.member_id == member_id, Holding.source == "cdsl_cas", Holding.as_of == latest)).all()
-    out: dict[str, list[Any]] = {}
-    for isin, name, units, close, day in rows:
-        if close is None:
-            continue
-        key = _equity_key(isin, name)
-        v = out.setdefault(key, [ZERO, latest])
-        v[0] += (units * close).quantize(Decimal("0.01"))
-        v[1] = max(v[1], day)
-    return {k: (v[0], v[1], latest) for k, v in out.items() if v[1] > latest}
+    ranked = (select(Price.isin_or_symbol, Price.close, Price.date,
+                     func.row_number().over(partition_by=Price.isin_or_symbol, order_by=Price.date.desc()).label("rn"))
+              .where(Price.isin_or_symbol.in_(isins), Price.date <= today).subquery())
+    px = {r.isin_or_symbol: (r.close, r.date) for r in s.execute(select(ranked).where(ranked.c.rn == 1))}
+    out: dict[int, tuple[Decimal, date, date]] = {}
+    for aid, (as_of, rows) in latest.items():
+        priced = [(r.units * px[r.isin][0], px[r.isin][1]) for r in rows if r.isin in px]
+        if priced:
+            out[aid] = (sum((v for v, _ in priced), ZERO).quantize(Decimal("0.01")), max(d for _, d in priced), as_of)
+    return out
 
 
-Entry = tuple[date, Decimal, str, date]  # as of, amount, source, what it already includes (a priced CAS: its date)
+def _series(s: Session, member_id: int, accts: dict[int, Acct], today: date) -> dict[int, list[Entry]]:
+    """Every dated value per account, oldest first (same day: by RANK). Five queries plus the balance lookup."""
+    out: dict[int, list[Entry]] = {}
 
+    def add(aid: int | None, e: Entry) -> None:
+        if aid in accts:
+            out.setdefault(aid, []).append(e)
 
-def _series(s: Session, member_id: int, today: date) -> dict[str, list[Entry]]:
-    """Every dated value per component, oldest first: bank statement closings and the newest balance, values
-    read from statements or set by hand, and daily prices. Not the sheet: its EPF, gold and other rows were
-    imported as values set by hand. Four queries plus the balance lookup."""
-    out: dict[str, list[Entry]] = {}
-    for inst, day, amount in s.execute(
-            select(Account.institution, Statement.period_end, func.sum(Statement.closing))
-            .join(Account, Account.id == Statement.account_id)
-            .where(Statement.member_id == member_id, Account.kind == "bank")
-            .group_by(Account.institution, Statement.period_end)):
-        if key := BANK_KEYS.get((inst or "").upper()):
-            out.setdefault(key, []).append((day, amount, "statement", day))
-    for key, (amount, day) in _bank_balances(s, member_id).items():
-        out.setdefault(key, []).append((day, amount, "statement", day))
-    for cv in s.scalars(select(ComponentValue).where(ComponentValue.member_id == member_id)):
-        out.setdefault(cv.key, []).append((cv.as_of, cv.amount, "statement" if cv.source == "statement" else "manual", cv.as_of))
-    for key, (amount, day, units_of) in _priced(s, member_id, today).items():
-        out.setdefault(key, []).append((day, amount, "prices", units_of))
-    for key, v in out.items():
-        v[:] = sorted((x for x in v if x[0] <= today), key=lambda x: x[0])
-    if out.get("epf"):
-        out["epf"] += _epf_estimate(out["epf"], today)
+    for aid, day, closing in s.execute(select(Statement.account_id, Statement.period_end, Statement.closing)
+                                       .where(Statement.member_id == member_id)):
+        if aid in accts:  # a card statement's closing is minus what is due
+            add(aid, (day, -closing if accts[aid].kind == "card" else closing, "statement", day))
+    for aid, (amount, day) in balances(s, member_id).items():
+        if aid in accts and accts[aid].kind != "card":
+            add(aid, (day, amount, "statement", day))
+    for v in s.scalars(select(AccountValuation).where(AccountValuation.member_id == member_id)):
+        add(v.account_id, (v.as_of, v.amount, v.source, v.as_of))
+    for aid, (amount, day, units_of) in _priced(s, member_id, accts, today).items():
+        add(aid, (day, amount, "prices", units_of))
+    for v in out.values():
+        v[:] = sorted((x for x in v if x[0] <= today), key=lambda x: (x[0], RANK[x[2]]))
+    for aid, v in out.items():
+        if accts[aid].subtype == "epf" and v:
+            v += _epf_estimate(v, today)
     return {k: v for k, v in out.items() if v}
 
 
@@ -208,9 +145,37 @@ def _epf_estimate(epf: list[Entry], today: date) -> list[Entry]:
     return out
 
 
-def _value_at(series: list[Entry], day: date, carry_back: bool, bought: list[tuple[date, Decimal]]) -> Decimal | None:
-    """The newest value on or before `day`, plus money invested into it after what that value includes (units
-    bought since the CAS, a deposit the next statement will show)."""
+def _flows(s: Session, member_id: int, accts: dict[int, Acct], series: dict[int, list[Entry]],
+           since: date) -> dict[int, list[Flow]]:
+    """Money that moves an account between its values: a card's purchases (+ owed) and payments and refunds
+    (− owed); an investment debit into the one account of its subtype, or the most recently valued of several."""
+    out: dict[int, list[Flow]] = {}
+    cards = [a for a in accts if accts[a].kind == "card"]
+    if cards:
+        for aid, day, direction, amount in s.execute(
+                select(Txn.account_id, Txn.occurred_at, Txn.direction, Txn.amount)
+                .where(Txn.member_id == member_id, Txn.account_id.in_(cards), Txn.occurred_at >= since,
+                       Txn.status.is_distinct_from("flagged"), Txn.split_of.is_(None))):
+            out.setdefault(aid, []).append((day, amount if direction == "debit" else -amount))
+    into: dict[str, int] = {}
+    for aid, a in accts.items():
+        if a.subtype in ("mf", "stocks", "ppf", "fd") and aid in series:
+            best = into.get(a.subtype)
+            if best is None or series[aid][-1][0] > series[best][-1][0]:
+                into[a.subtype] = aid
+    if into:
+        for day, amount, merchant, narration in s.execute(
+                select(Txn.occurred_at, Txn.amount, Txn.merchant_norm, Txn.narration)
+                .where(Txn.member_id == member_id, Txn.bucket == "invest", Txn.direction == "debit", Txn.occurred_at >= since)):
+            sub = next((k for rx, k in INVESTS_INTO if rx.search(merchant or "")), None) or \
+                next((k for rx, k in INVESTS_INTO if rx.search(narration or "")), None)
+            if sub in into:
+                out.setdefault(into[sub], []).append((day, amount))
+    return out
+
+
+def _value_at(series: list[Entry], day: date, carry_back: bool, flows: list[Flow]) -> Decimal | None:
+    """The newest value on or before `day`, plus the flows after what that value includes."""
     best = None
     for e in series:
         if e[0] > day:
@@ -218,47 +183,53 @@ def _value_at(series: list[Entry], day: date, carry_back: bool, bought: list[tup
         best = e
     if best is None:
         return series[0][1] if carry_back else None
-    return best[1] + sum((a for d, a in bought if best[3] < d <= day), ZERO)
-
-
-# Where an investment lands, by the payee label the classifier gives it; unmatched ones join no component.
-INVESTS_INTO = ((re.compile(r"MF|SIP|NACH", re.I), "mf"), (re.compile(r"stock", re.I), "stocks"),
-                (re.compile(r"PPF", re.I), "ppf"), (re.compile(r"\bFD\b|fixed deposit", re.I), "fd"))
-
-
-def _bought(s: Session, member_id: int, since: date) -> dict[str, list[tuple[date, Decimal]]]:
-    out: dict[str, list[tuple[date, Decimal]]] = {}
-    for day, amount, merchant, narration in s.execute(
-            select(Txn.occurred_at, Txn.amount, Txn.merchant_norm, Txn.narration)
-            .where(Txn.member_id == member_id, Txn.bucket == "invest", Txn.direction == "debit", Txn.occurred_at >= since)):
-        key = next((k for rx, k in INVESTS_INTO if rx.search(merchant or "")), None) or \
-            next((k for rx, k in INVESTS_INTO if rx.search(narration or "")), None)
-        if key:
-            out.setdefault(key, []).append((day, amount))
-    return out
+    return best[1] + sum((a for d, a in flows if best[3] < d <= day), ZERO)
 
 
 def _month_end(d: date) -> date:
     return date(d.year + (d.month == 12), d.month % 12 + 1, 1) - timedelta(days=1)
 
 
+def _add_months(d: date, n: int) -> date:
+    y, m = divmod(d.month - 1 + n, 12)
+    return date(d.year + y, m + 1, min(d.day, 28))
+
+
+def _pct(part: Decimal, whole: Decimal) -> float:
+    return float(round(abs(part) * 100 / whole, 1)) if whole else 0.0
+
+
 def live(s: Session, member_id: int, today: date) -> dict[str, Any]:
-    series = _series(s, member_id, today)
+    accts = _accounts(s, member_id)
+    series = _series(s, member_id, accts, today)
     owed, owe = loans.balances(s, member_id)  # open loans: money owed to you is an asset, money you owe a liability
     if not series:
         return {"as_of": today, "net_worth": None, "liquid": None, "components": [], "by_asset_class": {},
                 "changes": [], "history": [], "months": [], "projection": None}
+    flows = _flows(s, member_id, accts, series, min(v[0][0] for v in series.values()))
+    # A feed (statements, prices) is what history waits for. An account with only values set by hand, or a store of
+    # value (gold, property), held its first value before it was set, back to its opening date if the member gave one.
+    fed = {aid for aid, v in series.items() if any(e[2] in ("statement", "prices") for e in v)}
+    carry = {aid for aid in series if KINDS[accts[aid].kind].carry_back or aid not in fed}
 
-    bought = _bought(s, member_id, min(v[0][0] for v in series.values()))
+    def at(day: date) -> dict[int, Decimal]:
+        """Each counted account's signed value: liabilities negative."""
+        vals: dict[int, Decimal] = {}
+        for aid, v in series.items():
+            a = accts[aid]
+            if a.opened_at and day < a.opened_at:
+                continue
+            x = _value_at(v, day, aid in carry, flows.get(aid, []))
+            if x is not None:
+                vals[aid] = -x if a.liability else x
+        return vals
 
-    def at(day: date) -> dict[str, Decimal]:
-        vals = {k: _value_at(series[k], day, k in CARRY_BACK, bought.get(k, [])) for k in COMPONENT_KEYS if k in series}
-        return {k: v for k, v in vals.items() if v is not None}
-
-    # Month-end points from the first month every core account is known; then today.
-    core = [series[k][0][0] for k in HISTORY_CORE if k in series]
-    first = _month_end(max(core)) if core else _month_end(min(v[0][0] for v in series.values()))
-    points: list[tuple[date, dict[str, Decimal]]] = []
+    # Month-end points from the first month every fed asset account is known (one with an opening date isn't
+    # waited for: before its first value it held nothing); liabilities count from their first value. Then today.
+    core = [v[0][0] for aid, v in series.items()
+            if aid in fed and aid not in carry and not accts[aid].liability and accts[aid].opened_at is None]
+    first = _month_end(max(core) if core else min(v[0][0] for v in series.values()))
+    points: list[tuple[date, dict[int, Decimal]]] = []
     d = first
     while d < today:
         points.append((d, at(d)))
@@ -268,26 +239,34 @@ def live(s: Session, member_id: int, today: date) -> dict[str, Any]:
     nw = {day: sum(c.values(), ZERO) for day, c in points}
 
     total = sum(now.values(), ZERO) + owed - owe
+    # Shares are of what you own, or for a liability of what you owe: a share of a net total means nothing once it
+    # nears zero or goes negative.
+    own = sum((v for v in now.values() if v > 0), ZERO) + owed
+    owes = -sum((v for v in now.values() if v < 0), ZERO) + owe
+
+    def share(v: Decimal) -> float:
+        return _pct(v, own if v > 0 else owes)
+
     base = next((c for day, c in reversed(points) if day < today.replace(day=1)), None)
     comps, by_class = [], {}
-    for key in COMPONENT_KEYS:
-        if key not in now:
-            continue
-        day, _, source, _ = series[key][-1]
-        label, asset_class = LABELS[key]
-        by_class[asset_class] = by_class.get(asset_class, ZERO) + now[key]
-        comps.append({"key": key, "label": label, "asset_class": asset_class, "amount": fmt(now[key]),
-                      "share_pct": float(round(now[key] * 100 / total, 1)) if total else 0.0,
-                      "source": source, "as_of": day, "stale": (today - day).days > STALE_DAYS and source != "estimate",
-                      "editable": key in MANUAL_KEYS,
-                      "change_since": fmt(now[key] - base[key]) if base and key in base else None})
-    for key, label, amount in (("loans_given", "Loans given", owed), ("loans_taken", "Loans taken", -owe)):
+    for aid in sorted(now, key=lambda a: (-abs(now[a]), a)):
+        a, (day, _, source, _) = accts[aid], series[aid][-1]
+        by_class[a.asset_class] = by_class.get(a.asset_class, ZERO) + now[aid]
+        comps.append({"key": str(aid), "account_id": aid, "label": a.label, "kind": a.kind, "subtype": a.subtype,
+                      "side": KINDS[a.kind].side, "asset_class": a.asset_class, "liquid": a.liquid,
+                      "amount": fmt(now[aid]), "share_pct": share(now[aid]), "source": source, "as_of": day,
+                      "stale": (today - day).days > STALE_DAYS and source != "estimate" and not flows.get(aid),
+                      "editable": True,
+                      "change_since": fmt(now[aid] - base[aid]) if base and aid in base else None})
+    for key, label, amount, side in (("loans_given", "Loans given", owed, "asset"),
+                                     ("loans_taken", "Loans taken", -owe, "liability")):
         if amount:
             by_class["loans"] = by_class.get("loans", ZERO) + amount
-            comps.append({"key": key, "label": label, "asset_class": "loans", "amount": fmt(amount),
-                          "share_pct": float(round(amount * 100 / total, 1)) if total else 0.0, "source": "loans",
-                          "as_of": today, "stale": False, "editable": False, "change_since": None})
-    liquid = sum((now[k] for k in LIQUID_KEYS if k in now), ZERO)
+            comps.append({"key": key, "account_id": None, "label": label, "kind": None, "subtype": None, "side": side,
+                          "asset_class": "loans", "liquid": False, "amount": fmt(amount), "share_pct": share(amount),
+                          "source": "loans", "as_of": today, "stale": False, "editable": False, "change_since": None})
+    liquid_ids = {aid for aid, a in accts.items() if a.liquid}
+    liquid_now = sum((v for aid, v in now.items() if aid in liquid_ids), ZERO)
 
     changes = []
     fy_start = date(today.year if today.month >= 4 else today.year - 1, 4, 1)
@@ -301,8 +280,8 @@ def live(s: Session, member_id: int, today: date) -> dict[str, Any]:
 
     history = [{"date": day, "net_worth": fmt(nw[day]), "kind": "live" if day == today else "snapshot"} for day, _ in points]
 
-    # Month by month: change = cash change + contributions + market (and anything set by hand).
-    liq = [(day, nw[day], sum((c[k] for k in LIQUID_KEYS if k in c), ZERO)) for day, c in points]
+    # Month by month: change = liquid change + contributions + market (and anything set by hand).
+    liq = [(day, nw[day], sum((v for aid, v in c.items() if aid in liquid_ids), ZERO)) for day, c in points]
     intervals = list(zip(liq, liq[1:]))[-6:]
     invest = s.execute(
         select(Txn.occurred_at, Txn.amount)
@@ -327,126 +306,203 @@ def live(s: Session, member_id: int, today: date) -> dict[str, Any]:
             projection = {"monthly_change": fmt(per_month), "basis_months": span,
                           "points": [{"date": _add_months(today, n), "net_worth": fmt(total + per_month * n)}
                                      for n in (3, 6)]}
-    return {"as_of": today, "net_worth": fmt(total), "liquid": fmt(liquid), "components": comps,
+    return {"as_of": today, "net_worth": fmt(total), "liquid": fmt(liquid_now), "components": comps,
             "by_asset_class": {k: fmt(v) for k, v in by_class.items()}, "changes": changes,
             "history": history, "months": months, "projection": projection}
 
 
-def _bank_days(s: Session, member_id: int, institution: str, today: date) -> list[Entry]:
-    """Each day's balance summed over the institution's accounts: the newest balance printed that day (statement
-    lines, balance mails), then pending alerts after the newest one, as `recurring.balances` does. Three queries."""
-    ids = list(s.scalars(select(Account.id).where(Account.member_id == member_id, Account.kind == "bank",
-                                                  func.upper(Account.institution) == institution)))
-    per: dict[int, dict[date, Decimal]] = {}
-    anchor: dict[int, date] = {}
-    for aid, day, bal, parser in s.execute(
-            select(Observation.account_id, Observation.occurred_at, Observation.balance_after, Observation.parser)
-            .where(Observation.member_id == member_id, Observation.account_id.in_(ids or [0]),
+# --- one account, day by day ----------------------------------------------------------------------
+
+def _balance_days(s: Session, member_id: int, account_id: int, today: date) -> list[Entry]:
+    """The account's balance on each day one is printed (statement lines, balance mails), then moved on by the
+    pending alerts after the newest one, as `recurring.balances` does. Two queries."""
+    days: dict[date, Decimal] = {}
+    anchor = None
+    for day, bal, parser in s.execute(
+            select(Observation.occurred_at, Observation.balance_after, Observation.parser)
+            .where(Observation.member_id == member_id, Observation.account_id == account_id,
                    Observation.balance_after.is_not(None), Observation.occurred_at <= today)
             .order_by(Observation.occurred_at, Observation.id)):
-        per.setdefault(aid, {})[day] = bal
-        anchor[aid] = alerts_from(day, parser)
-    for aid, day, direction, amount in s.execute(
-            select(Txn.account_id, Txn.occurred_at, Txn.direction, Txn.amount)
-            .where(Txn.member_id == member_id, Txn.account_id.in_(list(anchor) or [0]), Txn.status == "pending",
-                   Txn.split_of.is_(None), Txn.occurred_at <= today)
+        days[day] = bal
+        anchor = alerts_from(day, parser)
+    if anchor is None:
+        return []
+    for day, direction, amount in s.execute(
+            select(Txn.occurred_at, Txn.direction, Txn.amount)
+            .where(Txn.member_id == member_id, Txn.account_id == account_id, Txn.status == "pending",
+                   Txn.split_of.is_(None), Txn.occurred_at >= anchor, Txn.occurred_at <= today)
             .order_by(Txn.occurred_at, Txn.id)):
-        if day < anchor[aid]:
-            continue
-        days = per[aid]
         now = days[max(days)]
         days[day] = now + amount if direction == "credit" else now - amount
-    held: dict[int, Decimal] = {}
-    out: list[Entry] = []
-    for day in sorted({d for days in per.values() for d in days}):
-        held.update({aid: days[day] for aid, days in per.items() if day in days})
-        out.append((day, sum(held.values(), ZERO), "statement", day))
-    return out
+    return [(day, v, "statement", day) for day, v in sorted(days.items())]
 
 
-def _priced_days(s: Session, member_id: int, today: date) -> dict[str, list[Entry]]:
-    """Stocks and funds on every day a price is stored: the newest CAS on or before it × each holding's newest
-    price up to that day, kept only when a price is newer than that CAS, as `_priced` does. Two queries."""
-    cas: dict[date, list[tuple[str, str, Decimal]]] = {}
-    for as_of, isin, name, units in s.execute(
-            select(Holding.as_of, Holding.isin, Holding.name, Holding.units)
-            .where(Holding.member_id == member_id, Holding.source == "cdsl_cas", Holding.isin.is_not(None),
+def _priced_days(s: Session, member_id: int, acct: Acct, accts: dict[int, Acct], today: date) -> list[Entry]:
+    """The account's holdings on every day a price is stored: its newest holdings on or before that day × each
+    security's newest price up to it, kept only once a price is at least as new as those holdings. Two queries."""
+    held: dict[date, list[tuple[str, Decimal]]] = {}
+    for as_of, isin, units in s.execute(
+            select(Holding.as_of, Holding.isin, Holding.units)
+            .where(Holding.member_id == member_id, Holding.account_id == acct.id, Holding.isin.is_not(None),
                    Holding.as_of <= today)):
-        cas.setdefault(as_of, []).append((isin, name, units))
-    if not cas:
-        return {}
-    isins = {i for rows in cas.values() for i, _, _ in rows}
+        held.setdefault(as_of, []).append((isin, units))
+    if not held:
+        return []
+    latest = _latest_holdings(s, member_id, accts, today).get(acct.id)
+    counted = {r.isin for r in latest[1]} if latest else set()  # a security counted in another account stays there
     by_day: dict[date, list[tuple[str, Decimal]]] = {}
     for isin, day, close in s.execute(select(Price.isin_or_symbol, Price.date, Price.close)
-                                      .where(Price.isin_or_symbol.in_(isins), Price.date <= today)):
+                                      .where(Price.isin_or_symbol.in_({i for rows in held.values() for i, _ in rows}),
+                                             Price.date <= today)):
         by_day.setdefault(day, []).append((isin, close))
-    cas_days = sorted(cas)
+    held_days = sorted(held)
     last: dict[str, tuple[Decimal, date]] = {}
-    out: dict[str, list[Entry]] = {}
+    out: list[Entry] = []
     for day in sorted(by_day):
         last.update({isin: (close, day) for isin, close in by_day[day]})
-        c = max((d for d in cas_days if d <= day), default=None)
-        if c is None:
+        h = max((d for d in held_days if d <= day), default=None)
+        if h is None:
             continue
-        sums: dict[str, list[Any]] = {}
-        for isin, name, units in cas[c]:
-            if isin not in last:
-                continue
-            close, px_day = last[isin]
-            v = sums.setdefault(_equity_key(isin, name), [ZERO, c])
-            v[0] += (units * close).quantize(Decimal("0.01"))
-            v[1] = max(v[1], px_day)
-        for key, (amount, newest) in sums.items():
-            if newest > c:
-                out.setdefault(key, []).append((day, amount, "prices", c))
+        rows = [(last[i], u) for i, u in held[h] if i in last and i in counted]
+        if rows and max(px[1] for px, _ in rows) >= h:
+            out.append((day, sum(((px[0] * u) for px, u in rows), ZERO).quantize(Decimal("0.01")), "prices", h))
     return out
 
 
-def component_history(s: Session, member_id: int, key: str, today: date) -> dict[str, Any]:
-    """One component's value on every day from its first known value to today, ending at what `live` shows.
-    Banks read every printed balance; stocks and funds every stored price (none before prices were collected,
-    so the CAS steps until then); the rest carry each value forward. Per request, at most ~8 queries."""
-    bank = {v: k for k, v in BANK_KEYS.items()}.get(key)
-    if bank:
-        series = _bank_days(s, member_id, bank, today)
-        bought: list[tuple[date, Decimal]] = []
-        priced_from = None
-    else:
-        series = _series(s, member_id, today).get(key, [])
-        priced = _priced_days(s, member_id, today).get(key, []) if key in ("stocks", "mf") else []
+def account_history(s: Session, member_id: int, account_id: int, today: date) -> dict[str, Any]:
+    """One account's value on every day from its first known value to today, ending at what `live` shows, and
+    the dated values behind it. Balances read every printed balance; holdings every stored price (the newest
+    unbroken daily run; statement steps before it); the rest carry each value forward, with the flows since."""
+    accts = _accounts(s, member_id)
+    acct = accts.get(account_id)
+    if acct is None:
+        a = s.scalars(select(Account).where(Account.member_id == member_id, Account.id == account_id)).first()
+        if a is None:
+            raise NotFound("account not found")
+        acct = Acct(a.id, account_label(a.institution, a.name, a.mask) or a.institution, a.kind, a.subtype,
+                    asset_class(a.kind, a.asset_class), liquid(a.kind, a.liquid), a.opened_at)
+        accts = {**accts, a.id: acct}
+    full = _series(s, member_id, accts, today)
+    series = full.get(account_id, [])
+    priced_from = None
+    if acct.kind != "card" and (days := _balance_days(s, member_id, account_id, today)):
+        series = sorted(series + days, key=lambda e: (e[0], RANK[e[2]]))
+    if acct.kind == "holding":
+        priced = _priced_days(s, member_id, acct, accts, today)
         # Start of the newest unbroken run (≤ a week between prices): a stray older price isn't daily valuation.
         run = len(priced) - 1
         while run > 0 and (priced[run][0] - priced[run - 1][0]).days <= 7:
             run -= 1
         priced_from = priced[run][0] if priced else None
-        series = sorted(series + priced, key=lambda e: e[0])
-        bought = _bought(s, member_id, series[0][0]).get(key, []) if series else []
+        series = sorted(series + priced[max(run, 0):], key=lambda e: (e[0], RANK[e[2]]))
+    flows = _flows(s, member_id, accts, full, series[0][0]).get(account_id, []) if series else []
     points, d, i = [], series[0][0] if series else today, -1
     while series and d <= today:
         while i + 1 < len(series) and series[i + 1][0] <= d:
             i += 1
         e = series[i]
-        points.append({"date": d, "value": fmt(e[1] + sum((a for b, a in bought if e[3] < b <= d), ZERO))})
+        points.append({"date": d, "value": fmt(e[1] + sum((a for b, a in flows if e[3] < b <= d), ZERO))})
         d += timedelta(days=1)
-    return {"key": key, "label": LABELS[key][0], "points": points, "priced_from": priced_from}
+    vals = s.execute(select(AccountValuation.as_of, AccountValuation.amount, AccountValuation.source)
+                     .where(AccountValuation.member_id == member_id, AccountValuation.account_id == account_id)
+                     .order_by(AccountValuation.as_of.desc())).all()
+    return {"account_id": account_id, "label": acct.label, "side": KINDS[acct.kind].side, "points": points,
+            "priced_from": priced_from,
+            "valuations": [{"as_of": d, "amount": fmt(v), "source": src} for d, v, src in vals]}
 
 
-def set_component(s: Session, ctx: MemberContext, actor: str, key: str, amount: Decimal, as_of: date) -> dict[str, Any]:
-    stmt = insert(ComponentValue).values(member_id=ctx.member_id, key=key, amount=amount, as_of=as_of)
-    s.execute(stmt.on_conflict_do_update(constraint="uq_component_value_member_id_key_as_of",
-                                         set_={"amount": stmt.excluded.amount}))
-    audit(s, ctx, actor, "networth.component", f"component:{key}", {"as_of": as_of.isoformat()})
-    return {"key": key, "amount": fmt(amount), "as_of": as_of}
+# --- writes -------------------------------------------------------------------------------------------
+
+def _own_account(s: Session, member_id: int, account_id: int) -> Account:
+    a = s.scalars(select(Account).where(Account.member_id == member_id, Account.id == account_id)).first()
+    if a is None:
+        raise NotFound("account not found")
+    return a
+
+
+def set_valuation(s: Session, ctx: MemberContext, actor: str, account_id: int, amount: Decimal, as_of: date) -> dict[str, Any]:
+    """The member's value for the account on a day (what is owed, for a liability). Replaces a value on that day."""
+    _own_account(s, ctx.member_id, account_id)
+    stmt = insert(AccountValuation).values(member_id=ctx.member_id, account_id=account_id, amount=amount, as_of=as_of,
+                                           source="manual")
+    s.execute(stmt.on_conflict_do_update(constraint="uq_account_valuation_account_id_as_of",
+                                         set_={"amount": stmt.excluded.amount, "source": "manual"}))
+    audit(s, ctx, actor, "account.valuation", f"account:{account_id}", {"as_of": as_of.isoformat()})
+    return {"account_id": account_id, "amount": fmt(amount), "as_of": as_of, "source": "manual"}
+
+
+def delete_valuation(s: Session, ctx: MemberContext, actor: str, account_id: int, as_of: date) -> None:
+    _own_account(s, ctx.member_id, account_id)
+    v = s.scalars(select(AccountValuation).where(AccountValuation.member_id == ctx.member_id,
+                                                 AccountValuation.account_id == account_id,
+                                                 AccountValuation.as_of == as_of)).first()
+    if v is None:
+        raise NotFound("no value on that date")
+    if v.source == "statement":
+        raise Invalid("this value was read from a statement; set your own value on that date instead")
+    s.delete(v)
+    audit(s, ctx, actor, "account.valuation.delete", f"account:{account_id}", {"as_of": as_of.isoformat()})
+
+
+def _component_account(s: Session, member_id: int, institution: str, key: str) -> int:
+    """The account a statement's printed value belongs to (a PPF balance on an SBI statement, a CAS total): the
+    member's account of that kind and subtype at that institution, else their only one of that kind and subtype
+    (one they set up by hand), else a new one they can rename."""
+    kind, subtype = COMPONENT_ACCOUNTS[key]
+    q = select(Account.id).where(Account.member_id == member_id, Account.kind == kind, Account.subtype == subtype)
+    found = s.scalars(q.where(func.upper(Account.institution) == institution.upper()).order_by(Account.id)).first()
+    if found is None:
+        ids = s.scalars(q).all()
+        found = ids[0] if len(ids) == 1 else None
+    if found is None:
+        a = Account(member_id=member_id, kind=kind, subtype=subtype, institution=institution,
+                    name=f"{institution} {SUBTYPE_LABELS[subtype]}")
+        s.add(a)
+        s.flush()
+        found = a.id
+    return found
+
+
+def record_components(s: Session, member_id: int, institution: str, values: tuple[tuple[str, Decimal], ...],
+                      as_of: date) -> None:
+    """Values a statement prints for accounts it isn't about. Newest wins in `live`; re-reading a statement corrects
+    its own date and never overrides a value set by hand on that day."""
+    for key, amount in values:
+        if key not in COMPONENT_ACCOUNTS or amount < 0:
+            continue
+        stmt = insert(AccountValuation).values(member_id=member_id, account_id=_component_account(s, member_id, institution, key),
+                                               amount=amount, as_of=as_of, source="statement")
+        s.execute(stmt.on_conflict_do_update(constraint="uq_account_valuation_account_id_as_of",
+                                             set_={"amount": stmt.excluded.amount},
+                                             where=AccountValuation.source == "statement"))
+
+
+def holding_account(s: Session, member_id: int, source: str, isin: str | None, name: str | None) -> int:
+    """The account a statement's holding sits in: for a CAS, its demat securities (an INE ISIN or an ETF) or its funds;
+    for a fund house's statement, its funds. Matched by the statement's source as the institution."""
+    institution = "CDSL" if source == "cdsl_cas" else source.upper()
+    subtype = "stocks" if source == "cdsl_cas" and _equity(isin, name) else "mf"
+    found = s.scalars(select(Account.id).where(Account.member_id == member_id, Account.kind == "holding",
+                                               Account.subtype == subtype,
+                                               func.upper(Account.institution) == institution).order_by(Account.id)).first()
+    if found is None:
+        a = Account(member_id=member_id, kind="holding", subtype=subtype, institution=institution,
+                    name=f"{institution} {SUBTYPE_LABELS[subtype]}")
+        s.add(a)
+        s.flush()
+        found = a.id
+    return found
 
 
 def holdings(s: Session, member_id: int) -> dict[str, Any]:
-    """Latest units per holding × the newest price on or before today. Empty until the CDSL CAS parser lands."""
-    rows = s.scalars(select(Holding).where(Holding.member_id == member_id)
+    """Latest units per holding × the newest price on or before today, with the account each sits in."""
+    rows = s.execute(select(Holding, Account).outerjoin(Account, Account.id == Holding.account_id)
+                     .where(Holding.member_id == member_id)
                      .order_by(Holding.isin, Holding.as_of.desc(), Holding.id.desc())).all()
-    latest: dict[str, Any] = {}
-    for h in rows:
-        latest.setdefault(h.isin or h.name, h)
-    keys = [h.isin for h in latest.values() if h.isin]
+    latest: dict[Any, tuple[Holding, Account | None]] = {}
+    for h, a in rows:
+        latest.setdefault((h.account_id, h.isin or h.name), (h, a))
+    keys = [h.isin for h, _ in latest.values() if h.isin]
     prices: dict[str, tuple[Decimal, date]] = {}
     if keys:
         ranked = (select(Price.isin_or_symbol, Price.close, Price.date,
@@ -455,11 +511,12 @@ def holdings(s: Session, member_id: int) -> dict[str, Any]:
                   .where(Price.isin_or_symbol.in_(keys)).subquery())
         prices = {r.isin_or_symbol: (r.close, r.date) for r in s.execute(select(ranked).where(ranked.c.rn == 1))}
     items = []
-    for h in latest.values():
+    for h, a in latest.values():
         price = prices.get(h.isin or "")
         items.append({"name": h.name, "isin": h.isin, "units": str(h.units), "units_as_of": h.as_of,
-                      "source": h.source, "price": str(price[0]) if price else None,
-                      "price_date": price[1] if price else None,
+                      "source": h.source, "account_id": h.account_id,
+                      "account": account_label(a.institution, a.name, a.mask) if a else None,
+                      "price": str(price[0]) if price else None, "price_date": price[1] if price else None,
                       "value": fmt((h.units * price[0]).quantize(Decimal("0.01"))) if price else None})
     items.sort(key=lambda x: -Decimal(x["value"] or 0))
     return {"items": items}

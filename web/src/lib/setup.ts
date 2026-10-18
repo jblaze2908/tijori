@@ -1,7 +1,7 @@
 // Onboarding, mail sources, secrets and invites (docs/api.md, "Onboarding" and "Google sign-in").
 // Secrets (app passwords, statement passwords) are only ever sent, never read back.
 import { ApiError, invalidate, optional, prime, request } from "./api";
-import type { Account, AccountKind, ISODate } from "./types";
+import type { Account, AccountKind, AssetClass, ISODate } from "./types";
 
 /**
  * Server steps (docs/api.md). The UI shows six: "accounts" saves as "profile" (its checklist item is the
@@ -154,14 +154,25 @@ export async function saveName(name: string) {
   invalidate(["/api/me", "/api/household"]);
 }
 
-export async function addAccount(a: { institution: string; kind: AccountKind; name: string | null; mask: string | null }) {
+/** What the member may set on an account; for liquid and asset_class, null goes back to the kind's default. */
+export interface AccountFields {
+  name?: string | null;
+  mask?: string | null;
+  kind?: AccountKind;
+  subtype?: string | null;
+  liquid?: boolean | null;
+  asset_class?: AssetClass | null;
+  in_net_worth?: boolean;
+  opened_at?: string | null;
+}
+export async function addAccount(a: AccountFields & { institution: string; kind: AccountKind }) {
   const r = await request<Account>("/api/accounts", "POST", a);
-  invalidate(["/api/accounts"]);
+  invalidate(["/api/accounts", "/api/networth"]);
   return r;
 }
-export async function renameAccount(id: number, name: string | null) {
-  await request(`/api/accounts/${id}`, "PATCH", { name });
-  invalidate(["/api/accounts"]);
+export async function updateAccount(id: number, fields: AccountFields) {
+  await request(`/api/accounts/${id}`, "PATCH", fields);
+  invalidate(["/api/accounts", "/api/networth", `/api/accounts/${id}/history`]);
 }
 /** 422 when the account has history: statements and transactions are never orphaned. */
 export async function removeAccount(id: number) {

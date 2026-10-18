@@ -35,13 +35,13 @@ from tijori.blobs import encrypt_existing, read_blob, store_blob
 from tijori.db import MemberContext, make_engine, member_session
 from tijori.imap_check import TIMEOUT_S, _public_only, normalize_password, quote_mailbox
 from tijori.mailtext import body_text
-from tijori.models import ComponentValue, Holding, MailSource, Price, RawAttachment, RawMessage, Statement
+from tijori.models import Holding, MailSource, Price, RawAttachment, RawMessage, Statement
 from tijori.parsers.cams_statement import CamsStatementParser
 from tijori.parsers.cdsl_cas import CdslCasParser
 from tijori.parsers import Message, ParseError, route
 from tijori.parsers.alerts import SENDER_INSTITUTION, AlertParser, parse_balance
 from tijori.pdf import PdfError, is_pdf, pdf_to_text
-from tijori.services import cards, loans, notify, orders, prices, retention, txn_edit
+from tijori.services import cards, loans, networth, notify, orders, prices, retention, txn_edit
 from tijori.services import secrets as vault
 from tijori.services.ingest import ingest_alert, ingest_balance, ingest_statement, load_classifier
 from tijori.settings import Settings, get_settings
@@ -229,7 +229,7 @@ def _statement(s: Session, ctx: MemberContext, settings: Settings, sender: str, 
         return "needs_password"
     if CAS.match(Message(text=text_)):
         cas = CAS.parse(Message(text=text_))
-        _components(s, ctx, cas.components, cas.as_of)
+        networth.record_components(s, ctx.member_id, "CDSL", cas.components, cas.as_of)
         return _holdings(s, ctx, cas.lines, "cdsl_cas", replace=True)
     if CAMS.match(Message(text=text_)):
         return _holdings(s, ctx, CAMS.parse_holdings(Message(text=text_)))
@@ -264,12 +264,6 @@ def _store_failed(engine: Engine, ctx: MemberContext, settings: Settings, source
         s.commit()
 
 
-def _components(s: Session, ctx: MemberContext, values: tuple[tuple[str, Any], ...], as_of: Any) -> None:
-    for key, amount in values:
-        cv = pg_insert(ComponentValue).values(member_id=ctx.member_id, key=key, amount=amount, as_of=as_of, source="statement")
-        s.execute(cv.on_conflict_do_update(constraint="uq_component_value_member_id_key_as_of", set_={"amount": cv.excluded.amount}))
-
-
 def _holdings(s: Session, ctx: MemberContext, lines: list[Any], source: str = "cams", replace: bool = False) -> str:
     """Units per scheme as of the statement's NAV date, and that NAV as a price point. Idempotent. `replace`: the
     statement is complete for its date (a CAS), so a re-read swaps that date's rows; a fund held both as a folio
@@ -279,7 +273,8 @@ def _holdings(s: Session, ctx: MemberContext, lines: list[Any], source: str = "c
             s.execute(delete(Holding).where(Holding.member_id == ctx.member_id, Holding.as_of == as_of,
                                             Holding.source == source))
         for h in lines:
-            s.add(Holding(member_id=ctx.member_id, isin=h.isin, name=h.name, units=h.units, as_of=h.as_of, source=source))
+            s.add(Holding(member_id=ctx.member_id, isin=h.isin, name=h.name, units=h.units, as_of=h.as_of, source=source,
+                          account_id=networth.holding_account(s, ctx.member_id, source, h.isin, h.name)))
             if h.isin:
                 s.execute(pg_insert(Price).values(isin_or_symbol=h.isin, date=h.as_of, close=h.nav, source=source[:16])
                           .on_conflict_do_nothing())
@@ -287,10 +282,12 @@ def _holdings(s: Session, ctx: MemberContext, lines: list[Any], source: str = "c
     for h in lines:
         q = select(Holding).where(Holding.member_id == ctx.member_id, Holding.as_of == h.as_of, Holding.source == source)
         seen = s.scalars(q.where(Holding.isin == h.isin) if h.isin else q.where(Holding.name == h.name)).first()
+        account_id = networth.holding_account(s, ctx.member_id, source, h.isin, h.name)
         if seen is None:
-            s.add(Holding(member_id=ctx.member_id, isin=h.isin, name=h.name, units=h.units, as_of=h.as_of, source=source))
+            s.add(Holding(member_id=ctx.member_id, isin=h.isin, name=h.name, units=h.units, as_of=h.as_of, source=source,
+                          account_id=account_id))
         else:  # a re-read statement (a fixed parser) corrects the row in place
-            seen.units, seen.name = h.units, h.name
+            seen.units, seen.name, seen.account_id = h.units, h.name, account_id
         if h.isin:
             s.execute(pg_insert(Price).values(isin_or_symbol=h.isin, date=h.as_of, close=h.nav, source=source[:16])
                       .on_conflict_do_nothing())

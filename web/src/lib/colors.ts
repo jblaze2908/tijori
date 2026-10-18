@@ -31,8 +31,18 @@ export function itemCategoryColor(c: string | null): string {
 /** --c6 is too dark to read as a 1.5–2px line on the dark surface, so lines take a lifted step of the same green. */
 export const lineInk = (c: string) => (c === "var(--c6)" ? "#1fa31f" : c);
 
-/** Net-worth groups in stack order: cash first, then the sheet's component keys (docs/api.md). */
-export const NW_SHEET_KEYS = ["sbi", "hdfc", "fd", "stocks", "mf", "ppf", "epf", "gold", "other"];
+/** Net worth by asset class (docs/api.md, accounts): what you own in palette slots, what you owe in the red pole. */
+export const ASSET_CLASS_COLOR: Record<string, string> = {
+  cash: "var(--c1)",
+  deposits: "var(--c2)",
+  equity: "var(--c3)",
+  retirement: "var(--c4)",
+  gold: "var(--c5)",
+  property: "var(--c6)",
+  other: OTHER,
+  credit: "#e66767",
+  loans: "#e58d8d",
+};
 
 // Sequential single-hue ramp for the spend heatmap (blue, validated --ordinal on the dark surface);
 // dark mode runs dark→light so "near zero" recedes toward the surface.

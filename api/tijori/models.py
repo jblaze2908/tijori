@@ -28,6 +28,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from tijori.account_kinds import ACCOUNT_KINDS
 from tijori.classify.taxonomy import BUCKETS, KINDS
 
 Money = Numeric(14, 2)
@@ -98,13 +99,18 @@ class Account(Base):
     __tablename__ = "account"
     id: Mapped[int] = _pk()
     member_id: Mapped[int] = _member_fk()
-    kind: Mapped[str] = mapped_column(_enum("account_kind", "bank", "card", "wallet", "deposit", "holding", "cash"))
+    kind: Mapped[str] = mapped_column(_enum("account_kind", *ACCOUNT_KINDS))
     institution: Mapped[str] = mapped_column(String(80))
     name: Mapped[str | None] = mapped_column(String(120))
     mask: Mapped[str | None] = mapped_column(String(8))  # last 4 digits only, never the full number
     currency: Mapped[str] = mapped_column(String(3), server_default="INR")
     opened_at: Mapped[date | None] = mapped_column(Date)
     closed_at: Mapped[date | None] = mapped_column(Date)
+    # Net worth (account_kinds): a preset within the kind, and the member's overrides of the kind's defaults.
+    subtype: Mapped[str | None] = mapped_column(String(24))
+    liquid: Mapped[bool | None] = mapped_column(Boolean)  # null: the kind's default
+    asset_class: Mapped[str | None] = mapped_column(String(16))  # null: the kind's default
+    in_net_worth: Mapped[bool] = mapped_column(Boolean, server_default="true")
 
 
 class Source(Base):
@@ -577,8 +583,25 @@ class MailSource(Base):
     created_at: Mapped[datetime] = _created()
 
 
+class AccountValuation(Base):
+    """An account's value on a day: set by the member (a passbook, gold, a property, a loan's outstanding), read
+    from a statement that prints it (a PPF balance on a savings statement, a CAS total), or imported. Liabilities
+    hold what is owed, as a positive amount."""
+
+    __tablename__ = "account_valuation"
+    id: Mapped[int] = _pk()
+    member_id: Mapped[int] = _member_fk()
+    account_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("account.id", ondelete="CASCADE"), index=True)
+    as_of: Mapped[date] = mapped_column(Date)
+    amount: Mapped[Decimal] = mapped_column(Money)
+    source: Mapped[str] = mapped_column(_enum("valuation_source", "manual", "statement", "imported"),
+                                        server_default="manual")
+    created_at: Mapped[datetime] = _created()
+    __table_args__ = (UniqueConstraint("account_id", "as_of"), CheckConstraint("amount >= 0", name="amount_non_negative"))
+
+
 class ComponentValue(Base):
-    """A net-worth component value the member set by hand (EPF passbook, gold, anything without a feed)."""
+    """Superseded by AccountValuation (migration 0020); kept until the next release so the previous one still runs."""
 
     __tablename__ = "component_value"
     id: Mapped[int] = _pk()

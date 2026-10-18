@@ -4,7 +4,6 @@ import type {
   ApiInboxGroup,
   ApiInboxItem,
   ApiMonths,
-  ApiNetWorth,
   ApiPage,
   ApiCards,
   LinkCandidate,
@@ -14,7 +13,6 @@ import type {
   Cadence,
   RecurringKind,
   RecurringList,
-  ApiSnapshot,
   ApiSummary,
   ApiTotals,
   ApiTrends,
@@ -27,7 +25,7 @@ import type {
   ISODate,
   ItemCategoryScope,
   LiveNetWorth,
-  ComponentHistory,
+  AccountHistory,
   OrderItemPage,
   OrderItemQuery,
   OrderSource,
@@ -39,7 +37,6 @@ import type {
   TxnPage,
   TxnQuery,
   Category,
-  Component,
   Inbox,
   InboxPayee,
   Me,
@@ -49,7 +46,6 @@ import type {
   Scope,
   ServerAlert,
   Settings,
-  Snapshot,
   Totals,
   Transaction,
   TrendPoint,
@@ -352,36 +348,6 @@ function mapInbox(page: ApiPage<ApiInboxItem | ApiInboxGroup>): Inbox {
   return { items: [...groups.values()], total: page.total, fetched: page.items.length };
 }
 
-/** Snapshots arrive newest first (docs/api.md); the UI works oldest first. Blank sheet cells (null) are left out. */
-function mapNetWorth(r: ApiNetWorth): Snapshot[] {
-  const meta = new Map(r.latest?.components.map((c) => [c.key, c]));
-  const title = (k: string) => k.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
-  const liquidClasses = new Set(["cash", "deposits"]);
-  const snaps = [...r.snapshots].sort((a, b) => (a.date < b.date ? -1 : 1));
-  const out: Snapshot[] = [];
-  snaps.forEach((s: ApiSnapshot, i) => {
-    const components: Component[] = Object.entries(s.components).flatMap(([key, amount]) =>
-      amount == null ? [] : [{ key, label: meta.get(key)?.label ?? title(key), assetClass: meta.get(key)?.asset_class ?? "other", amount: toPaise(amount) }],
-    );
-    // docs/api.md's liquid is sbi + hdfc + fd (cash + deposits); recomputed the same way only if it's null.
-    const liquid = s.liquid != null ? toPaise(s.liquid) : components.filter((c) => liquidClasses.has(c.assetClass)).reduce((a, c) => a + c.amount, 0);
-    const netWorth = toPaise(s.net_worth);
-    const prev = out[i - 1];
-    out.push({
-      date: s.date,
-      netWorth,
-      liquid,
-      netChange: s.net_change != null ? toPaise(s.net_change) : prev ? netWorth - prev.netWorth : null,
-      liquidChange: s.liquid_change != null ? toPaise(s.liquid_change) : prev ? liquid - prev.liquid : null,
-      components,
-      remark: s.remark,
-      commentary: s.commentary,
-      commentarySource: s.commentary_source ?? null,
-    });
-  });
-  return out;
-}
-
 const PAGE_SIZE = 200;
 const MAX_PAGES = 25;
 
@@ -413,7 +379,6 @@ export const api = {
   },
   categories: () => resource("/api/categories", (r: Category[]) => r),
   inbox: () => resource(`/api/inbox?${qs({ group: "payee", page_size: PAGE_SIZE })}`, mapInbox),
-  networth: () => resource("/api/networth", mapNetWorth),
 
   months: () => optional("/api/months", (m: ApiMonths) => m),
   me: () => optional("/api/me", (m: Me) => m),
@@ -443,7 +408,7 @@ export const api = {
   trendsBy: (group: "category" | "merchant" | "account", granularity: Granularity, periods: number, end: string) =>
     resource(`/api/trends?${qs({ granularity, periods, end, group_by: group, limit: 50 })}`, flattenTrends),
   liveNetWorth: () => resource("/api/networth/live", (r: LiveNetWorth) => r),
-  componentHistory: (key: string) => resource(`/api/networth/components/${encodeURIComponent(key)}/history`, (r: ComponentHistory) => r),
+  accountHistory: (id: number) => resource(`/api/accounts/${id}/history`, (r: AccountHistory) => r),
   holdings: () => resource("/api/holdings", (r: { items: Holding[] }) => r.items),
   inboxStats: (month: MonthKey) => resource(`/api/inbox/stats?${qs({ month })}`, (r: InboxStats) => r),
   rules: () => resource("/api/rules", (r: { items: Rule[] }) => r.items),
@@ -540,12 +505,6 @@ export async function fileInboxPayee(p: InboxPayee, categoryId: number, scope: S
   return r;
 }
 
-/** Saves the member's remark on a net-worth snapshot (the sheet's Remarks column). */
-export async function saveRemark(date: string, remark: string): Promise<void> {
-  await request<unknown>(`/api/networth/snapshots/${encodeURIComponent(date)}`, "PATCH", { remark });
-  invalidate(["/api/networth"]);
-}
-
 /** Puts filed txns back in the Inbox; with the rule the filing created, that rule is deleted too. */
 export async function undoFiling(txnIds: number[], ruleId: string | null): Promise<{ restored: number }> {
   const r = await request<{ restored: number }>("/api/inbox/undo", "POST", { txn_ids: txnIds, ...(ruleId ? { rule_id: ruleId } : {}) });
@@ -558,9 +517,15 @@ export async function patchTxn(id: string, body: { notes?: string | null; tags?:
   invalidate(["/api/transactions"]);
 }
 
-export async function setComponent(key: string, amount: string, asOf?: ISODate): Promise<void> {
-  await request<unknown>(`/api/networth/components/${encodeURIComponent(key)}`, "PUT", { amount, ...(asOf ? { as_of: asOf } : {}) });
-  invalidate(["/api/networth"]);
+/** The account's value on a day (what is owed, for a liability); the newest value wins. */
+export async function setValuation(accountId: number, amount: string, asOf?: ISODate): Promise<void> {
+  await request<unknown>(`/api/accounts/${accountId}/valuations`, "PUT", { amount, ...(asOf ? { as_of: asOf } : {}) });
+  invalidate(["/api/networth", `/api/accounts/${accountId}/history`]);
+}
+
+export async function deleteValuation(accountId: number, asOf: ISODate): Promise<void> {
+  await request<unknown>(`/api/accounts/${accountId}/valuations/${asOf}`, "DELETE");
+  invalidate(["/api/networth", `/api/accounts/${accountId}/history`]);
 }
 
 const AFTER_EDIT = ["/api/transactions", "/api/summary", "/api/trends", "/api/recurring", "/api/cards", "/api/inbox"];

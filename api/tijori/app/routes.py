@@ -22,7 +22,7 @@ from tijori.app.schemas import (
     Accounts,
     Alerts,
     CardList,
-    ComponentHistory,
+    AccountHistory,
     FilingStats,
     Freshness,
     Holdings,
@@ -39,7 +39,6 @@ from tijori.app.schemas import (
     InboxPage,
     Me,
     Months,
-    NetWorth,
     SettingsOut,
     Summary,
     Trends,
@@ -201,11 +200,6 @@ def inbox(db: MemberDep, group: Literal["txn", "payee"] = "txn", page: Page = 1,
     return txns.inbox(db.session, db.ctx.member_id, page, page_size)
 
 
-@router.get("/networth", response_model=NetWorth)
-def get_networth(db: MemberDep) -> dict:
-    return networth.list_networth(db.session, db.ctx.member_id)
-
-
 @router.get("/settings", response_model=SettingsOut)
 def get_settings(db: MemberDep) -> dict:
     return members.get_settings(db.session, db.ctx.member_id)
@@ -295,11 +289,10 @@ def networth_live(db: MemberDep) -> dict:
     return networth.live(db.session, db.ctx.member_id, today_ist())
 
 
-@router.get("/networth/components/{key}/history", response_model=ComponentHistory)
-def component_history(db: MemberDep, key: str) -> dict:
-    if key not in networth.COMPONENT_KEYS:
-        raise NotFound("unknown component")
-    return networth.component_history(db.session, db.ctx.member_id, key, today_ist())
+@router.get("/accounts/{account_id}/history", response_model=AccountHistory)
+def account_history(db: MemberDep, account_id: Annotated[int, Path(ge=1)]) -> dict:
+    """The account's value on every day, and the dated values behind it."""
+    return networth.account_history(db.session, db.ctx.member_id, account_id, today_ist())
 
 
 @router.get("/holdings", response_model=Holdings)

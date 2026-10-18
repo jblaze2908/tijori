@@ -5,10 +5,20 @@ from datetime import date
 from decimal import Decimal
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response, status
 
 from tijori.app.deps import MemberDep, require_json
 from tijori.app.schemas import (
+    BudgetIn,
+    BudgetOut,
+    CategorizeIn,
+    CategorizeOut,
+    FileInboxIn,
+    FileInboxOut,
+    ItemCategoryIn,
+    ItemCategoryOut,
+    LinkIn,
+    LinkResult,
     LoanAttachOut,
     LoanDetachOut,
     LoanIn,
@@ -16,49 +26,36 @@ from tijori.app.schemas import (
     LoanPatch,
     LoanTxnsIn,
     LoanWriteOffIn,
-    CategorizeIn,
-    CategorizeOut,
-    ComponentIn,
-    ComponentOut,
-    BudgetIn,
-    BudgetOut,
     McpTokenIn,
-    ItemCategoryIn,
-    ItemCategoryOut,
+    McpTokenOut,
+    NotifyTestOut,
     OrdersAssignIn,
     OrdersAssignOut,
     OrdersIn,
     OrdersOut,
-    McpTokenOut,
-    NotifyTestOut,
     PayeeDismissIn,
     PayeeDismissOut,
     PayeeRenameIn,
     PayeeRenameOut,
     PayeeResetIn,
     PayeeResetOut,
-    LinkIn,
-    LinkResult,
     RecurringDecision,
     RecurringIn,
-    SplitIn,
-    SplitOut,
     RulePatch,
     RuleState,
+    SettingsIn,
+    SettingsOut,
+    SplitIn,
+    SplitOut,
     TxnNotes,
     TxnPatch,
     UnfileIn,
     UnfileOut,
-    FileInboxIn,
-    FileInboxOut,
-    RemarkIn,
-    RemarkOut,
-    SettingsIn,
-    SettingsOut,
+    ValuationIn,
+    ValuationSet,
 )
 from tijori.services import aliases, budgets, loans, mcp_tokens, members, networth, notify, orders, recurring, txn_edit, txns
 from tijori.services.common import today_ist
-from tijori.services.networth import COMPONENT_KEYS, MANUAL_KEYS
 from tijori.services.errors import NotFound
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_json)])
@@ -91,13 +88,10 @@ def patch_rule(db: MemberDep, rule_id: Annotated[str, Path(pattern=r"^rule:\d{1,
 _AMOUNT = re.compile(r"^\d{1,12}(\.\d{1,2})?$")
 
 
-@router.put("/networth/components/{key}", response_model=ComponentOut)
-def put_component(db: MemberDep, key: str, body: ComponentIn) -> dict:
-    if key not in COMPONENT_KEYS:
-        raise NotFound("unknown component")
-    if key not in MANUAL_KEYS:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT,
-                            [{"loc": ["path", "key"], "msg": "this comes from statements and daily prices, so it can't be set by hand"}])
+@router.put("/accounts/{account_id}/valuations", response_model=ValuationSet)
+def put_valuation(db: MemberDep, account_id: Annotated[int, Path(ge=1)], body: ValuationIn) -> dict:
+    """The account's value on a day, set by the member: what it is worth, or what is owed on a liability. The newest
+    value wins, so this also stands in for an account with no feed until its next statement."""
     raw = str(body.amount)
     if not _AMOUNT.match(raw):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -105,7 +99,13 @@ def put_component(db: MemberDep, key: str, body: ComponentIn) -> dict:
     as_of = body.as_of or today_ist()
     if as_of > today_ist():
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, [{"loc": ["body", "as_of"], "msg": "must not be in the future"}])
-    return networth.set_component(db.session, db.ctx, db.actor, key, Decimal(raw), as_of)
+    return networth.set_valuation(db.session, db.ctx, db.actor, account_id, Decimal(raw), as_of)
+
+
+@router.delete("/accounts/{account_id}/valuations/{as_of}", status_code=204)
+def delete_valuation(db: MemberDep, account_id: Annotated[int, Path(ge=1)], as_of: date) -> Response:
+    networth.delete_valuation(db.session, db.ctx, db.actor, account_id, as_of)
+    return Response(status_code=204)
 
 
 # :path because a payee key may contain "/" (keys built from narration text).
@@ -249,12 +249,6 @@ def patch_settings(db: MemberDep, body: SettingsIn) -> dict:
                                    local_shop_cap=cap, extra=extra)
 
 
-@router.patch("/networth/snapshots/{day}", response_model=RemarkOut)
-def patch_remark(db: MemberDep, day: date, body: RemarkIn) -> dict:
-    out = networth.update_remark(db.session, db.ctx, db.actor, day, body.remark or None)
-    if out is None:
-        raise NotFound("no snapshot on that date")
-    return out
 
 
 @router.post("/orders", response_model=OrdersOut)

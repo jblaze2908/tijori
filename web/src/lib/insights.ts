@@ -1,8 +1,7 @@
 // Derived views over backend data. Pure: same input, same output, no I/O or DOM.
 // Each one says where it should move server-side (M2 = summaries/trends, M4 = alerts/recurring).
-import { NW_SHEET_KEYS } from "./colors";
 import { addDays, dayName, daysBetween, inr, inr2, weekday } from "./format";
-import type { Bucket, ISODate, Paise, Period, Recurring, ServerAlert, Snapshot, Totals, Transaction, TrendPoint } from "./types";
+import type { Bucket, ISODate, Paise, Period, Recurring, ServerAlert, Totals, Transaction, TrendPoint } from "./types";
 
 // ---------- classification: the same rules as docs/api.md's summary totals ----------
 
@@ -328,50 +327,3 @@ export const recent = (txns: Transaction[], n = 7) => txns.filter((t) => t.kind 
 export const upcoming = <T extends { next_due: ISODate }>(items: T[], from: ISODate, n = 7): T[] =>
   items.filter((r) => r.next_due >= from).sort((a, b) => (a.next_due < b.next_due ? -1 : 1)).slice(0, n);
 
-// ---------- net worth ----------
-
-// Move server-side in M4 (idle-cash nudge).
-/** The largest cash balance, when it's a meaningful share of net worth. */
-export function idleCash(s: Snapshot, minShare = 0.1) {
-  const top = s.components.filter((c) => c.assetClass === "cash").sort((a, b) => b.amount - a.amount)[0];
-  return top && s.netWorth > 0 && top.amount / s.netWorth >= minShare ? top : null;
-}
-
-export interface AllocationSlice {
-  key: string;
-  label: string;
-  amount: Paise;
-  /** 1..8 palette slot, or undefined for grey ("other" and anything past eight). */
-  slot: number | undefined;
-  parts: { label: string; amount: Paise }[];
-}
-
-/** Group keys in stack order across all snapshots, so a slice keeps its colour from month to month:
- *  cash accounts grouped first, then the sheet's component order (docs/api.md), then anything new. */
-export function allocationSlots(snapshots: Snapshot[]): Map<string, number | undefined> {
-  const keys = new Set<string>();
-  for (const s of snapshots) for (const c of s.components) keys.add(c.assetClass === "cash" ? "cash" : c.key);
-  const order = (k: string) => (k === "cash" ? -1 : NW_SHEET_KEYS.indexOf(k) < 0 ? NW_SHEET_KEYS.length : NW_SHEET_KEYS.indexOf(k));
-  const sorted = [...keys].sort((a, b) => order(a) - order(b) || a.localeCompare(b));
-  const slots = new Map<string, number | undefined>();
-  let n = 0;
-  for (const k of sorted) slots.set(k, k === "other" || n >= 8 ? undefined : ++n);
-  return slots;
-}
-
-/** The sheet's allocation view: cash accounts grouped into one slice, every other component on its own. */
-export function allocation(s: Snapshot, slots: Map<string, number | undefined>): AllocationSlice[] {
-  const cash = s.components.filter((c) => c.assetClass === "cash");
-  const slices: AllocationSlice[] = [];
-  if (cash.length)
-    slices.push({
-      key: "cash",
-      label: cash.length > 1 ? `Cash (${cash.map((c) => c.label).join(" + ")})` : (cash[0]?.label ?? "Cash"),
-      amount: cash.reduce((a, c) => a + c.amount, 0),
-      slot: slots.get("cash"),
-      parts: cash.map((c) => ({ label: c.label, amount: c.amount })),
-    });
-  for (const c of s.components) if (c.assetClass !== "cash") slices.push({ key: c.key, label: c.label, amount: c.amount, slot: slots.get(c.key), parts: [] });
-  const rank = [...slots.keys()];
-  return slices.sort((a, b) => rank.indexOf(a.key) - rank.indexOf(b.key));
-}

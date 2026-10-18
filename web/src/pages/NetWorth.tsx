@@ -3,25 +3,16 @@ import { NetWorthChart } from "../components/charts";
 import { LoansPanel } from "../components/Loans";
 import { useToast } from "../components/Toast";
 import { ErrorState, Loading } from "../components/ui";
-import { api, dataOf, invalidate, read, setComponent } from "../lib/api";
+import { CLASS_LABEL, kindLine } from "../lib/accounts";
+import { api, dataOf, deleteValuation, invalidate, read, setValuation } from "../lib/api";
+import { ASSET_CLASS_COLOR, OTHER } from "../lib/colors";
 import { dayNum, dayShort, daysBetween, fromDayNum, inr, monthApos, toPaise } from "../lib/format";
-import type { LiveComponent, LiveNetWorth } from "../lib/types";
-import { CLASS_LABEL } from "./Overview";
+import { Link } from "../lib/router";
+import type { Account, AssetClass, LiveComponent, LiveNetWorth } from "../lib/types";
 
-const COLOR: Record<string, string> = {
-  sbi: "#3987e5",
-  hdfc: "#6da7ec",
-  fd: "#b7d3f6",
-  stocks: "#d95926",
-  mf: "#c98500",
-  ppf: "#199e70",
-  epf: "#5fcf9f",
-  gold: "#e3b04b",
-  other: "#696969",
-  loans_given: "#85c89a",
-  loans_taken: "#e58d8d",
-};
-const SOURCE: Record<LiveComponent["source"], string> = { sheet: "Sheet", statement: "Statement", manual: "Set by you", loans: "Loans", prices: "Daily prices", estimate: "Estimated" };
+const colorOf = (c: { asset_class: string }) => ASSET_CLASS_COLOR[c.asset_class] ?? OTHER;
+const classLabel = (k: string) => CLASS_LABEL[k as AssetClass] ?? k;
+const SOURCE: Record<LiveComponent["source"] | "imported", string> = { statement: "Statement", manual: "Set by you", imported: "Imported", loans: "Loans", prices: "Daily prices", estimate: "Estimated" };
 const RANGES = [
   ["6m", "6M", 6],
   ["1y", "1Y", 12],
@@ -38,6 +29,7 @@ export function NetWorth() {
       {st.status === "loading" && <Loading />}
       {st.status === "error" && <ErrorState error={st.error} title="Couldn't load net worth" onRetry={() => invalidate(["/api/networth"])} />}
       {st.status === "ready" && (st.data.net_worth == null ? <EmptyNw /> : <Body nw={st.data} />)}
+      {st.status === "ready" && <Unvalued nw={st.data} />}
     </>
   );
 }
@@ -47,7 +39,8 @@ function EmptyNw() {
     <section className="panel">
       <h2 style={{ margin: 0, fontSize: 16 }}>No net worth yet</h2>
       <p className="muted" style={{ margin: 0 }}>
-        Import the net-worth sheet (Settings → Upload) or set a component's value below once one exists. Statement balances for SBI and HDFC savings fill in automatically.
+        Statements fill in bank balances and what you owe on cards; the monthly CAS fills in stocks and funds. For what no statement reaches, such as EPF, gold, property or a home loan, add the account under{" "}
+        <Link href="/settings/sources">Settings → Accounts &amp; sources</Link> and set its value here.
       </p>
     </section>
   );
@@ -77,7 +70,7 @@ function Body({ nw }: { nw: LiveNetWorth }) {
           <div className="nwfig lg">
             <b>{inr(total)}</b>
           </div>
-          <span className="foot">Newest value per component from statements, the CAS and daily prices · as of {dayShort(nw.as_of)}</span>
+          <span className="foot">Newest value per account, from statements, the CAS, daily prices and values you set · as of {dayShort(nw.as_of)}</span>
         </div>
         {nw.changes.map((c) => (
           <div key={c.period} style={{ flex: 1, padding: "24px 20px", borderLeft: "1px solid var(--line)", display: "flex", flexDirection: "column", gap: 4 }}>
@@ -89,12 +82,14 @@ function Body({ nw }: { nw: LiveNetWorth }) {
                 {signed(toPaise(c.amount))} <small className="faint" style={{ fontSize: 12 }}>{c.pct != null ? `${c.pct > 0 ? "+" : ""}${c.pct}%` : ""}</small>
               </span>
             ) : (
-              <span className="faint">no snapshot then</span>
+              <span className="faint">no history then</span>
             )}
           </div>
         ))}
         <div style={{ flex: 1, padding: "24px 20px", borderLeft: "1px solid var(--line)", display: "flex", flexDirection: "column", gap: 4 }}>
-          <span className="muted" style={{ fontSize: 13 }}>Liquid · SBI + HDFC + FD</span>
+          <span className="muted" style={{ fontSize: 13 }} title="Accounts marked liquid in Settings → Accounts & sources: by default banks, wallets, cash, deposits and what you owe on cards">
+            Liquid
+          </span>
           <span className="mono-n" style={{ fontSize: 16, fontWeight: 500 }}>
             {nw.liquid ? inr(toPaise(nw.liquid)) : "—"}
           </span>
@@ -113,7 +108,7 @@ function Body({ nw }: { nw: LiveNetWorth }) {
           </div>
           <div className="legend" style={{ marginLeft: "auto" }}>
             <span>
-              <i className="sq" style={{ background: picked ? COLOR[picked.key] : "var(--in)", height: 2, width: 14 }} />
+              <i className="sq" style={{ background: picked ? colorOf(picked) : "var(--in)", height: 2, width: 14 }} />
               {picked ? picked.label : "Net worth"}
             </span>
             {!picked && proj.length > 0 && <span>··· Projected</span>}
@@ -125,7 +120,7 @@ function Body({ nw }: { nw: LiveNetWorth }) {
           </div>
         </div>
         {picked ? (
-          <ComponentChart c={picked} months={n} asOf={nw.as_of} />
+          <AccountChart c={picked} months={n} asOf={nw.as_of} />
         ) : (
           <div className="chart2">
             <NetWorthChart history={shown} projection={proj} label={(d) => monthApos(d)} />
@@ -146,20 +141,81 @@ function Body({ nw }: { nw: LiveNetWorth }) {
   );
 }
 
-function ComponentChart({ c, months, asOf }: { c: LiveComponent; months: number; asOf: string }) {
-  const st = read(api.componentHistory(c.key));
+function AccountChart({ c, months, asOf }: { c: LiveComponent; months: number; asOf: string }) {
+  const st = read(api.accountHistory(c.account_id!));
   if (st.status === "loading") return <Loading />;
-  if (st.status === "error") return <ErrorState error={st.error} title={`Couldn't load ${c.label} history`} onRetry={() => invalidate([`/api/networth/components/${c.key}`])} />;
+  if (st.status === "error") return <ErrorState error={st.error} title={`Couldn't load ${c.label} history`} onRetry={() => invalidate([`/api/accounts/${c.account_id}/history`])} />;
   const from = months ? fromDayNum(dayNum(asOf) - Math.round(months * 30.44)) : "";
   const pts = st.data.points.filter((p) => p.date >= from).map((p) => ({ date: p.date, value: toPaise(p.value) }));
-  if (!pts.length) return <p className="muted" style={{ margin: 0 }}>No values in this range.</p>;
+  const owed = st.data.side === "liability";
   return (
     <>
-      <div className="chart2">
-        <NetWorthChart history={pts} projection={[]} label={dayShort} name={c.label} color={COLOR[c.key]} dots={pts.length <= 40} />
-      </div>
-      {st.data.priced_from && <span className="foot">Valued at daily prices from {dayShort(st.data.priced_from)}; before that, at each CAS.</span>}
+      {pts.length ? (
+        <div className="chart2">
+          <NetWorthChart history={pts} projection={[]} label={dayShort} name={owed ? `${c.label} · owed` : c.label} color={colorOf(c)} dots={pts.length <= 40} />
+        </div>
+      ) : (
+        <p className="muted" style={{ margin: 0 }}>No values in this range.</p>
+      )}
+      {st.data.priced_from && <span className="foot">Valued at daily prices from {dayShort(st.data.priced_from)}; before that, at each statement.</span>}
+      {owed && <span className="foot">What is owed: the statement's total due, moved by purchases, payments and refunds since.</span>}
+      <Valuations accountId={c.account_id!} items={st.data.valuations} owed={owed} />
     </>
+  );
+}
+
+/** The dated values behind an account: yours can be removed; a statement's stays (set your own on that day). */
+function Valuations({ accountId, items, owed }: { accountId: number; items: { as_of: string; amount: string; source: string }[]; owed: boolean }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState<string | null>(null);
+  if (!items.length) return null;
+  return (
+    <details>
+      <summary className="foot" style={{ cursor: "pointer" }}>
+        {items.length} dated value{items.length === 1 ? "" : "s"} behind this line
+      </summary>
+      <table className="t2">
+        <thead>
+          <tr>
+            <th>As of</th>
+            <th className="r">{owed ? "Owed" : "Value"}</th>
+            <th>Source</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((v) => (
+            <tr key={v.as_of}>
+              <td>{dayShort(v.as_of)}</td>
+              <td className="r">{inr(toPaise(v.amount))}</td>
+              <td className="muted">{SOURCE[v.source as LiveComponent["source"]] ?? v.source}</td>
+              <td className="r" style={{ fontFamily: "inherit" }}>
+                {v.source !== "statement" && (
+                  <button
+                    type="button"
+                    className="linkish"
+                    disabled={busy === v.as_of}
+                    onClick={async () => {
+                      setBusy(v.as_of);
+                      try {
+                        await deleteValuation(accountId, v.as_of);
+                        toast(`Removed the value on ${dayShort(v.as_of)}.`);
+                      } catch {
+                        toast("Couldn't remove that value.");
+                      } finally {
+                        setBusy(null);
+                      }
+                    }}
+                  >
+                    Remove
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </details>
   );
 }
 
@@ -167,30 +223,37 @@ function Allocation({ nw, total, picked, onPick }: { nw: LiveNetWorth; total: nu
   const [editing, setEditing] = useState<string | null>(null);
   const classes = Object.entries(nw.by_asset_class).sort((a, b) => toPaise(b[1]) - toPaise(a[1]));
   const sinceTotal = nw.components.reduce((a, c) => a + (c.change_since ? toPaise(c.change_since) : 0), 0);
+  // The bar shows what you own, by asset class; what you owe is listed under it.
+  const owned = nw.components.filter((c) => toPaise(c.amount) > 0).sort((a, b) => a.asset_class.localeCompare(b.asset_class) || toPaise(b.amount) - toPaise(a.amount));
+  const assets = owned.reduce((a, c) => a + toPaise(c.amount), 0);
   return (
     <section className="panel" aria-label="Allocation">
       <div className="panel-h">
         <h2>Allocation</h2>
-        <span className="x">Statements, CAS, daily prices, and values you set</span>
+        <span className="x">What you own and owe, by account</span>
+        <Link href="/settings/sources" className="x linkx">
+          Accounts →
+        </Link>
       </div>
       <div className="split" style={{ height: 10 }}>
-        {nw.components.filter((c) => toPaise(c.amount) > 0).map((c) => (
-          <div key={c.key} style={{ width: `${c.share_pct}%`, background: COLOR[c.key] ?? "var(--t3)", height: 10 }} title={`${c.label} ${c.share_pct}%`} />
+        {owned.map((c) => (
+          <div key={c.key} style={{ width: `${assets ? (toPaise(c.amount) / assets) * 100 : 0}%`, background: colorOf(c), height: 10 }} title={`${c.label} ${assets ? ((toPaise(c.amount) / assets) * 100).toFixed(1) : 0}% of what you own`} />
         ))}
       </div>
       <div className="legend" style={{ color: "var(--t2)", fontSize: 13 }}>
         {classes.map(([k, v]) => (
           <span key={k}>
-            {CLASS_LABEL[k] ?? k} {total ? ((toPaise(v) / total) * 100).toFixed(1) : 0}%
+            <i className="sq" style={{ background: colorOf({ asset_class: k }) }} />
+            {classLabel(k)} {toPaise(v) > 0 ? `${assets ? ((toPaise(v) / assets) * 100).toFixed(1) : 0}%` : inr(toPaise(v))}
           </span>
         ))}
       </div>
       <table className="t2">
         <thead>
           <tr>
-            <th>Component</th>
+            <th>Account</th>
             <th className="r">Value</th>
-            <th className="r">Share</th>
+            <th className="r" title="Of what you own; for a liability, of what you owe">Share</th>
             <th className="r">Since 1st</th>
             <th>Source · as of</th>
             <th />
@@ -198,7 +261,7 @@ function Allocation({ nw, total, picked, onPick }: { nw: LiveNetWorth; total: nu
         </thead>
         <tbody>
           {nw.components.map((c) => {
-            const charted = c.asset_class !== "loans";
+            const charted = c.account_id != null;
             return (
             <tr key={c.key} className={charted ? `click${picked === c.key ? " on" : ""}` : undefined} onClick={charted ? () => onPick(c) : undefined}>
               <td>
@@ -207,12 +270,20 @@ function Allocation({ nw, total, picked, onPick }: { nw: LiveNetWorth; total: nu
                     e.stopPropagation();
                     onPick(c);
                   }}>
-                    <i className="sq" style={{ background: COLOR[c.key] ?? "var(--t3)" }} />
-                    {c.label}
+                    <i className="sq" style={{ background: colorOf(c) }} />
+                    <span style={{ whiteSpace: "nowrap" }}>
+                      {c.label}
+                      {c.kind && kindLine(c.kind, c.subtype, c.label) && (
+                        <>
+                          <br />
+                          <small className="faint">{kindLine(c.kind, c.subtype, c.label)}</small>
+                        </>
+                      )}
+                    </span>
                   </button>
                 ) : (
                   <span className="nm">
-                    <i className="sq" style={{ background: COLOR[c.key] ?? "var(--t3)" }} />
+                    <i className="sq" style={{ background: colorOf(c) }} />
                     {c.label}
                   </span>
                 )}
@@ -245,12 +316,12 @@ function Allocation({ nw, total, picked, onPick }: { nw: LiveNetWorth; total: nu
           <tr className="total">
             <td>Net worth</td>
             <td className="r">{inr(total)}</td>
-            <td className="r">100%</td>
+            <td />
             <td className="r" style={{ color: sinceTotal > 0 ? "var(--in)" : undefined }}>
               {signed(sinceTotal)}
             </td>
             <td colSpan={2} className="foot" style={{ fontWeight: 400 }}>
-              Values older than 30 days are flagged. EPF, gold and other are set by you; the rest come from statements and daily prices.
+              Values older than 30 days are flagged. Edit sets an account's value as of today; the newest value wins until a statement brings a newer one.
             </td>
           </tr>
         </tbody>
@@ -261,15 +332,15 @@ function Allocation({ nw, total, picked, onPick }: { nw: LiveNetWorth; total: nu
 
 const MONEY = /^\d{0,12}(\.\d{0,2})?$/;
 function EditValue({ c, done }: { c: LiveComponent; done: () => void }) {
-  const [v, setV] = useState(String(toPaise(c.amount) / 100));
+  const [v, setV] = useState(toPaise(c.amount) ? String(Math.abs(toPaise(c.amount)) / 100) : "");
   const [busy, setBusy] = useState(false);
   const toast = useToast();
   const save = async () => {
     if (!v || !MONEY.test(v)) return;
     setBusy(true);
     try {
-      await setComponent(c.key, v);
-      toast(`${c.label} set to ${inr(toPaise(v))}`);
+      await setValuation(c.account_id!, v);
+      toast(`${c.label} set to ${inr(toPaise(v))}${c.side === "liability" ? " owed" : ""}`);
       done();
     } catch {
       toast("Couldn't save that value.");
@@ -279,7 +350,7 @@ function EditValue({ c, done }: { c: LiveComponent; done: () => void }) {
   };
   return (
     <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
-      <span className="mono-n faint">₹</span>
+      <span className="mono-n faint">{c.side === "liability" ? "Owed ₹" : "₹"}</span>
       <input className="inp2 mono-n" style={{ width: 130 }} inputMode="decimal" autoFocus value={v} onChange={(e) => MONEY.test(e.target.value) && setV(e.target.value)} onKeyDown={(e) => (e.key === "Enter" ? save() : e.key === "Escape" && done())} aria-label={`${c.label} value`} />
       <button type="button" className="btn2 sm primary" disabled={busy || !v} onClick={save}>
         Save
@@ -331,7 +402,7 @@ function MonthByMonth({ nw }: { nw: LiveNetWorth }) {
         </tbody>
       </table>
       <span className="foot">
-        Contributions = SIP, PPF and other investment debits. Cash = SBI + HDFC + FD. Market & other = change − contributions − cash (includes values set by hand). This month's split waits until every cash balance is newer than the 1st.
+        Contributions = SIP, PPF and other investment debits. Cash = your liquid accounts, cards included. Market & other = change − contributions − cash (includes values set by hand).
       </span>
     </section>
   );
@@ -353,12 +424,12 @@ function Holdings() {
               <th className="r">Units</th>
               <th className="r">Price</th>
               <th className="r">Value</th>
-              <th>Units as of</th>
+              <th>Account · units as of</th>
             </tr>
           </thead>
           <tbody>
             {items.map((h) => (
-              <tr key={h.isin ?? h.name}>
+              <tr key={`${h.account_id}-${h.isin ?? h.name}`}>
                 <td>
                   {h.name}
                   <br />
@@ -368,7 +439,7 @@ function Holdings() {
                 <td className="r">{h.price ? `₹${Number(h.price).toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "—"}</td>
                 <td className="r">{h.value ? inr(toPaise(h.value)) : "—"}</td>
                 <td className="muted">
-                  {h.source.toUpperCase()} {dayShort(h.units_as_of)}
+                  {h.account ?? h.source.toUpperCase()} · {dayShort(h.units_as_of)}
                 </td>
               </tr>
             ))}
@@ -376,9 +447,57 @@ function Holdings() {
         </table>
       ) : (
         <p className="state" style={{ padding: 0 }}>
-          No holdings yet. They come from the monthly CDSL CAS once it is in the mailbox.
+          No holdings yet. They come from the monthly CAS (CDSL) or a fund house's statement (CAMS) once it reaches the mailbox.
         </p>
       )}
     </section>
+  );
+}
+
+/** Accounts you count that have no value yet (an EPF you just added, a property): set one to bring them in. */
+function Unvalued({ nw }: { nw: LiveNetWorth }) {
+  const accounts = dataOf(read(api.accounts())) ?? [];
+  const valued = new Set(nw.components.map((c) => c.account_id));
+  const missing = accounts.filter((a) => a.in_net_worth && !valued.has(a.id));
+  if (!missing.length) return null;
+  return (
+    <section className="panel" aria-label="Accounts with no value yet">
+      <div className="panel-h">
+        <h2>No value yet</h2>
+        <span className="x">Counted in net worth once they have one</span>
+      </div>
+      <table className="t2">
+        <tbody>
+          {missing.map((a) => (
+            <UnvaluedRow key={a.id} a={a} />
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+function UnvaluedRow({ a }: { a: Account }) {
+  const [editing, setEditing] = useState(false);
+  const c = { key: String(a.id), account_id: a.id, label: a.label, side: a.side, amount: "0" } as LiveComponent;
+  return (
+    <tr>
+      <td>
+        <span className="nm">
+          <i className="sq" style={{ background: colorOf(a) }} />
+          {a.label}
+          {kindLine(a.kind, a.subtype, a.label) && <small className="faint"> · {kindLine(a.kind, a.subtype, a.label)}</small>}
+        </span>
+      </td>
+      <td className="r" style={{ fontFamily: "inherit" }}>
+        {editing ? (
+          <EditValue c={c} done={() => setEditing(false)} />
+        ) : (
+          <button type="button" className="linkish" onClick={() => setEditing(true)}>
+            Set {a.side === "liability" ? "what's owed" : "value"}
+          </button>
+        )}
+      </td>
+    </tr>
   );
 }

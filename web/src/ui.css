@@ -170,7 +170,7 @@ main { padding: 24px 40px 56px; display: flex; flex-direction: column; gap: 24px
 
 /* net worth card + page */
 .nwfig { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap }
-.nwfig b { font: 500 28px/34px var(--mono); letter-spacing: -.02em }
+.nwfig b { font: 500 28px/34px var(--mono); letter-spacing: -.02em; white-space: nowrap }
 .nwfig.lg b { font-size: 36px; line-height: 42px }
 .kvrows { display: flex; flex-direction: column }
 .kvrows .r { text-align: left; display: flex; align-items: center; gap: 10px; min-height: 36px; border-top: 1px solid var(--line); font-size: 13px }
@@ -190,7 +190,7 @@ main { padding: 24px 40px 56px; display: flex; flex-direction: column; gap: 24px
 .t2 th { font-size: 12px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--t3); text-align: left; padding: 12px 8px 12px 0; white-space: nowrap; border-bottom: 1px solid var(--line) }
 .t2 td { padding: 12px 8px 12px 0; border-bottom: 1px solid var(--line); vertical-align: middle }
 .t2 .r { text-align: right }
-.t2 td.r { font-family: var(--mono); font-variant-numeric: tabular-nums }
+.t2 td.r { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap }
 .t2 tr.total td { font-weight: 600; border-bottom: 0 }
 .t2 tr.click { cursor: pointer }
 .t2 tr.click:hover td { background: rgba(255, 255, 255, .02) }

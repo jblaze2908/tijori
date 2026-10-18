@@ -502,6 +502,14 @@ class AccountOut(BaseModel):
     label: str | None
     currency: str
     txn_count: int
+    subtype: str | None
+    side: Literal["asset", "liability"]
+    in_net_worth: bool
+    opened_at: date | None
+    liquid: bool
+    liquid_default: bool
+    asset_class: str
+    asset_class_default: str
     first_txn_at: date | None
     last_txn_at: date | None
     last_statement: StatementRef | None
@@ -559,55 +567,6 @@ class Coverage(BaseModel):
     now: datetime
     mailboxes: list[CoverageMailbox]
     accounts: list[CoverageAccount]
-
-
-# --- net worth -------------------------------------------------------------------------------
-
-class SnapshotOut(BaseModel):
-    date: date
-    components: dict[str, Money | None]
-    net_worth: Money
-    net_change: Money | None
-    liquid: Money | None
-    liquid_change: Money | None
-    remark: str | None
-    commentary: str | None
-    commentary_source: str | None
-    locked: bool
-
-
-class Component(BaseModel):
-    key: str
-    label: str
-    asset_class: str
-    amount: Money
-    share_pct: float
-
-
-class LatestNetWorth(BaseModel):
-    date: date
-    net_worth: Money
-    components: list[Component]
-    by_asset_class: dict[str, Money]
-
-
-class NetWorth(BaseModel):
-    snapshots: list[SnapshotOut]
-    latest: LatestNetWorth | None
-
-
-class RemarkIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    remark: str | None = Field(max_length=2000)
-
-
-class RemarkOut(BaseModel):
-    date: date
-    remark: str | None
-
-
-class SheetImportOut(BaseModel):
-    snapshots_upserted: int
 
 
 # --- onboarding ------------------------------------------------------------------------------
@@ -761,18 +720,31 @@ class MeIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
 
 
-class AccountIn(BaseModel):
+AccountKind = Literal["bank", "card", "wallet", "deposit", "holding", "cash", "retirement", "gold", "property", "loan",
+                      "other_asset", "other_liability"]
+AssetClass = Literal["cash", "deposits", "equity", "retirement", "gold", "property", "credit", "loans", "other"]
+Subtype = Literal["fd", "rd", "stocks", "mf", "epf", "ppf", "nps", "home", "car", "personal", "education", "gold"]
+
+
+class AccountSettings(BaseModel):
+    """How an account counts in net worth. liquid and asset_class null: the kind's default."""
     model_config = ConfigDict(extra="forbid")
+    name: str | None = Field(default=None, max_length=120)
+    mask: str | None = Field(default=None, pattern=r"^\d{4}$")
+    subtype: Subtype | None = None
+    liquid: bool | None = None
+    asset_class: AssetClass | None = None
+    in_net_worth: bool = True
+    opened_at: date | None = None
+
+
+class AccountIn(AccountSettings):
     institution: str = Field(min_length=1, max_length=80)
-    kind: Literal["bank", "card", "wallet", "deposit", "holding", "cash"]
-    name: str | None = Field(default=None, max_length=120)
-    mask: str | None = Field(default=None, pattern=r"^\d{4}$")
+    kind: AccountKind
 
 
-class AccountPatch(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    name: str | None = Field(default=None, max_length=120)
-    mask: str | None = Field(default=None, pattern=r"^\d{4}$")
+class AccountPatch(AccountSettings):
+    kind: AccountKind | None = None
 
 
 class Balance(BaseModel):
@@ -1064,12 +1036,17 @@ class UnfileOut(BaseModel):
 # --- live net worth ------------------------------------------------------------------------------
 
 class LiveComponent(BaseModel):
-    key: str
+    key: str  # the account id, or loans_given / loans_taken
+    account_id: int | None
     label: str
+    kind: str | None
+    subtype: str | None
+    side: Literal["asset", "liability"]
     asset_class: str
-    amount: Money
+    liquid: bool
+    amount: Money  # signed: a liability is negative
     share_pct: float
-    source: Literal["sheet", "statement", "manual", "loans", "prices", "estimate"]
+    source: Literal["statement", "manual", "imported", "loans", "prices", "estimate"]
     as_of: date
     stale: bool
     editable: bool
@@ -1089,16 +1066,24 @@ class HistoryPoint(BaseModel):
     kind: Literal["snapshot", "live"]
 
 
-class ComponentPoint(BaseModel):
+class ValuePoint(BaseModel):
     date: date
-    value: Money
+    value: Money  # what the account is worth; what is owed, for a liability
 
 
-class ComponentHistory(BaseModel):
-    key: str
+class ValuationOut(BaseModel):
+    as_of: date
+    amount: Money
+    source: Literal["manual", "statement", "imported"]
+
+
+class AccountHistory(BaseModel):
+    account_id: int
     label: str
-    points: list[ComponentPoint]
-    priced_from: date | None  # stocks and funds: the first day valued at stored prices; CAS steps before it
+    side: Literal["asset", "liability"]
+    points: list[ValuePoint]
+    priced_from: date | None  # holdings: the first day valued at stored prices; statement steps before it
+    valuations: list[ValuationOut]  # newest first
 
 
 class MonthChange(BaseModel):
@@ -1136,16 +1121,17 @@ class LiveNetWorth(BaseModel):
     projection: Projection | None
 
 
-class ComponentIn(BaseModel):
+class ValuationIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    amount: str | int = Field()
+    amount: str | int = Field()  # what it is worth; what is owed, for a liability
     as_of: date | None = None
 
 
-class ComponentOut(BaseModel):
-    key: str
+class ValuationSet(BaseModel):
+    account_id: int
     amount: Money
     as_of: date
+    source: Literal["manual"]
 
 
 class HoldingOut(BaseModel):
@@ -1154,6 +1140,8 @@ class HoldingOut(BaseModel):
     units: str
     units_as_of: date
     source: str
+    account_id: int | None
+    account: str | None
     price: str | None
     price_date: date | None
     value: Money | None

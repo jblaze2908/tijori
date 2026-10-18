@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import func, select, true, update
 from sqlalchemy.orm import Session
 
+from tijori.account_kinds import KINDS, subtype_ok
 from tijori.classify.kinds import DEFAULT_LOCAL_SHOP_CAP
 from tijori.db import MemberContext
 from tijori.models import Account, Household, Member, Statement, Txn
@@ -86,6 +87,7 @@ def accounts(s: Session, member_id: int) -> dict[str, Any]:
     return {"items": [
         {"id": a.id, "institution": a.institution, "name": a.name, "kind": a.kind, "mask": a.mask,
          "label": account_label(a.institution, a.name, a.mask), "currency": a.currency, "txn_count": n,
+         **_net_worth_settings(a),
          "first_txn_at": first, "last_txn_at": last,
          "last_statement": None if pe is None else {"period_start": ps, "period_end": pe,
                                                     "reconciled": rat is not None,
@@ -104,29 +106,49 @@ def _feed(a: Account, f: coverage.Feed, boxes: dict[int, dict[str, Any]]) -> dic
             "alerts": (a.institution, a.kind) in COVERED}
 
 
-ACCOUNT_KINDS = ("bank", "card", "wallet", "deposit", "holding", "cash")
+def _net_worth_settings(a: Account) -> dict[str, Any]:
+    """How the account counts in net worth: the kind's defaults, and what the member set over them."""
+    k = KINDS[a.kind]
+    return {"subtype": a.subtype, "side": k.side, "in_net_worth": a.in_net_worth, "opened_at": a.opened_at,
+            "liquid": k.liquid if a.liquid is None else a.liquid, "liquid_default": k.liquid,
+            "asset_class": a.asset_class or k.asset_class, "asset_class_default": k.asset_class}
 
 
-def create_account(s: Session, ctx: MemberContext, actor: str, *, institution: str, kind: str, name: str | None,
-                   mask: str | None) -> dict[str, Any]:
-    acct = Account(member_id=ctx.member_id, institution=institution, kind=kind, name=name, mask=mask)
+# Account fields the member may set; a null liquid or asset_class goes back to the kind's default.
+ACCOUNT_FIELDS = ("name", "mask", "kind", "subtype", "liquid", "asset_class", "in_net_worth", "opened_at")
+
+
+def _check(acct: Account) -> None:
+    if not subtype_ok(acct.kind, acct.subtype):
+        raise Invalid(f"subtype must be one of {', '.join(KINDS[acct.kind].subtypes) or 'none'} for this kind")
+
+
+def create_account(s: Session, ctx: MemberContext, actor: str, *, institution: str, kind: str,
+                   values: dict[str, Any]) -> dict[str, Any]:
+    acct = Account(member_id=ctx.member_id, institution=institution, kind=kind,
+                   **{k: v for k, v in values.items() if k in ACCOUNT_FIELDS and k != "kind"})
+    _check(acct)
     s.add(acct)
     s.flush()
     audit(s, ctx, actor, "account.create", f"account:{acct.id}", {"kind": kind})
     return _account_out(s, ctx.member_id, acct.id)
 
 
-def update_account(s: Session, ctx: MemberContext, actor: str, account_id: int, *, name: str | None,
-                   mask: str | None, fields: set[str]) -> dict[str, Any]:
+def update_account(s: Session, ctx: MemberContext, actor: str, account_id: int, values: dict[str, Any]) -> dict[str, Any]:
+    """Only the fields given change. A new kind drops a subtype it doesn't have."""
     acct = s.scalars(select(Account).where(Account.member_id == ctx.member_id, Account.id == account_id)).first()
     if acct is None:
         raise NotFound("account not found")
-    if "name" in fields:
-        acct.name = name
-    if "mask" in fields:
-        acct.mask = mask
+    for k, v in values.items():
+        if k in ACCOUNT_FIELDS:
+            setattr(acct, k, v)
+    if "kind" in values and "subtype" not in values and not subtype_ok(acct.kind, acct.subtype):
+        acct.subtype = None
+    if acct.in_net_worth is None:
+        acct.in_net_worth = True
+    _check(acct)
     s.flush()
-    audit(s, ctx, actor, "account.update", f"account:{account_id}", {"fields": sorted(fields)})
+    audit(s, ctx, actor, "account.update", f"account:{account_id}", {"fields": sorted(values)})
     return _account_out(s, ctx.member_id, account_id)
 
 

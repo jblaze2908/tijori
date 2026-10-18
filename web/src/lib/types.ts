@@ -11,7 +11,20 @@ export type MonthKey = string;
 export type TxnKind = "spend" | "income" | "transfer" | "investment" | "refund" | "fee" | "cash";
 export type Direction = "debit" | "credit";
 export type Bucket = "everyday" | "oneoff" | "card" | "invest" | "income" | "excluded";
-export type AccountKind = "bank" | "card" | "wallet" | "deposit" | "holding" | "cash";
+export type AccountKind =
+  | "bank"
+  | "card"
+  | "wallet"
+  | "cash"
+  | "deposit"
+  | "holding"
+  | "retirement"
+  | "gold"
+  | "property"
+  | "loan"
+  | "other_asset"
+  | "other_liability";
+export type AssetClass = "cash" | "deposits" | "equity" | "retirement" | "gold" | "property" | "credit" | "loans" | "other";
 export type TxnStatus = "pending" | "posted" | "reconciled" | "flagged";
 export type ClassifiedBy = "rule" | "payee_memory" | "dictionary" | "heuristic" | "user" | "system";
 export type Health = "good" | "warn" | "bad";
@@ -98,24 +111,6 @@ export interface Category {
   bucket: Bucket;
   parent_id: number | null;
   scope: "household" | "member";
-}
-
-export interface ApiSnapshot {
-  date: ISODate;
-  net_worth: Decimal;
-  liquid: Decimal | null;
-  /** All nine sheet keys; null means the sheet cell was blank. */
-  components: Record<string, Decimal | null>;
-  remark: string | null;
-  commentary: string | null;
-  commentary_source: "stored" | "template";
-  locked: boolean;
-  net_change: Decimal | null;
-  liquid_change: Decimal | null;
-}
-export interface ApiNetWorth {
-  snapshots: ApiSnapshot[];
-  latest: { components: { key: string; label: string; asset_class: string }[] } | null;
 }
 
 export interface PayeeHistory {
@@ -256,6 +251,15 @@ export interface Account {
   mask: string | null;
   label: string;
   txn_count: number;
+  /** How it counts in net worth (docs/api.md, accounts): the kind's defaults and the member's settings over them. */
+  subtype: string | null;
+  side: "asset" | "liability";
+  in_net_worth: boolean;
+  opened_at: ISODate | null;
+  liquid: boolean;
+  liquid_default: boolean;
+  asset_class: AssetClass;
+  asset_class_default: AssetClass;
   first_txn_at: ISODate | null;
   last_txn_at: ISODate | null;
   last_statement: { period_start: ISODate; period_end: ISODate; reconciled: boolean; diff: Decimal } | null;
@@ -385,25 +389,6 @@ export interface Inbox {
   fetched: number;
 }
 
-export interface Component {
-  key: string;
-  label: string;
-  assetClass: string;
-  amount: Paise;
-}
-export interface Snapshot {
-  date: ISODate;
-  netWorth: Paise;
-  liquid: Paise;
-  netChange: Paise | null;
-  liquidChange: Paise | null;
-  components: Component[];
-  remark: string | null;
-  commentary: string | null;
-  /** "template" when the server generated the commentary (no AI), "stored" when it came from the sheet. */
-  commentarySource: "stored" | "template" | null;
-}
-
 export interface Settings {
   monthStartDay: number;
 }
@@ -501,12 +486,19 @@ export interface PayeeMatch extends PayeeBase {
 }
 
 export interface LiveComponent {
+  /** The account id, or loans_given / loans_taken. */
   key: string;
+  account_id: number | null;
   label: string;
+  kind: AccountKind | null;
+  subtype: string | null;
+  side: "asset" | "liability";
   asset_class: string;
+  liquid: boolean;
+  /** Signed: a liability is negative. */
   amount: Decimal;
   share_pct: number;
-  source: "sheet" | "statement" | "manual" | "loans" | "prices" | "estimate";
+  source: "statement" | "manual" | "imported" | "loans" | "prices" | "estimate";
   as_of: ISODate;
   stale: boolean;
   editable: boolean;
@@ -533,11 +525,14 @@ export interface LiveNetWorth {
   }[];
   projection: { monthly_change: Decimal; basis_months: number; points: { date: ISODate; net_worth: Decimal }[] } | null;
 }
-export interface ComponentHistory {
-  key: string;
+export interface AccountHistory {
+  account_id: number;
   label: string;
+  side: "asset" | "liability";
+  /** What it is worth; what is owed, for a liability. */
   points: { date: ISODate; value: Decimal }[];
   priced_from: ISODate | null;
+  valuations: { as_of: ISODate; amount: Decimal; source: "manual" | "statement" | "imported" }[];
 }
 export interface Holding {
   name: string;
@@ -545,6 +540,8 @@ export interface Holding {
   units: string;
   units_as_of: ISODate;
   source: string;
+  account_id: number | null;
+  account: string | null;
   price: string | null;
   price_date: ISODate | null;
   value: Decimal | null;

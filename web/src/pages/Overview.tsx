@@ -3,13 +3,14 @@ import { NetWorthChart, ProgressChart } from "../components/charts";
 import { G } from "../components/Glyphs";
 import { ErrorState, Loading } from "../components/ui";
 import { MonthGate, prevCycles, txnsFor, type AppCtx, type MonthCtx } from "../ctx";
+import { CLASS_LABEL } from "../lib/accounts";
 import { api, dataOf, invalidate, read } from "../lib/api";
 import { categoryColor, monogramColor } from "../lib/colors";
 import { addDays, compact, dayShort, daysBetween, inr, monthLong, monthShort, monthApos, plural, toPaise } from "../lib/format";
 import { within } from "../lib/insights";
 import { byKey, categoryOf, cumulative, largestCharge, normalByKey, normalCurve, NOTABLE, paidFrom, projection, spendOf } from "../lib/metrics";
 import { Link, navigate, useLocation } from "../lib/router";
-import type { Transaction } from "../lib/types";
+import type { AssetClass, Transaction } from "../lib/types";
 
 export function Overview({ app, head }: { app: AppCtx; head: ReactNode }) {
   return (
@@ -344,7 +345,7 @@ function NetWorthCard() {
   const body = (() => {
     if (st.status === "loading") return <p className="state">Loading…</p>;
     if (st.status === "error") return <p className="state">Net worth couldn't load.</p>;
-    if (!nw || nw.net_worth == null) return <p className="state">Import the net-worth sheet or set a value to start.</p>;
+    if (!nw || nw.net_worth == null) return <p className="state">No values yet. Statements fill this in; set the rest under Net worth.</p>;
     const month = nw.changes.find((c) => c.period === "month");
     const history = nw.history.slice(-12).map((h) => ({ date: h.date, value: toPaise(h.net_worth) }));
     const proj = (nw.projection?.points ?? []).map((p) => ({ date: p.date, value: toPaise(p.net_worth) }));
@@ -360,7 +361,7 @@ function NetWorthCard() {
               </span>
             )}
           </div>
-          <span className="foot">Newest known value per component · as of {dayShort(nw.as_of)}</span>
+          <span className="foot">Newest known value per account · as of {dayShort(nw.as_of)}</span>
         </div>
         {history.length > 1 && (
           <div className="chart2">
@@ -370,7 +371,7 @@ function NetWorthCard() {
         <div className="kvrows">
           {classes.map(([k, v]) => (
             <div key={k} className="r">
-              <span>{CLASS_LABEL[k] ?? k}</span>
+              <span>{CLASS_LABEL[k as AssetClass] ?? k}</span>
               <b>{compact(toPaise(v))}</b>
             </div>
           ))}
@@ -395,14 +396,4 @@ function NetWorthCard() {
     </section>
   );
 }
-
-export const CLASS_LABEL: Record<string, string> = {
-  cash: "Savings accounts",
-  deposits: "Fixed deposits",
-  equity: "Mutual funds + stocks",
-  retirement: "EPF + PPF",
-  gold: "Gold",
-  other: "Other",
-  loans: "Loans",
-};
 

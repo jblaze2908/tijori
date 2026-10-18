@@ -226,14 +226,15 @@ async def test_new_mail_source(request: Request, identity: AuthDep, body: MailSo
 
 @router.post("/accounts", response_model=AccountOut, status_code=201, dependencies=JSON)
 def create_account(db: MemberDep, body: AccountIn) -> dict:
-    return members.create_account(db.session, db.ctx, db.actor, institution=body.institution.strip(),
-                                  kind=body.kind, name=body.name, mask=body.mask)
+    return members.create_account(db.session, db.ctx, db.actor, institution=body.institution.strip(), kind=body.kind,
+                                  values=body.model_dump(exclude={"institution", "kind"}))
 
 
 @router.patch("/accounts/{account_id}", response_model=AccountOut, dependencies=JSON)
 def patch_account(db: MemberDep, account_id: Id, body: AccountPatch) -> dict:
-    return members.update_account(db.session, db.ctx, db.actor, account_id, name=body.name, mask=body.mask,
-                                  fields=body.model_fields_set)
+    return members.update_account(db.session, db.ctx, db.actor, account_id,
+                                  {k: getattr(body, k) for k in body.model_fields_set
+                                   if not (k in ("kind", "in_net_worth") and getattr(body, k) is None)})
 
 
 @router.delete("/accounts/{account_id}", status_code=204)

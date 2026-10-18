@@ -4,9 +4,10 @@ import { useToast } from "../../components/Toast";
 import { InlineState, Loading } from "../../components/ui";
 import { api, dataOf, read } from "../../lib/api";
 import { plural } from "../../lib/format";
-import { addAccount, removeAccount, renameAccount, saveClassifyProfile, saveMonthStart, saveName, setup, type ClassifyProfile } from "../../lib/setup";
+import { CLASS_LABEL, CLASSES, KIND_LABEL, kindLine, KINDS, PRESETS, SUBTYPES } from "../../lib/accounts";
+import { addAccount, removeAccount, saveClassifyProfile, saveMonthStart, saveName, setup, updateAccount, type AccountFields, type ClassifyProfile } from "../../lib/setup";
 import { useStore } from "../../lib/useStore";
-import type { AccountKind } from "../../lib/types";
+import type { Account, AccountKind, AssetClass } from "../../lib/types";
 
 const DAYS = Array.from({ length: 28 }, (_, i) => i + 1);
 const ordinal = (d: number) => `${d}${d % 10 === 1 && d !== 11 ? "st" : d % 10 === 2 && d !== 12 ? "nd" : d % 10 === 3 && d !== 13 ? "rd" : "th"}`;
@@ -80,24 +81,29 @@ export function ProfileForm({ submitLabel, onSaved }: { submitLabel: string; onS
   );
 }
 
-const KINDS: [AccountKind, string][] = [
-  ["bank", "Bank account"],
-  ["card", "Credit card"],
-  ["wallet", "Wallet"],
-  ["deposit", "Fixed deposit"],
-  ["holding", "Investments"],
-];
+/** "Bank · 6 transactions · Cash & savings, liquid", leaving out whatever the name already says. */
+function accountLine(a: Account): string {
+  const what = kindLine(a.kind, a.subtype, a.label);
+  const cls = CLASS_LABEL[a.asset_class];
+  const counts = a.in_net_worth ? [cls, a.liquid ? "liquid" : ""].filter((x) => x && !a.label.toLowerCase().includes(x.toLowerCase()) && x !== what).join(", ") : "not in net worth";
+  return [what, a.txn_count ? plural(a.txn_count, "transaction") : "", counts].filter(Boolean).join(" · ");
+}
 
-/** Declared accounts: statements for the same institution and last 4 digits land on them later. */
+/**
+ * Everything you own or owe, one account each: statements for the same institution and last 4 digits land on a
+ * declared account later, and each account's settings decide how it counts in net worth.
+ */
 function AccountsEditor() {
   useStore();
   const toast = useToast();
   const accounts = read(api.accounts());
-  const [draft, setDraft] = useState({ institution: "", name: "", kind: "bank" as AccountKind, mask: "" });
-  const [editing, setEditing] = useState<{ id: number; name: string } | null>(null);
+  const [draft, setDraft] = useState({ institution: "", name: "", kind: "bank" as AccountKind, subtype: "", mask: "" });
+  const [editing, setEditing] = useState<number | null>(null);
   const [confirm, setConfirm] = useState<number | null>(null);
   const act = useAction();
   const list = dataOf(accounts) ?? [];
+  const subtypes = SUBTYPES[draft.kind];
+  const has = (kind: AccountKind, subtype?: string) => list.some((a) => a.kind === kind && (subtype == null || a.subtype === subtype));
   return (
     <>
       {accounts.status === "loading" ? (
@@ -107,30 +113,15 @@ function AccountsEditor() {
       ) : list.length ? (
         <div className="list">
           {list.map((a) => (
-            <div className="li" key={a.id}>
-              {editing?.id === a.id ? (
-                <form
-                  className="row-form grow1"
-                  onSubmit={async (e) => {
-                    e.preventDefault();
-                    if ((await act.run(() => renameAccount(a.id, editing.name.trim() || null))).ok) setEditing(null);
-                  }}
-                >
-                  <input className="inp" aria-label={`Name for ${a.label}`} value={editing.name} maxLength={80} onChange={(e) => setEditing({ id: a.id, name: e.target.value })} placeholder="Nickname" />
-                  <button type="submit" className="btn ghost" disabled={act.busy}>
-                    Save
-                  </button>
-                  <button type="button" className="btn ghost" onClick={() => setEditing(null)}>
-                    Cancel
-                  </button>
-                </form>
+            <div className="li" key={a.id} style={editing === a.id ? { flexDirection: "column", alignItems: "stretch" } : undefined}>
+              {editing === a.id ? (
+                <AccountForm a={a} done={() => setEditing(null)} />
               ) : (
                 <>
                   <div className="mid">
                     <b>{a.label}</b>
                     <small className="sub">
-                      {KINDS.find(([k]) => k === a.kind)?.[1] ?? a.kind}
-                      {a.txn_count ? ` · ${plural(a.txn_count, "transaction")}` : " · no statements yet"}
+                      {accountLine(a)}
                     </small>
                   </div>
                   {confirm === a.id ? (
@@ -151,8 +142,8 @@ function AccountsEditor() {
                     </span>
                   ) : (
                     <span className="row">
-                      <button type="button" className="linkish nm" onClick={() => setEditing({ id: a.id, name: a.name ?? "" })}>
-                        Rename
+                      <button type="button" className="linkish nm" onClick={() => setEditing(a.id)}>
+                        Edit
                       </button>
                       <button type="button" className="linkish" onClick={() => setConfirm(a.id)}>
                         Remove
@@ -167,25 +158,55 @@ function AccountsEditor() {
       ) : (
         <InlineState>No accounts yet. Add the ones whose alerts and statements reach your mail, or let the first statement create them.</InlineState>
       )}
+      <div className="chips" aria-label="Quick add">
+        <span className="sub" style={{ alignSelf: "center" }}>
+          No statement reaches these. Add one, then set its value under Net worth:
+        </span>
+        {PRESETS.filter((p) => !has(p.kind, p.subtype)).map((p) => (
+          <button
+            key={p.label}
+            type="button"
+            className="chip"
+            disabled={act.busy}
+            onClick={async () => {
+              if ((await act.run(() => addAccount({ institution: p.institution, kind: p.kind, subtype: p.subtype ?? null }))).ok) toast(`${p.label} added.`);
+            }}
+          >
+            + {p.label}
+          </button>
+        ))}
+      </div>
       <form
         className="row-form"
         onSubmit={async (e) => {
           e.preventDefault();
           const mask = draft.mask ? last4(draft.mask) : null;
-          if (!draft.institution.trim()) return act.setError("Add the bank or card issuer's name.");
+          if (!draft.institution.trim()) return act.setError("Add the bank, issuer or a name for it.");
           if (draft.mask && !mask) return act.setError("The last 4 digits must be exactly 4 digits.");
-          const r = await act.run(() => addAccount({ institution: draft.institution.trim(), kind: draft.kind, name: draft.name.trim() || null, mask }));
-          if (r.ok) setDraft({ institution: "", name: "", kind: draft.kind, mask: "" });
+          const r = await act.run(() =>
+            addAccount({ institution: draft.institution.trim(), kind: draft.kind, subtype: draft.subtype || null, name: draft.name.trim() || null, mask }),
+          );
+          if (r.ok) setDraft({ institution: "", name: "", kind: draft.kind, subtype: "", mask: "" });
         }}
       >
-        <input className="inp" placeholder="Bank or card issuer" aria-label="Bank or card issuer" value={draft.institution} maxLength={80} onChange={(e) => setDraft({ ...draft, institution: e.target.value })} />
-        <select className="sel" aria-label="Account type" value={draft.kind} onChange={(e) => setDraft({ ...draft, kind: e.target.value as AccountKind })}>
-          {KINDS.map(([k, l]) => (
+        <input className="inp" placeholder="Bank, issuer or name" aria-label="Bank, issuer or name" value={draft.institution} maxLength={80} onChange={(e) => setDraft({ ...draft, institution: e.target.value })} />
+        <select className="sel" aria-label="Account type" value={draft.kind} onChange={(e) => setDraft({ ...draft, kind: e.target.value as AccountKind, subtype: "" })}>
+          {KINDS.map((k) => (
             <option key={k} value={k}>
-              {l}
+              {KIND_LABEL[k]}
             </option>
           ))}
         </select>
+        {subtypes && (
+          <select className="sel" aria-label="Which one" value={draft.subtype} onChange={(e) => setDraft({ ...draft, subtype: e.target.value })}>
+            <option value="">Which one?</option>
+            {subtypes.map(([k, l]) => (
+              <option key={k} value={k}>
+                {l}
+              </option>
+            ))}
+          </select>
+        )}
         <input className="inp inp-4" placeholder="Last 4" aria-label="Last 4 digits" inputMode="numeric" maxLength={4} value={draft.mask} onChange={(e) => setDraft({ ...draft, mask: e.target.value.replace(/\D/g, "") })} />
         <input className="inp" placeholder="Nickname (optional)" aria-label="Nickname" value={draft.name} maxLength={80} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
         <button type="submit" className="btn ghost" disabled={act.busy}>
@@ -198,6 +219,110 @@ function AccountsEditor() {
         </div>
       )}
     </>
+  );
+}
+
+/** One account's settings. Liquid and asset class start at the kind's default; "Default" puts them back. */
+function AccountForm({ a, done }: { a: Account; done: () => void }) {
+  const toast = useToast();
+  const act = useAction();
+  const [f, setF] = useState({
+    name: a.name ?? "",
+    mask: a.mask ?? "",
+    kind: a.kind,
+    subtype: a.subtype ?? "",
+    in_net_worth: a.in_net_worth,
+    liquid: a.liquid === a.liquid_default ? "" : String(a.liquid),
+    asset_class: a.asset_class === a.asset_class_default ? "" : a.asset_class,
+    opened_at: a.opened_at ?? "",
+  });
+  const subtypes = SUBTYPES[f.kind];
+  const kindChanged = f.kind !== a.kind;
+  const save = async () => {
+    const mask = f.mask ? last4(f.mask) : null;
+    if (f.mask && !mask) return act.setError("The last 4 digits must be exactly 4 digits.");
+    const fields: AccountFields = {
+      name: f.name.trim() || null,
+      mask,
+      kind: f.kind,
+      subtype: f.subtype || null,
+      in_net_worth: f.in_net_worth,
+      liquid: f.liquid === "" ? null : f.liquid === "true",
+      asset_class: (f.asset_class || null) as AssetClass | null,
+      opened_at: f.opened_at || null,
+    };
+    if ((await act.run(() => updateAccount(a.id, fields))).ok) {
+      toast(`${f.name.trim() || a.institution} saved.`);
+      done();
+    }
+  };
+  return (
+    <form
+      className="form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        save();
+      }}
+    >
+      <b>{a.label}</b>
+      <div className="row-form">
+        <input className="inp" aria-label="Nickname" placeholder="Nickname" value={f.name} maxLength={120} onChange={(e) => setF({ ...f, name: e.target.value })} />
+        <input className="inp inp-4" aria-label="Last 4 digits" placeholder="Last 4" inputMode="numeric" maxLength={4} value={f.mask} onChange={(e) => setF({ ...f, mask: e.target.value.replace(/\D/g, "") })} />
+        <select className="sel" aria-label="Account type" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value as AccountKind, subtype: "" })}>
+          {KINDS.map((k) => (
+            <option key={k} value={k}>
+              {KIND_LABEL[k]}
+            </option>
+          ))}
+        </select>
+        {subtypes && (
+          <select className="sel" aria-label="Which one" value={f.subtype} onChange={(e) => setF({ ...f, subtype: e.target.value })}>
+            <option value="">Which one?</option>
+            {subtypes.map(([k, l]) => (
+              <option key={k} value={k}>
+                {l}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+      <div className="row-form" style={{ alignItems: "center" }}>
+        <label className="row" style={{ gap: 6 }}>
+          <input type="checkbox" checked={f.in_net_worth} onChange={(e) => setF({ ...f, in_net_worth: e.target.checked })} />
+          Counts in net worth
+        </label>
+        <select className="sel" aria-label="Liquid" value={f.liquid} disabled={!f.in_net_worth} onChange={(e) => setF({ ...f, liquid: e.target.value })}>
+          <option value="">Liquid: default{kindChanged ? "" : a.liquid_default ? " (yes)" : " (no)"}</option>
+          <option value="true">Liquid: yes</option>
+          <option value="false">Liquid: no</option>
+        </select>
+        <select className="sel" aria-label="Asset class" value={f.asset_class} disabled={!f.in_net_worth} onChange={(e) => setF({ ...f, asset_class: e.target.value })}>
+          <option value="">Asset class: default{kindChanged ? "" : ` (${CLASS_LABEL[a.asset_class_default]})`}</option>
+          {CLASSES.map((c) => (
+            <option key={c} value={c}>
+              {CLASS_LABEL[c]}
+            </option>
+          ))}
+        </select>
+        <label className="row" style={{ gap: 6 }} title="Net worth history doesn't wait for this account's first value: before it, the account held nothing">
+          Opened
+          <input className="inp" type="date" aria-label="Opened on" value={f.opened_at} onChange={(e) => setF({ ...f, opened_at: e.target.value })} />
+        </label>
+      </div>
+      <div className="row">
+        <button type="submit" className="btn" disabled={act.busy}>
+          {act.busy ? "Saving…" : "Save"}
+        </button>
+        <button type="button" className="btn ghost" onClick={done}>
+          Cancel
+        </button>
+      </div>
+      {act.error && (
+        <div className="result bad" role="alert">
+          {act.error}
+        </div>
+      )}
+    </form>
   );
 }
 
@@ -249,7 +374,8 @@ export function AccountsSettings({ onContinue }: { onContinue?: () => void }) {
   };
   return (
     <div className="form">
-      <h4 className="fh">Banks and cards</h4>
+      <h4 className="fh">Your accounts</h4>
+      <p className="sub">Everything you own or owe, one account each. Its type decides how it counts in net worth; edit an account to change that.</p>
       <AccountsEditor />
       <h4 className="fh">So Tijori can spot your own transfers</h4>
       <p className="sub">Money moving between your own accounts isn't spending. Tijori matches these against bank narrations.</p>
