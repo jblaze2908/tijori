@@ -166,8 +166,18 @@ class NetWorthDB(unittest.IsolatedAsyncioTestCase):
                                          values={"subtype": "nps"})["id"]
             networth.set_valuation(s, self.owner, "test", nps, D("95000"), self.today)
         live = self.live()
-        self.assertEqual(live["history"][0]["date"], before)
+        self.assertLessEqual(live["history"][0]["date"], before)  # never shorter
         self.assertEqual(self.amount(live, nps), D("95000.00"))
+
+    def test_a_small_account_fed_only_lately_keeps_history(self) -> None:
+        """Seen in production: a second savings account whose first statement arrived last month cut years of net
+        worth history to that month. An account that small next to what you own starts counting at its first value."""
+        self.statement("RBL", "0014", "60000.00", days_ago=75, ctx=self.fresh)
+        before = self.live(self.fresh)["history"][0]["date"]
+        small = self.statement("RBL", "0015", "500.00", days_ago=3, ctx=self.fresh)
+        live = self.live(self.fresh)
+        self.assertEqual(live["history"][0]["date"], before)
+        self.assertEqual(self.amount(live, small), D("500.00"))
 
     def test_a_printed_balance_lands_on_one_account(self) -> None:
         ppf = (("ppf", D("150000.00")),)

@@ -27,6 +27,7 @@ STALE_DAYS = 30
 CONSOLIDATED = frozenset({"cdsl_cas"})  # holding sources that list everything held, not one fund house's share
 CAS_CYCLE = timedelta(days=40)  # a CAS is monthly; a fund-house statement this much newer means it stopped coming
 PROJECTION_MONTHS = 12
+SMALL_SHARE = Decimal("0.05")  # newly fed accounts this small, together, don't hold net worth history back
 ETF = re.compile(r"\bETF\b|BEES", re.I)
 # Same day, the more direct evidence wins: a price over a statement's total, a statement over a value set by hand.
 RANK = {"estimate": 0, "imported": 1, "manual": 2, "statement": 3, "prices": 4}
@@ -235,11 +236,19 @@ def live(s: Session, member_id: int, today: date) -> dict[str, Any]:
                 vals[aid] = -x if a.liability else x
         return vals
 
-    # Month-end points from the first month every fed asset account is known (one with an opening date isn't
-    # waited for: before its first value it held nothing); liabilities count from their first value. Then today.
-    core = [v[0][0] for aid, v in series.items()
-            if aid in fed and aid not in carry and not accts[aid].liability and accts[aid].opened_at is None]
-    first = _month_end(max(core) if core else min(v[0][0] for v in series.values()))
+    # Month-end points from the first month every fed asset account is known, so a sum isn't missing one (one with an
+    # opening date isn't waited for: before its first value it held nothing); liabilities count from their first
+    # value. Then today. The newest-fed accounts don't hold history back while together they are at most SMALL_SHARE
+    # of what is owned now: a second savings account whose first statement came this month would otherwise cut years
+    # of history to this month, a far bigger error than the small step it adds when it first shows.
+    core = sorted(((v[0][0], v[0][1]) for aid, v in series.items()
+                   if aid in fed and aid not in carry and not accts[aid].liability and accts[aid].opened_at is None),
+                  reverse=True)
+    owned = sum((x for x in at(today).values() if x > 0), ZERO)
+    late = ZERO
+    while len(core) > 1 and late + max(core[0][1], ZERO) <= owned * SMALL_SHARE:
+        late += max(core.pop(0)[1], ZERO)
+    first = _month_end(core[0][0] if core else min(v[0][0] for v in series.values()))
     points: list[tuple[date, dict[int, Decimal]]] = []
     d = first
     while d < today:
