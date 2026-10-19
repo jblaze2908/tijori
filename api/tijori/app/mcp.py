@@ -74,7 +74,7 @@ TOOLS: dict[str, tuple[str, str, dict[str, tuple[str, str]]]] = {
         "for_txn": ("loan_picker", "open loans a txn could be filed under"),
     }),
     "get_net_worth": ("Net worth, its history and holdings.", READ, {
-        "live": ("networth_live", "net worth now by account and asset class, with month, year and FY change"),
+        "live": ("networth_live", "net worth now by account and asset class, what is owed on cards, month, year and FY change, and month by month with the biggest mover and your notes"),
         "holdings": ("get_holdings", "funds and stocks with units, value and the account they sit in"),
         "account_history": ("account_history", "one account's value on every day, oldest first, and the values behind it"),
     }),
@@ -126,9 +126,10 @@ TOOLS: dict[str, tuple[str, str, dict[str, tuple[str, str]]]] = {
         "reopen": ("reopen_loan", "open it again"),
         "write_off": ("write_off_loan", "give up on the rest, filed under category_id"),
     }),
-    "edit_net_worth": ("An account's value on a day, for accounts with no feed or to correct one.", WRITE, {
+    "edit_net_worth": ("An account's value on a day, for accounts with no feed or to correct one, and your notes on months.", WRITE, {
         "set_value": ("put_valuation", "set an account's value as of a date (what is owed, for a liability); the newest value wins"),
         "delete_value": ("delete_valuation", "remove a value set by hand on a date"),
+        "set_note": ("put_networth_note", "your note on a month (month: YYYY-MM, note); empty removes it"),
     }),
     "edit_setup": ("Accounts, statements, mailboxes, settings and household. Deletes cannot be undone.", DESTRUCTIVE, {
         "add_account": ("create_account", "a new account: bank, card, investments, retirement, gold, property, loan or other"),

@@ -22,8 +22,9 @@ KINDS: dict[str, Kind] = {
     "bank": Kind("Bank account", "asset", "cash", True, False),
     "wallet": Kind("Wallet", "asset", "cash", True, False),
     "cash": Kind("Cash", "asset", "cash", True, True),
-    # A card's outstanding is short-term debt against the same cash, so it counts in liquid.
-    "card": Kind("Credit card", "liability", "credit", True, False),
+    # Not liquid: liquid is what you could spend today, and a card's outstanding moves with every swipe. Net worth
+    # still subtracts it, and `live` reports it on its own (cards_owed) and as its own column month by month.
+    "card": Kind("Credit card", "liability", "credit", False, False),
     "deposit": Kind("Deposit", "asset", "deposits", True, False, ("fd", "rd")),
     "holding": Kind("Investments", "asset", "equity", False, False, ("stocks", "mf")),
     "retirement": Kind("Retirement", "asset", "retirement", False, False, ("epf", "ppf", "nps")),

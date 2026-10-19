@@ -77,10 +77,12 @@ Google sign-in needs a real OAuth client with the redirect URI `http://localhost
 ## CLI
 
 ```sh
+uv run python -m tijori.cli backtest --member you@example.com [--train-until 2026-07] [--show-misses 20]
 uv run python -m tijori.cli lock-to-owner
 TIJORI_MASTER_KEY=<new> TIJORI_MASTER_KEY_OLD=<current> uv run python -m tijori.cli rotate-master-key
 ```
 
+- **backtest** replays the transactions a member filed themselves through today's rules, brand dictionary and payee memory, month by month, with memory learned only from earlier months. It prints how much was filed automatically, how much of that matched the member's own filing, and what landed in the Inbox. Use it to measure a classifier change on your own data before shipping it; commit the conclusion, not the numbers. Read-only, as the app role under RLS.
 - **lock-to-owner** ends every session, pasted token, connected app and invite held by anyone but `TIJORI_OWNER_EMAIL`. Other members' data is kept. Runs on the owner connection.
 - **rotate-master-key** re-wraps every data key under the new master key; the secrets themselves aren't re-encrypted. It runs on the owner (superuser) connection. Afterwards, drop `TIJORI_MASTER_KEY_OLD`.
 - **Real data** (statements, exports, profiles) never enters git. Keep those files outside the repo.
@@ -90,7 +92,7 @@ TIJORI_MASTER_KEY=<new> TIJORI_MASTER_KEY_OLD=<current> uv run python -m tijori.
 | Path | What it holds |
 |---|---|
 | `tijori/parsers/` | Parser registry, SBI and HDFC statement parsers, reconciliation |
-| `tijori/classify/` | Taxonomy, narration parsing, brand dictionary, kind rules, payee memory, engine |
+| `tijori/classify/` | Taxonomy, narration parsing, brand dictionary, kind rules, payee memory, engine, backtest |
 | `tijori/services/` | SQLAlchemy service layer: ingest, txns, reports and trends, net worth, members, onboarding, mail, secrets |
 | `tijori/app/` | FastAPI app: auth (dev header, session cookie), Google sign-in, routes, uploads, onboarding, SPA and security headers |
 | `tijori/secretbox.py`, `tijori/imap_check.py`, `tijori/pdf.py`, `tijori/blobs.py` | AES-GCM envelope, read-only IMAP test, PDF → text, raw blob store |

@@ -528,6 +528,12 @@ export async function deleteValuation(accountId: number, asOf: ISODate): Promise
   invalidate(["/api/networth", `/api/accounts/${accountId}/history`]);
 }
 
+/** Your note on a month of net worth (YYYY-MM); an empty note removes it. */
+export async function setNetWorthNote(month: string, note: string): Promise<void> {
+  await request<unknown>(`/api/networth/notes/${month}`, "PUT", { note });
+  invalidate(["/api/networth"]);
+}
+
 const AFTER_EDIT = ["/api/transactions", "/api/summary", "/api/trends", "/api/recurring", "/api/cards", "/api/inbox"];
 
 /** Splits a txn into parts that add up to it; the original stays, out of every total. */

@@ -10,13 +10,13 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from tijori.account_kinds import COMPONENT_ACCOUNTS, KINDS, SUBTYPE_LABELS, asset_class, liquid
 from tijori.db import MemberContext
-from tijori.models import Account, AccountValuation, Holding, Observation, Price, Statement, Txn
+from tijori.models import Account, AccountValuation, Holding, NetWorthNote, Observation, Price, Statement, Txn
 from tijori.money import ZERO, fmt
 from tijori.services import loans
 from tijori.services.common import account_label, audit
@@ -24,6 +24,8 @@ from tijori.services.errors import Invalid, NotFound
 from tijori.services.recurring import alerts_from, balances
 
 STALE_DAYS = 30
+CONSOLIDATED = frozenset({"cdsl_cas"})  # holding sources that list everything held, not one fund house's share
+CAS_CYCLE = timedelta(days=40)  # a CAS is monthly; a fund-house statement this much newer means it stopped coming
 PROJECTION_MONTHS = 12
 ETF = re.compile(r"\bETF\b|BEES", re.I)
 # Same day, the more direct evidence wins: a price over a statement's total, a statement over a value set by hand.
@@ -61,21 +63,30 @@ def _equity(isin: str | None, name: str | None) -> bool:
     return (isin or "").startswith("INE") or bool(ETF.search(name or ""))
 
 
+def _claim(source: str, as_of: date, account_id: int) -> tuple[date, int]:
+    """Which account a security held in two counts in: the one read most recently, where a consolidated statement
+    (the depository's CAS, which lists every folio and demat holding under the PAN) reads as CAS_CYCLE newer than its
+    date. A fund house's statement, which covers only its own funds and lands mid-month, doesn't take a fund off the
+    CAS that lists it, so the member's funds stay one line; it does once the CAS stops coming."""
+    return (as_of + CAS_CYCLE if source in CONSOLIDATED else as_of, -account_id)
+
+
 def _latest_holdings(s: Session, member_id: int, accts: dict[int, Acct], today: date) -> dict[int, tuple[date, list[Any]]]:
     """Each account's holdings at its newest statement date. A security held in two accounts (a fund on a CAMS
-    statement and again in the CAS) counts once, in the account read most recently. One query."""
+    statement and again in the CAS) counts once, in the account `_claim` gives it. One query."""
     newest = (select(Holding.account_id, func.max(Holding.as_of).label("as_of"))
               .where(Holding.member_id == member_id, Holding.as_of <= today).group_by(Holding.account_id).subquery())
-    rows = s.execute(select(Holding.account_id, Holding.as_of, Holding.isin, Holding.name, Holding.units)
+    rows = s.execute(select(Holding.account_id, Holding.as_of, Holding.isin, Holding.name, Holding.units, Holding.source)
                      .join(newest, (newest.c.account_id == Holding.account_id) & (newest.c.as_of == Holding.as_of))
                      .where(Holding.member_id == member_id)).all()
     owner: dict[str, tuple[date, int]] = {}
     for r in rows:
         if r.account_id in accts and r.isin:
-            owner[r.isin] = max(owner.get(r.isin, (r.as_of, -r.account_id)), (r.as_of, -r.account_id))
+            claim = _claim(r.source, r.as_of, r.account_id)
+            owner[r.isin] = max(owner.get(r.isin, claim), claim)
     out: dict[int, tuple[date, list[Any]]] = {}
     for r in rows:
-        if r.account_id in accts and (not r.isin or owner[r.isin] == (r.as_of, -r.account_id)):
+        if r.account_id in accts and (not r.isin or owner[r.isin] == _claim(r.source, r.as_of, r.account_id)):
             out.setdefault(r.account_id, (r.as_of, []))[1].append(r)
     return out
 
@@ -204,7 +215,7 @@ def live(s: Session, member_id: int, today: date) -> dict[str, Any]:
     series = _series(s, member_id, accts, today)
     owed, owe = loans.balances(s, member_id)  # open loans: money owed to you is an asset, money you owe a liability
     if not series:
-        return {"as_of": today, "net_worth": None, "liquid": None, "components": [], "by_asset_class": {},
+        return {"as_of": today, "net_worth": None, "liquid": None, "cards_owed": None, "components": [], "by_asset_class": {},
                 "changes": [], "history": [], "months": [], "projection": None}
     flows = _flows(s, member_id, accts, series, min(v[0][0] for v in series.values()))
     # A feed (statements, prices) is what history waits for. An account with only values set by hand, or a store of
@@ -266,7 +277,9 @@ def live(s: Session, member_id: int, today: date) -> dict[str, Any]:
                           "asset_class": "loans", "liquid": False, "amount": fmt(amount), "share_pct": share(amount),
                           "source": "loans", "as_of": today, "stale": False, "editable": False, "change_since": None})
     liquid_ids = {aid for aid, a in accts.items() if a.liquid}
+    card_ids = {aid for aid, a in accts.items() if a.kind == "card"}
     liquid_now = sum((v for aid, v in now.items() if aid in liquid_ids), ZERO)
+    cards_owed = -sum((v for aid, v in now.items() if aid in card_ids), ZERO) if card_ids & set(now) else None
 
     changes = []
     fy_start = date(today.year if today.month >= 4 else today.year - 1, 4, 1)
@@ -280,21 +293,32 @@ def live(s: Session, member_id: int, today: date) -> dict[str, Any]:
 
     history = [{"date": day, "net_worth": fmt(nw[day]), "kind": "live" if day == today else "snapshot"} for day, _ in points]
 
-    # Month by month: change = liquid change + contributions + market (and anything set by hand).
-    liq = [(day, nw[day], sum((v for aid, v in c.items() if aid in liquid_ids), ZERO)) for day, c in points]
-    intervals = list(zip(liq, liq[1:]))[-6:]
+    # Month by month: change = liquid change + card change + contributions + market (and anything set by hand).
+    # A card not marked liquid has its own column, so a month of spending on it isn't read as a market fall; one the
+    # member marked liquid moves with cash.
+    def part(c: dict[int, Decimal], ids: set[int]) -> Decimal:
+        return sum((v for aid, v in c.items() if aid in ids), ZERO)
+
+    card_only = card_ids - liquid_ids
+    intervals = list(zip(points, points[1:]))
     invest = s.execute(
         select(Txn.occurred_at, Txn.amount)
         .where(Txn.member_id == member_id, Txn.direction == "debit", Txn.bucket == "invest",
                Txn.occurred_at > intervals[0][0][0])
     ).all() if intervals else []
+    notes = dict(s.execute(select(NetWorthNote.month, NetWorthNote.note).where(NetWorthNote.member_id == member_id)).all())
     months = []
-    for (d0, nw0, lq0), (d1, nw1, lq1) in intervals:
+    for (d0, c0), (d1, c1) in intervals:
         contrib = sum((a for day, a in invest if d0 < day <= d1), ZERO)
-        change, cash = nw1 - nw0, lq1 - lq0
-        months.append({"start": d0, "end": d1, "start_value": fmt(nw0), "end_value": fmt(nw1),
-                       "change": fmt(change), "cash_change": fmt(cash), "contributions": fmt(contrib),
-                       "market": fmt(change - cash - contrib), "live": d1 == today})
+        change, cash, card = nw[d1] - nw[d0], part(c1, liquid_ids) - part(c0, liquid_ids), part(c1, card_only) - part(c0, card_only)
+        moves = {aid: c1.get(aid, ZERO) - c0.get(aid, ZERO) for aid in set(c0) | set(c1)}
+        mover = max(sorted(moves), key=lambda aid: abs(moves[aid]), default=None)
+        months.append({"start": d0, "end": d1, "start_value": fmt(nw[d0]), "end_value": fmt(nw[d1]),
+                       "change": fmt(change), "cash_change": fmt(cash), "card_change": fmt(card),
+                       "contributions": fmt(contrib), "market": fmt(change - cash - card - contrib), "live": d1 == today,
+                       "mover": {"account_id": mover, "label": accts[mover].label, "change": fmt(moves[mover])}
+                       if mover is not None and moves[mover] else None,
+                       "note": notes.get(d1.replace(day=1))})
     months.reverse()
 
     projection = None
@@ -306,7 +330,8 @@ def live(s: Session, member_id: int, today: date) -> dict[str, Any]:
             projection = {"monthly_change": fmt(per_month), "basis_months": span,
                           "points": [{"date": _add_months(today, n), "net_worth": fmt(total + per_month * n)}
                                      for n in (3, 6)]}
-    return {"as_of": today, "net_worth": fmt(total), "liquid": fmt(liquid_now), "components": comps,
+    return {"as_of": today, "net_worth": fmt(total), "liquid": fmt(liquid_now),
+            "cards_owed": fmt(cards_owed) if cards_owed is not None else None, "components": comps,
             "by_asset_class": {k: fmt(v) for k, v in by_class.items()}, "changes": changes,
             "history": history, "months": months, "projection": projection}
 
@@ -442,6 +467,24 @@ def delete_valuation(s: Session, ctx: MemberContext, actor: str, account_id: int
         raise Invalid("this value was read from a statement; set your own value on that date instead")
     s.delete(v)
     audit(s, ctx, actor, "account.valuation.delete", f"account:{account_id}", {"as_of": as_of.isoformat()})
+
+
+MAX_NOTE = 2000
+
+
+def set_note(s: Session, ctx: MemberContext, actor: str, month: date, note: str | None) -> dict[str, Any]:
+    """The member's note on a month (`month` is its 1st), shown on that month's row; empty or null removes it."""
+    text_ = (note or "").strip()
+    if len(text_) > MAX_NOTE:
+        raise Invalid(f"a note is at most {MAX_NOTE} characters")
+    if text_:
+        stmt = insert(NetWorthNote).values(member_id=ctx.member_id, month=month, note=text_)
+        s.execute(stmt.on_conflict_do_update(constraint="uq_networth_note_member_id_month",
+                                             set_={"note": stmt.excluded.note, "updated_at": func.now()}))
+    else:
+        s.execute(delete(NetWorthNote).where(NetWorthNote.member_id == ctx.member_id, NetWorthNote.month == month))
+    audit(s, ctx, actor, "networth.note", f"month:{month.isoformat()[:7]}", {"length": len(text_)})
+    return {"month": month.isoformat()[:7], "note": text_ or None}
 
 
 def _component_account(s: Session, member_id: int, institution: str, key: str) -> int:

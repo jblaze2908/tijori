@@ -1,10 +1,12 @@
 import { G } from "../components/Glyphs";
 import { useToast } from "../components/Toast";
+import { kindLine } from "../lib/accounts";
 import { api, dataOf, dismissAliasSuggestion, read, renamePayees, resetPayees, setRuleEnabled } from "../lib/api";
 import { monogramColor } from "../lib/colors";
 import { dayShort, inr, plural, timeIST, toPaise } from "../lib/format";
 import { Link } from "../lib/router";
 import { setup } from "../lib/setup";
+import type { AccountKind } from "../lib/types";
 import { AccountsSettings } from "./setup/profile";
 import { FirstUpload } from "./setup/secrets";
 
@@ -15,6 +17,10 @@ const ago = (ts: string | null) => {
   if (m < 1440) return `${Math.round(m / 60)} h ago`;
   return `${dayShort(ts.slice(0, 10))} ${timeIST(ts)}`;
 };
+
+const HOLDINGS_SOURCE: Record<string, string> = { cdsl_cas: "CAS", cams: "CAMS" };
+/** Kinds a statement or alert feeds; the rest have values only you set. */
+const FED = new Set<AccountKind>(["bank", "card", "holding", "deposit"]);
 
 /** Settings → Accounts & sources: can the numbers be trusted? */
 export function Sources() {
@@ -98,7 +104,7 @@ export function Sources() {
                     <span>
                       {a.label}
                       <br />
-                      <small>{a.kind[0]!.toUpperCase() + a.kind.slice(1)} · {plural(a.txn_count, "transaction")}</small>
+                      <small>{[kindLine(a.kind, a.subtype, a.label), a.txn_count ? plural(a.txn_count, "transaction") : ""].filter(Boolean).join(" · ")}</small>
                     </span>
                   </span>
                 </td>
@@ -112,8 +118,14 @@ export function Sources() {
                         {a.last_statement.reconciled ? "✓ ₹0 diff" : `⚠ ${a.last_statement.diff ? inr(toPaise(a.last_statement.diff)) : "?"} diff`}
                       </small>
                     </>
+                  ) : a.holdings ? (
+                    <>
+                      {HOLDINGS_SOURCE[a.holdings.source] ?? a.holdings.source.toUpperCase()} {dayShort(a.holdings.as_of)}
+                      <br />
+                      <small>{plural(a.holdings.count, "holding")}</small>
+                    </>
                   ) : (
-                    <span className="faint">{a.kind === "wallet" ? "No statements" : "None yet"}</span>
+                    <span className="faint">{a.kind === "wallet" ? "No statements" : FED.has(a.kind) ? "None yet" : "Set by you"}</span>
                   )}
                 </td>
                 <td className="r">{a.balance ? <>{inr(toPaise(a.balance.amount))}<br /><small>{dayShort(a.balance.as_of)}</small></> : "—"}</td>

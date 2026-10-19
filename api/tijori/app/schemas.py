@@ -486,6 +486,12 @@ class Me(BaseModel):
     settings: SettingsOut
 
 
+class HoldingsRef(BaseModel):
+    as_of: date
+    source: str  # cdsl_cas, cams
+    count: int
+
+
 class StatementRef(BaseModel):
     period_start: date
     period_end: date
@@ -513,6 +519,7 @@ class AccountOut(BaseModel):
     first_txn_at: date | None
     last_txn_at: date | None
     last_statement: StatementRef | None
+    holdings: HoldingsRef | None = None  # investment accounts: what the newest CAS or fund-house statement listed
     statement_passwords: list["StatementPasswordOut"] = []
     has_statement_password: bool  # the "main" slot; kept for older clients
     has_extra_statement_password: bool
@@ -1086,16 +1093,35 @@ class AccountHistory(BaseModel):
     valuations: list[ValuationOut]  # newest first
 
 
+class MonthMover(BaseModel):
+    account_id: int
+    label: str
+    change: Money  # signed: a liability owed more is negative
+
+
 class MonthChange(BaseModel):
     start: date
     end: date
     start_value: Money
     end_value: Money
     change: Money
-    cash_change: Money | None  # null on the live interval until every cash balance is newer than its start
+    cash_change: Money | None  # the liquid accounts
+    card_change: Money  # cards not marked liquid: negative when more is owed at the end
     contributions: Money
     market: Money | None
     live: bool
+    mover: MonthMover | None  # the account that moved most
+    note: str | None  # the member's own note on the month
+
+
+class NetWorthNoteIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class NetWorthNoteOut(BaseModel):
+    month: str  # YYYY-MM
+    note: str | None
 
 
 class ProjectionPoint(BaseModel):
@@ -1113,6 +1139,7 @@ class LiveNetWorth(BaseModel):
     as_of: date
     net_worth: Money | None
     liquid: Money | None
+    cards_owed: Money | None  # what is owed on cards now, ≥ 0 unless overpaid; null with no card counted
     components: list[LiveComponent]
     by_asset_class: dict[str, Money]
     changes: list[NetWorthChange]

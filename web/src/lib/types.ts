@@ -263,6 +263,8 @@ export interface Account {
   first_txn_at: ISODate | null;
   last_txn_at: ISODate | null;
   last_statement: { period_start: ISODate; period_end: ISODate; reconciled: boolean; diff: Decimal } | null;
+  /** Investment accounts: what the newest CAS or fund-house statement listed (they carry holdings, not lines). */
+  holdings?: { as_of: ISODate; source: string; count: number } | null;
   /** Saved PDF passwords, oldest first: which ones, never their values. */
   statement_passwords: StatementPasswordRef[];
   has_statement_password: boolean;
@@ -508,6 +510,8 @@ export interface LiveNetWorth {
   as_of: ISODate;
   net_worth: Decimal | null;
   liquid: Decimal | null;
+  /** What is owed on cards now; null with no card counted. */
+  cards_owed: Decimal | null;
   components: LiveComponent[];
   by_asset_class: Record<string, Decimal>;
   changes: { period: "month" | "year" | "fy"; since: ISODate; amount: Decimal | null; pct: number | null }[];
@@ -519,9 +523,14 @@ export interface LiveNetWorth {
     end_value: Decimal;
     change: Decimal;
     cash_change: Decimal | null;
+    /** Cards not marked liquid: negative when more is owed at the end. */
+    card_change: Decimal;
     contributions: Decimal;
     market: Decimal | null;
     live: boolean;
+    /** The account that moved most; signed like `amount`. */
+    mover: { account_id: number; label: string; change: Decimal } | null;
+    note: string | null;
   }[];
   projection: { monthly_change: Decimal; basis_months: number; points: { date: ISODate; net_worth: Decimal }[] } | null;
 }

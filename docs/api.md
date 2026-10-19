@@ -149,6 +149,7 @@ Month cycles that contain at least one txn, oldest first. `start` and `end` are 
 
 - **Net worth settings.** `kind` gives the defaults: `side` (asset or liability), `asset_class` and whether it is `liquid`. The member can override `liquid` and `asset_class` (`*_default` is the kind's), leave the account out (`in_net_worth: false`), and set `opened_at` (see [`/api/networth/live`](#get-apinetworthlive), `history`).
 - `balance` is the balance printed after the account's newest statement line, or `null` when no statement had one.
+- `holdings`, on an account holdings sit in: what its newest statement listed, `{"as_of", "source", "count"}` (`source` is `cdsl_cas` or `cams`). Those statements carry holdings, not lines, so `last_statement` stays `null`. Omitted or `null` elsewhere.
 - `last_seen_at`: when the newest alert for the account arrived, or `null` when none has.
 - `coverage_pct`: of the statement lines dated on or after the account's first alert, the share also seen as an alert. `null` without alerts or such lines. Bank charges, interest and some transfer kinds never send an alert, so 100 is not the norm.
 - `covered_through`: end of the newest **reconciled** statement. A statement with no lines counts when its printed totals are zero (see [uploads](#post-apiuploads)).
@@ -167,7 +168,7 @@ Accounts are created automatically from uploaded statements. They can also be de
 |---|---|---|---|---|
 | `bank`, `wallet` | asset | `cash` | yes | |
 | `cash` | asset | `cash` | yes | |
-| `card` | liability | `credit` | yes | |
+| `card` | liability | `credit` | no | |
 | `deposit` | asset | `deposits` | yes | `fd`, `rd` |
 | `holding` | asset | `equity` | no | `stocks`, `mf` |
 | `retirement` | asset | `retirement` | no | `epf`, `ppf`, `nps` |
@@ -177,7 +178,7 @@ Accounts are created automatically from uploaded statements. They can also be de
 | `other_asset` | asset | `other` | no | |
 | `other_liability` | liability | `other` | no | |
 
-`asset_class` takes any of `cash`, `deposits`, `equity`, `retirement`, `gold`, `property`, `credit`, `loans`, `other`. A card counts as liquid because its outstanding is short-term debt against the same cash.
+`asset_class` takes any of `cash`, `deposits`, `equity`, `retirement`, `gold`, `property`, `credit`, `loans`, `other`. A card isn't liquid by default: liquid is what you could spend today, and a card's outstanding moves with every purchase. Net worth still subtracts it, and [`/api/networth/live`](#get-apinetworthlive) reports it on its own (`cards_owed`) and month by month (`card_change`). Mark a card liquid to count it against cash instead.
 
 ---
 
@@ -603,7 +604,7 @@ A payee matches when any of its names (merchant or counterparty), compared on le
 Net worth now: every account with `in_net_worth`, each at its **newest** dated value, assets added and liabilities subtracted. Open loans to and from people add the rows `loans_given` and `loans_taken`.
 
 - **`statement`:** a balance printed after a statement line or in a bank's daily balance mail, moved on by the pending alerts since; a card's statement total due; or a value a statement prints for another account (a PPF balance on a savings statement, a CAS's demat and fund totals). That value lands on the member's account of that kind and subtype at that institution, else their only one of that kind and subtype, else a new one named after the institution.
-- **`prices`:** a `holding` account's securities at the newest daily price, on the account's newest statement holdings. That's NSE's closing price for shares and ETFs, and AMFI's NAV for funds. A security held in two accounts counts once, in the one read most recently.
+- **`prices`:** a `holding` account's securities at the newest daily price, on the account's newest statement holdings. That's NSE's closing price for shares and ETFs, and AMFI's NAV for funds. A security held in two accounts counts once. The depository's CAS lists every fund and share held under the PAN, so a security it lists stays in the CAS's account, unless a fund house's statement for it is more than 40 days newer (the CAS stopped coming). Otherwise it counts in the account read most recently.
 - **`manual`** and **`imported`:** a value the member set ([below](#put-apiaccountsidvaluations)), or one moved over from the old monthly snapshots.
 - **`estimate`:** an `epf` account after its newest value. The usual monthly credit (the commonest month-on-month rise over the last 6 months) is added on each 1st, for up to 6 months.
 - **Since its newest value**, an account moves by what it can see. A card adds its purchases and subtracts payments and refunds, so net worth drops when you spend, not when the bill is paid. An investment debit adds at cost to the account it went into, until the next statement shows it: SIP/NACH/MF → the `mf` account, stocks → `stocks`, PPF → `ppf`, FD → `fd` (with several of a subtype, the most recently valued).
@@ -611,12 +612,12 @@ Net worth now: every account with `in_net_worth`, each at its **newest** dated v
 - On the same day, the more direct value wins: prices, then a statement, then a value set by hand, then an imported one, then an estimate.
 
 ```json
-{"as_of": "2026-09-27", "net_worth": "4875000.00", "liquid": "752300.00",
+{"as_of": "2026-09-27", "net_worth": "4875000.00", "liquid": "792358.00", "cards_owed": "40058.00",
  "components": [{"key": "12", "account_id": 12, "label": "Gold", "kind": "gold", "subtype": null, "side": "asset",
                  "asset_class": "gold", "liquid": false, "amount": "235000.00", "share_pct": 4.8, "source": "manual",
                  "as_of": "2026-09-27", "stale": false, "editable": true, "change_since": "15000.00"},
                 {"key": "3", "account_id": 3, "label": "HDFC Platinum ••0003", "kind": "card", "subtype": null,
-                 "side": "liability", "asset_class": "credit", "liquid": true, "amount": "-40058.00", "share_pct": 100.0,
+                 "side": "liability", "asset_class": "credit", "liquid": false, "amount": "-40058.00", "share_pct": 100.0,
                  "source": "statement", "as_of": "2026-09-14", "stale": false, "editable": true, "change_since": "-5200.00"}],
  "by_asset_class": {"cash": "542300.00", "credit": "-40058.00", "...": "..."},
  "changes": [{"period": "month", "since": "2026-09-01", "amount": "15000.00", "pct": 0.3},
@@ -625,7 +626,9 @@ Net worth now: every account with `in_net_worth`, each at its **newest** dated v
  "history": [{"date": "2026-09-01", "net_worth": "4860000.00", "kind": "snapshot"},
              {"date": "2026-09-27", "net_worth": "4875000.00", "kind": "live"}],
  "months": [{"start": "2026-09-01", "end": "2026-09-27", "start_value": "4860000.00", "end_value": "4875000.00",
-             "change": "15000.00", "cash_change": null, "contributions": "25000.00", "market": null, "live": true}],
+             "change": "15000.00", "cash_change": "-12000.00", "card_change": "-5200.00", "contributions": "25000.00",
+             "market": "7200.00", "live": true, "mover": {"account_id": 7, "label": "CDSL Mutual funds", "change": "31000.00"},
+             "note": "Moved the bonus into the index fund."}],
  "projection": {"monthly_change": "79090.91", "basis_months": 11,
                 "points": [{"date": "2026-12-27", "net_worth": "5097272.73"}, {"date": "2027-03-27", "net_worth": "5334545.45"}]}}
 ```
@@ -634,14 +637,19 @@ Net worth now: every account with `in_net_worth`, each at its **newest** dated v
 |---|---|
 | `components` | One per counted account with a value, largest first, then the loan rows. `amount` is signed: a liability is negative. `share_pct` is of what you own, or for a liability of what you owe, never of the net total. `key` is the account id as a string, or `loans_given`/`loans_taken` (`account_id: null`) |
 | `liquid` | The sum of accounts that are `liquid` (the account's setting) |
+| `cards_owed` | What is owed on counted cards now: each one's statement total due, plus purchases and minus payments and refunds since. `null` when no card is counted |
 | `stale` | The value is more than 30 days old and nothing has moved it since |
 | `change_since` | Against the month-end before the 1st of this month |
 | `changes` | Against the month-end before the 1st of the month, 1 Jan, and 1 Apr (FY). `null` before history starts |
 | `history` | Month-end points, oldest first, then today as `live`. It starts at the first month-end on which every asset account with a feed (statements, prices) has a value, so a sum isn't missing an account. An account with `opened_at` isn't waited for (before it, it held nothing), one with only values set by hand never holds history back, and liabilities count from their first value |
-| `months` | The last 6 intervals between points, newest first: `change = cash_change + contributions + market`. Cash is the liquid accounts. Contributions are `invest`-bucket debits in the interval. Market is the rest, including anything set by hand. |
+| `months` | Every interval between points, newest first: `change = cash_change + card_change + contributions + market`. Cash is the liquid accounts. `card_change` is the cards not marked liquid, negative when more is owed at the end, so spending on a card isn't read as a market fall. Contributions are `invest`-bucket debits in the interval. Market is the rest, including anything set by hand. `mover` is the account whose value moved most (signed like `amount`), or `null`. `note` is the member's note on the interval's month ([below](#put-apinetworthnotesmonth)) |
 | `projection` | The average monthly change over up to the last 12 intervals, continued 3 and 6 months. `null` with fewer than 3 points |
 
 No data at all gives `net_worth: null` and empty lists.
+
+## `PUT /api/networth/notes/{month}`
+
+`month` is `YYYY-MM`. Body: `{"note": "…"}`, at most 2000 characters: the member's own note on that month of net worth, shown on its `months` row. An empty or `null` note removes it. Returns `{"month", "note"}`. Audit-logged with the length, not the text.
 
 ## `GET /api/accounts/{id}/history`
 
@@ -1095,7 +1103,7 @@ A Model Context Protocol server, so any MCP client (Claude, ChatGPT, Cursor and 
 | `edit_transactions` | write | `notes`, `split`, `unsplit`, `link`, `unlink` |
 | `plan_spending` | write | `set_budget`, `set_recurring` |
 | `edit_loans` | write | `create`, `edit`, `attach_txns`, `detach_txns`, `settle`, `reopen`, `write_off` |
-| `edit_net_worth` | write | `set_value`, `delete_value` |
+| `edit_net_worth` | write | `set_value`, `delete_value`, `set_note` |
 | `edit_setup` | destructive | `add_account`, `edit_account`, `delete_account`, `upload_statement`, `remove_statement_password`, `edit_mail_source`, `delete_mail_source`, `test_mail_source`, `update_settings`, `rename_me`, `set_onboarding`, `set_classify_profile`, `test_notification`, `revoke_invite` |
 
 Read tools carry `readOnlyHint`, so a client can allow them and still ask before a write. The grouped `edit_setup` keeps `destructiveHint`, since it can delete. Per action, `describe_action` (and any typed write tool) marks as destructive only what deletes, overwrites or can't be undone: `delete_account`, `delete_mail_source`, `remove_statement_password`, `revoke_invite`, `set_classify_profile` (replaces the profile), `delete_value` (a value set by hand) and `update_settings` (a retention window purges raw files). `add_account`, `upload_statement` and the rest are not. A read-only connection lists only the read tools (18: 10 typed, `get_freshness`, `search_order_items`, `describe_action` and the 5 grouped reads); calling a write tool gets 403 with `error="insufficient_scope"`.

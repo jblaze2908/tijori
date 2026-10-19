@@ -1,6 +1,8 @@
 """Net worth by account, against a migrated Postgres. The requirements: any bank's account counts, a card's
 outstanding is a liability, what the member sets (which accounts count, liquid, asset class, values by hand) is what
-net worth uses, a value a statement prints lands on one account of its own, and another member sees none of it.
+net worth uses, a value a statement prints lands on one account of its own, a fund on both the CAS and a fund house's
+statement counts once, spending on a card isn't read as a market fall, the member's notes on months come back on
+those months, and another member sees none of it.
 Skipped unless TIJORI_TEST_DATABASE_URL (the tijori_app role) and TIJORI_TEST_ADMIN_DATABASE_URL (owner) are set."""
 
 import hashlib
@@ -18,7 +20,7 @@ from test_freshness_db import post_mcp, tool_call
 from tijori.app import create_app
 from tijori.bootstrap import seed_categories
 from tijori.db import MemberContext, member_session
-from tijori.models import Account, AccountValuation, Household, McpToken, Member, Txn
+from tijori.models import Account, AccountValuation, Holding, Household, McpToken, Member, NetWorthNote, Price, Txn
 from tijori.parsers.base import Observation, Statement, StatementSummary
 from tijori.services import members, networth
 from tijori.services.common import today_ist
@@ -44,10 +46,12 @@ class NetWorthDB(unittest.IsolatedAsyncioTestCase):
             seed_categories(s, h.id)
             owner = Member(household_id=h.id, name="Owner", email=f"owner-{tag}@example.com")
             other = Member(household_id=h.id, name="Other", email=f"other-{tag}@example.com")
-            s.add_all([owner, other])
+            fresh = Member(household_id=h.id, name="Fresh", email=f"fresh-{tag}@example.com")
+            s.add_all([owner, other, fresh])
             s.flush()
             s.add(McpToken(member_id=owner.id, name="owner", token_hash=hashlib.sha256(cls.token.encode()).hexdigest()))
             cls.household, cls.owner, cls.other = h.id, MemberContext(owner.id, h.id), MemberContext(other.id, h.id)
+            cls.fresh = MemberContext(fresh.id, h.id)  # alone, for history that no other test's account cuts short
             cls.owner_email, cls.tag = owner.email, tag
         cls.app = create_app(Settings(env="test", database_url=APP_URL, owner_email=cls.owner_email))
         cls.today = today_ist()
@@ -57,6 +61,7 @@ class NetWorthDB(unittest.IsolatedAsyncioTestCase):
     def tearDownClass(cls) -> None:
         with Session(cls.admin) as s, s.begin():
             s.execute(delete(Household).where(Household.id == cls.household))
+            s.execute(delete(Price).where(Price.isin_or_symbol.like(f"%{cls.tag}")))
         cls.app.state.engine.dispose()
         cls.admin.dispose()
 
@@ -64,7 +69,7 @@ class NetWorthDB(unittest.IsolatedAsyncioTestCase):
         return member_session(self.app.state.engine, ctx or self.owner)
 
     def statement(self, institution: str, mask: str, closing: str, *, kind: str = "bank", days_ago: int = 20,
-                  components: tuple[tuple[str, Decimal], ...] = ()) -> int:
+                  components: tuple[tuple[str, Decimal], ...] = (), ctx: MemberContext | None = None) -> int:
         """A one-line statement ending `days_ago` days back, closing at `closing` (a card: what is due)."""
         type(self).n += 1
         end = self.today - timedelta(days=days_ago)
@@ -80,21 +85,21 @@ class NetWorthDB(unittest.IsolatedAsyncioTestCase):
         st = Statement(institution=institution, account_mask=mask, period_start=end - timedelta(days=29), period_end=end,
                        summary=summary, lines=(line,), parser="test", parser_version="1", account_kind=kind,  # type: ignore[arg-type]
                        components=components)
-        with self.session() as s:
-            out = ingest_statement(s, self.owner, "test", st, filename=None,
+        with self.session(ctx) as s:
+            out = ingest_statement(s, ctx or self.owner, "test", st, filename=None,
                                    sha256=hashlib.sha256(f"{self.tag}{self.n}".encode()).hexdigest(), blob_ref="test")
         return out["account"]["id"]
 
-    def txn(self, account_id: int, amount: str, direction: str, days_ago: int) -> None:
+    def txn(self, account_id: int, amount: str, direction: str, days_ago: int, ctx: MemberContext | None = None) -> None:
         type(self).n += 1
-        with self.session() as s:
-            s.add(Txn(member_id=self.owner.member_id, account_id=account_id, occurred_at=self.today - timedelta(days=days_ago),
+        with self.session(ctx) as s:
+            s.add(Txn(member_id=(ctx or self.owner).member_id, account_id=account_id, occurred_at=self.today - timedelta(days=days_ago),
                       amount=D(amount), direction=direction, kind="spend", status="pending", sources=["alert"],
                       dedupe_key=f"{self.tag}-{self.n}"))
 
-    def live(self) -> dict[str, Any]:
-        with self.session() as s:
-            return networth.live(s, self.owner.member_id, self.today)
+    def live(self, ctx: MemberContext | None = None) -> dict[str, Any]:
+        with self.session(ctx) as s:
+            return networth.live(s, (ctx or self.owner).member_id, self.today)
 
     def amount(self, live: dict[str, Any], account_id: int) -> Decimal | None:
         return next((D(c["amount"]) for c in live["components"] if c["account_id"] == account_id), None)
@@ -175,6 +180,53 @@ class NetWorthDB(unittest.IsolatedAsyncioTestCase):
             n = s.scalar(select(func.count()).select_from(AccountValuation).where(AccountValuation.account_id == ids[0]))
         self.assertEqual(n, 2)  # one value per statement date
         self.assertEqual(self.amount(self.live(), ids[0]), D("150000.00"))
+
+    def test_a_fund_on_the_cas_and_a_fund_house_statement_counts_once(self) -> None:
+        """The CAS lists every folio, so a fund house's mid-month statement for the same fund doesn't split it into
+        a second line or count it twice: it stays on the CAS's account."""
+        isin = f"INFT{self.tag}"
+        with Session(self.admin) as s, s.begin():
+            s.add(Price(isin_or_symbol=isin, date=self.today - timedelta(days=1), close=D("50.0000"), source="test"))
+        with self.session() as s:
+            for source, days_ago in (("cdsl_cas", 20), ("cams", 5)):
+                s.add(Holding(member_id=self.owner.member_id, isin=isin, name="Example Index Fund", units=D("100"),
+                              as_of=self.today - timedelta(days=days_ago), source=source,
+                              account_id=networth.holding_account(s, self.owner.member_id, source, isin, "Example Index Fund")))
+            cas, cams = (networth.holding_account(s, self.owner.member_id, src, isin, "Example Index Fund")
+                         for src in ("cdsl_cas", "cams"))
+        live = self.live()
+        self.assertEqual((self.amount(live, cas), self.amount(live, cams)), (D("5000.00"), None))
+
+    def test_spending_on_a_card_is_its_own_column_not_market(self) -> None:
+        bank = self.statement("AXIS", "0011", "40000.00", days_ago=45, ctx=self.fresh)
+        card = self.statement("AXIS", "0012", "12000.00", kind="card", days_ago=40, ctx=self.fresh)
+        before = self.live(self.fresh)
+        self.assertEqual(D(before["cards_owed"]), D("12000.00"))
+        self.txn(card, "3000.00", "debit", 0, ctx=self.fresh)
+        live = self.live(self.fresh)
+        self.assertEqual(D(live["cards_owed"]), D("15000.00"))
+        self.assertEqual(live["liquid"], before["liquid"])  # a card isn't liquid unless the member says so
+        month, was = live["months"][0], before["months"][0]
+        self.assertEqual(D(month["card_change"]) - D(was["card_change"]), D("-3000.00"))
+        self.assertEqual(D(month["market"]), D(was["market"]))
+        self.assertEqual(month["mover"]["account_id"], card)
+        self.assertIsNotNone(self.amount(live, bank))
+
+    async def test_a_note_on_a_month_comes_back_on_that_month_and_only_to_its_member(self) -> None:
+        self.statement("AXIS", "0013", "1000.00", days_ago=45, ctx=self.fresh)
+        month = self.today.strftime("%Y-%m")
+        with self.session(self.fresh) as s:
+            networth.set_note(s, self.fresh, "test", self.today.replace(day=1), "Moved the bonus into the index fund.")
+        self.assertEqual(self.live(self.fresh)["months"][0]["note"], "Moved the bonus into the index fund.")
+        status, body = await post_mcp(self.app, self.token, tool_call("edit_net_worth", {
+            "action": "set_note", "args": {"month": month, "note": "Owner's own note"}}))
+        self.assertEqual(status, 200)
+        self.assertFalse(body["result"].get("isError"), body["result"]["content"][0]["text"])
+        with self.session(self.other) as s:
+            self.assertEqual(s.scalar(select(func.count()).select_from(NetWorthNote)), 0)
+        with self.session(self.fresh) as s:
+            networth.set_note(s, self.fresh, "test", self.today.replace(day=1), "  ")
+        self.assertIsNone(self.live(self.fresh)["months"][0]["note"])
 
     def test_another_member_sees_and_sets_nothing(self) -> None:
         aid = self.statement("YES", "0009", "5000.00")

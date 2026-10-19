@@ -3,14 +3,15 @@ import { NetWorthChart } from "../components/charts";
 import { LoansPanel } from "../components/Loans";
 import { useToast } from "../components/Toast";
 import { ErrorState, Loading } from "../components/ui";
-import { CLASS_LABEL, kindLine } from "../lib/accounts";
-import { api, dataOf, deleteValuation, invalidate, read, setValuation } from "../lib/api";
-import { ASSET_CLASS_COLOR, OTHER } from "../lib/colors";
+import { CLASS_LABEL, CLASSES, kindLine } from "../lib/accounts";
+import { api, dataOf, deleteValuation, invalidate, read, setNetWorthNote, setValuation } from "../lib/api";
+import { accountColors, ASSET_CLASS_COLOR, OTHER } from "../lib/colors";
 import { dayNum, dayShort, daysBetween, fromDayNum, inr, monthApos, toPaise } from "../lib/format";
 import { Link } from "../lib/router";
-import type { Account, AssetClass, LiveComponent, LiveNetWorth } from "../lib/types";
+import type { Account, ApiCards, AssetClass, LiveComponent, LiveNetWorth } from "../lib/types";
 
-const colorOf = (c: { asset_class: string }) => ASSET_CLASS_COLOR[c.asset_class] ?? OTHER;
+const classColor = (k: string) => ASSET_CLASS_COLOR[k] ?? OTHER;
+type ColorOf = (c: LiveComponent) => string;
 const classLabel = (k: string) => CLASS_LABEL[k as AssetClass] ?? k;
 const SOURCE: Record<LiveComponent["source"] | "imported", string> = { statement: "Statement", manual: "Set by you", imported: "Imported", loans: "Loans", prices: "Daily prices", estimate: "Estimated" };
 const RANGES = [
@@ -62,6 +63,8 @@ function Body({ nw }: { nw: LiveNetWorth }) {
   const shown = n ? hist.slice(-(n + 1)) : hist;
   const proj = (nw.projection?.points ?? []).map((p) => ({ date: p.date, value: toPaise(p.net_worth) }));
   const label = { month: "Since 1st", year: "Since 1 Jan", fy: "Since 1 Apr (FY)" } as const;
+  const colors = accountColors(nw.components);
+  const colorOf: ColorOf = (c) => colors.get(c.key) ?? classColor(c.asset_class);
   return (
     <>
       <section className="panel nwhero" style={{ flexDirection: "row", gap: 0, padding: 0 }}>
@@ -87,13 +90,23 @@ function Body({ nw }: { nw: LiveNetWorth }) {
           </div>
         ))}
         <div style={{ flex: 1, padding: "24px 20px", borderLeft: "1px solid var(--line)", display: "flex", flexDirection: "column", gap: 4 }}>
-          <span className="muted" style={{ fontSize: 13 }} title="Accounts marked liquid in Settings → Accounts & sources: by default banks, wallets, cash, deposits and what you owe on cards">
+          <span className="muted" style={{ fontSize: 13 }} title="Accounts marked liquid in Settings → Accounts & sources: by default banks, wallets, cash and deposits">
             Liquid
           </span>
           <span className="mono-n" style={{ fontSize: 16, fontWeight: 500 }}>
             {nw.liquid ? inr(toPaise(nw.liquid)) : "—"}
           </span>
         </div>
+        {nw.cards_owed != null && (
+          <div style={{ flex: 1, padding: "24px 20px", borderLeft: "1px solid var(--line)", display: "flex", flexDirection: "column", gap: 4 }}>
+            <span className="muted" style={{ fontSize: 13 }} title="Each card's statement total due, plus purchases and minus payments and refunds since. Net worth subtracts it.">
+              Owed on cards
+            </span>
+            <span className="mono-n" style={{ fontSize: 16, fontWeight: 500 }}>
+              {inr(toPaise(nw.cards_owed))}
+            </span>
+          </div>
+        )}
       </section>
 
       <section className="panel" aria-label="History" ref={historyRef}>
@@ -120,7 +133,7 @@ function Body({ nw }: { nw: LiveNetWorth }) {
           </div>
         </div>
         {picked ? (
-          <AccountChart c={picked} months={n} asOf={nw.as_of} />
+          <AccountChart c={picked} months={n} asOf={nw.as_of} color={colorOf(picked)} />
         ) : (
           <div className="chart2">
             <NetWorthChart history={shown} projection={proj} label={(d) => monthApos(d)} />
@@ -133,7 +146,7 @@ function Body({ nw }: { nw: LiveNetWorth }) {
         )}
       </section>
 
-      <Allocation nw={nw} total={total} picked={picked?.key ?? null} onPick={pick} />
+      <Allocation nw={nw} total={total} picked={picked?.key ?? null} onPick={pick} colorOf={colorOf} />
       <LoansPanel />
       <MonthByMonth nw={nw} />
       <Holdings />
@@ -141,7 +154,7 @@ function Body({ nw }: { nw: LiveNetWorth }) {
   );
 }
 
-function AccountChart({ c, months, asOf }: { c: LiveComponent; months: number; asOf: string }) {
+function AccountChart({ c, months, asOf, color }: { c: LiveComponent; months: number; asOf: string; color: string }) {
   const st = read(api.accountHistory(c.account_id!));
   if (st.status === "loading") return <Loading />;
   if (st.status === "error") return <ErrorState error={st.error} title={`Couldn't load ${c.label} history`} onRetry={() => invalidate([`/api/accounts/${c.account_id}/history`])} />;
@@ -152,7 +165,7 @@ function AccountChart({ c, months, asOf }: { c: LiveComponent; months: number; a
     <>
       {pts.length ? (
         <div className="chart2">
-          <NetWorthChart history={pts} projection={[]} label={dayShort} name={owed ? `${c.label} · owed` : c.label} color={colorOf(c)} dots={pts.length <= 40} />
+          <NetWorthChart history={pts} projection={[]} label={dayShort} name={owed ? `${c.label} · owed` : c.label} color={color} dots={pts.length <= 40} />
         </div>
       ) : (
         <p className="muted" style={{ margin: 0 }}>No values in this range.</p>
@@ -219,13 +232,23 @@ function Valuations({ accountId, items, owed }: { accountId: number; items: { as
   );
 }
 
-function Allocation({ nw, total, picked, onPick }: { nw: LiveNetWorth; total: number; picked: string | null; onPick: (c: LiveComponent) => void }) {
+/** A card's last bill, as its row's second line: "Bill ₹12,000 · due 5 Nov · unpaid". */
+function billLine(b: NonNullable<ApiCards["items"][number]["statement"]>): string {
+  const state = b.state === "paid" ? "paid" : b.state === "part_paid" ? `${inr(toPaise(b.paid))} paid` : "unpaid";
+  return [`Bill ${inr(toPaise(b.total))}`, b.due_date && b.state !== "paid" ? `due ${dayShort(b.due_date)}` : "", state].filter(Boolean).join(" · ");
+}
+
+function Allocation({ nw, total, picked, onPick, colorOf }: { nw: LiveNetWorth; total: number; picked: string | null; onPick: (c: LiveComponent) => void; colorOf: ColorOf }) {
   const [editing, setEditing] = useState<string | null>(null);
+  const bills = new Map((dataOf(read(api.cards()))?.items ?? []).map((b) => [b.account.id, b]));
   const classes = Object.entries(nw.by_asset_class).sort((a, b) => toPaise(b[1]) - toPaise(a[1]));
   const sinceTotal = nw.components.reduce((a, c) => a + (c.change_since ? toPaise(c.change_since) : 0), 0);
   // The bar shows what you own, by asset class; what you owe is listed under it.
-  const owned = nw.components.filter((c) => toPaise(c.amount) > 0).sort((a, b) => a.asset_class.localeCompare(b.asset_class) || toPaise(b.amount) - toPaise(a.amount));
-  const assets = owned.reduce((a, c) => a + toPaise(c.amount), 0);
+  const rank = (c: LiveComponent) => CLASSES.indexOf(c.asset_class as AssetClass) >>> 0;
+  const owned = nw.components.filter((c) => c.side === "asset").sort((a, b) => rank(a) - rank(b) || toPaise(b.amount) - toPaise(a.amount));
+  const owes = nw.components.filter((c) => c.side === "liability").sort((a, b) => rank(a) - rank(b) || toPaise(a.amount) - toPaise(b.amount));
+  const assets = owned.reduce((a, c) => a + Math.max(toPaise(c.amount), 0), 0);
+  const groups = [["What you own", owned], ["What you owe", owes]] as const;
   return (
     <section className="panel" aria-label="Allocation">
       <div className="panel-h">
@@ -236,14 +259,14 @@ function Allocation({ nw, total, picked, onPick }: { nw: LiveNetWorth; total: nu
         </Link>
       </div>
       <div className="split" style={{ height: 10 }}>
-        {owned.map((c) => (
+        {owned.filter((c) => toPaise(c.amount) > 0).map((c) => (
           <div key={c.key} style={{ width: `${assets ? (toPaise(c.amount) / assets) * 100 : 0}%`, background: colorOf(c), height: 10 }} title={`${c.label} ${assets ? ((toPaise(c.amount) / assets) * 100).toFixed(1) : 0}% of what you own`} />
         ))}
       </div>
       <div className="legend" style={{ color: "var(--t2)", fontSize: 13 }}>
         {classes.map(([k, v]) => (
           <span key={k}>
-            <i className="sq" style={{ background: colorOf({ asset_class: k }) }} />
+            <i className="sq" style={{ background: classColor(k) }} />
             {classLabel(k)} {toPaise(v) > 0 ? `${assets ? ((toPaise(v) / assets) * 100).toFixed(1) : 0}%` : inr(toPaise(v))}
           </span>
         ))}
@@ -260,8 +283,18 @@ function Allocation({ nw, total, picked, onPick }: { nw: LiveNetWorth; total: nu
           </tr>
         </thead>
         <tbody>
-          {nw.components.map((c) => {
+          {groups.map(([title, rows]) => rows.length > 0 && [
+            owes.length > 0 && (
+              <tr key={title} className="grp">
+                <td colSpan={6} className="faint" style={{ fontSize: 12, paddingTop: 12 }}>
+                  {title}
+                </td>
+              </tr>
+            ),
+            ...rows.map((c) => {
             const charted = c.account_id != null;
+            const bill = c.kind === "card" && c.account_id != null ? bills.get(c.account_id)?.statement : null;
+            const under = bill ? billLine(bill) : c.kind ? kindLine(c.kind, c.subtype, c.label) : null;
             return (
             <tr key={c.key} className={charted ? `click${picked === c.key ? " on" : ""}` : undefined} onClick={charted ? () => onPick(c) : undefined}>
               <td>
@@ -273,10 +306,10 @@ function Allocation({ nw, total, picked, onPick }: { nw: LiveNetWorth; total: nu
                     <i className="sq" style={{ background: colorOf(c) }} />
                     <span style={{ whiteSpace: "nowrap" }}>
                       {c.label}
-                      {c.kind && kindLine(c.kind, c.subtype, c.label) && (
+                      {under && (
                         <>
                           <br />
-                          <small className="faint">{kindLine(c.kind, c.subtype, c.label)}</small>
+                          <small className="faint">{under}</small>
                         </>
                       )}
                     </span>
@@ -312,7 +345,8 @@ function Allocation({ nw, total, picked, onPick }: { nw: LiveNetWorth; total: nu
               </td>
             </tr>
             );
-          })}
+          }),
+          ])}
           <tr className="total">
             <td>Net worth</td>
             <td className="r">{inr(total)}</td>
@@ -362,14 +396,21 @@ function EditValue({ c, done }: { c: LiveComponent; done: () => void }) {
   );
 }
 
+const RECENT_MONTHS = 6;
+
 function MonthByMonth({ nw }: { nw: LiveNetWorth }) {
+  const [all, setAll] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
   if (!nw.months.length) return null;
   const m = (v: string | null) => (v == null ? "—" : signed(toPaise(v)));
+  const cards = nw.months.some((r) => toPaise(r.card_change) !== 0);
+  const rows = all ? nw.months : nw.months.slice(0, RECENT_MONTHS);
+  const cols = cards ? 8 : 7;
   return (
     <section className="panel" aria-label="Month by month">
       <div className="panel-h">
         <h2>Month by month</h2>
-        <span className="x">Change = contributions + market + cash</span>
+        <span className="x">Change = contributions + market + cash{cards ? " + cards" : ""}</span>
       </div>
       <table className="t2">
         <thead>
@@ -379,32 +420,97 @@ function MonthByMonth({ nw }: { nw: LiveNetWorth }) {
             <th className="r">Contributions</th>
             <th className="r">Market & other</th>
             <th className="r">Cash</th>
+            {cards && <th className="r">Cards</th>}
             <th className="r">Change</th>
             <th className="r">End</th>
           </tr>
         </thead>
         <tbody>
-          {nw.months.map((r) => (
-            <tr key={r.start}>
-              <td>
-                {monthApos(r.start)} {r.live && <small>to {dayShort(r.end)}</small>}
-              </td>
-              <td className="r muted">{inr(toPaise(r.start_value))}</td>
-              <td className="r">{m(r.contributions)}</td>
-              <td className="r">{m(r.market)}</td>
-              <td className="r">{m(r.cash_change)}</td>
-              <td className="r" style={{ color: toPaise(r.change) >= 0 ? "var(--in)" : "var(--t2)" }}>
-                {m(r.change)}
-              </td>
-              <td className="r">{inr(toPaise(r.end_value))}</td>
-            </tr>
-          ))}
+          {rows.map((r) => {
+            const month = r.end.slice(0, 7);
+            return [
+              <tr key={r.start}>
+                <td>
+                  {monthApos(r.start)} {r.live && <small>to {dayShort(r.end)}</small>}
+                  {r.mover && (
+                    <>
+                      <br />
+                      <small className="faint" title="The account whose value moved most this month">
+                        {r.mover.label} {signed(toPaise(r.mover.change))}
+                      </small>
+                    </>
+                  )}
+                </td>
+                <td className="r muted">{inr(toPaise(r.start_value))}</td>
+                <td className="r">{m(r.contributions)}</td>
+                <td className="r">{m(r.market)}</td>
+                <td className="r">{m(r.cash_change)}</td>
+                {cards && <td className="r">{m(r.card_change)}</td>}
+                <td className="r" style={{ color: toPaise(r.change) >= 0 ? "var(--in)" : "var(--t2)" }}>
+                  {m(r.change)}
+                </td>
+                <td className="r">{inr(toPaise(r.end_value))}</td>
+              </tr>,
+              <tr key={`${r.start}-note`} className="note">
+                <td colSpan={cols} style={{ paddingTop: 0, borderTop: 0 }}>
+                  {editing === month ? (
+                    <NoteEdit month={month} note={r.note} done={() => setEditing(null)} />
+                  ) : r.note ? (
+                    <span className="muted" style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>
+                      {r.note}{" "}
+                      <button type="button" className="linkish" onClick={() => setEditing(month)}>
+                        Edit
+                      </button>
+                    </span>
+                  ) : (
+                    <button type="button" className="linkish faint" style={{ fontSize: 12 }} onClick={() => setEditing(month)}>
+                      + Note
+                    </button>
+                  )}
+                </td>
+              </tr>,
+            ];
+          })}
         </tbody>
       </table>
+      {nw.months.length > RECENT_MONTHS && (
+        <button type="button" className="linkish" onClick={() => setAll(!all)}>
+          {all ? "Recent months only" : `All ${nw.months.length} months`}
+        </button>
+      )}
       <span className="foot">
-        Contributions = SIP, PPF and other investment debits. Cash = your liquid accounts, cards included. Market & other = change − contributions − cash (includes values set by hand).
+        Contributions = SIP, PPF and other investment debits. Cash = your liquid accounts.{cards ? " Cards = what you owe on cards, falling as you spend and rising as you pay." : ""} Market & other = the rest of the change, including values set by hand. Under each month, the account that moved most.
       </span>
     </section>
+  );
+}
+
+/** Your note on a month: why it moved, what you decided. Saving it empty removes it. */
+function NoteEdit({ month, note, done }: { month: string; note: string | null; done: () => void }) {
+  const [v, setV] = useState(note ?? "");
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
+  const save = async () => {
+    setBusy(true);
+    try {
+      await setNetWorthNote(month, v.trim());
+      done();
+    } catch {
+      toast("Couldn't save that note.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <span style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+      <textarea className="inp2" style={{ flex: 1, minHeight: 56 }} maxLength={2000} autoFocus value={v} onChange={(e) => setV(e.target.value)} onKeyDown={(e) => e.key === "Escape" && done()} aria-label={`Note on ${month}`} />
+      <button type="button" className="btn2 sm primary" disabled={busy} onClick={save}>
+        Save
+      </button>
+      <button type="button" className="btn2 sm" style={{ border: 0 }} onClick={done}>
+        Cancel
+      </button>
+    </span>
   );
 }
 
@@ -484,7 +590,7 @@ function UnvaluedRow({ a }: { a: Account }) {
     <tr>
       <td>
         <span className="nm">
-          <i className="sq" style={{ background: colorOf(a) }} />
+          <i className="sq" style={{ background: classColor(a.asset_class) }} />
           {a.label}
           {kindLine(a.kind, a.subtype, a.label) && <small className="faint"> · {kindLine(a.kind, a.subtype, a.label)}</small>}
         </span>

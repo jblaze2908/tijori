@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from tijori.account_kinds import KINDS, subtype_ok
 from tijori.classify.kinds import DEFAULT_LOCAL_SHOP_CAP
 from tijori.db import MemberContext
-from tijori.models import Account, Household, Member, Statement, Txn
+from tijori.models import Account, Holding, Household, Member, Statement, Txn
 from tijori.money import fmt
 from tijori.parsers.alerts import COVERED
 from tijori.services import coverage
@@ -80,6 +80,7 @@ def accounts(s: Session, member_id: int) -> dict[str, Any]:
         .where(Account.member_id == member_id).order_by(Account.institution, Account.id)
     ).all()
     passwords = account_passwords(s, member_id)
+    held = _holdings(s, member_id)
     bal = balances(s, member_id)
     feed = coverage.feeds(s, member_id)
     boxes = {m["id"]: m for m in coverage.mailboxes(s, member_id)}
@@ -96,8 +97,22 @@ def accounts(s: Session, member_id: int) -> dict[str, Any]:
          "has_statement_password": any(p["slot"] == "main" for p in passwords.get(a.id, [])),
          "has_extra_statement_password": any(p["slot"] == "extra" for p in passwords.get(a.id, [])),
          "balance": {"amount": fmt(bal[a.id][0]), "as_of": bal[a.id][1]} if a.id in bal else None,
+         "holdings": held.get(a.id),
          **_feed(a, feed.get(a.id, none), boxes)}
         for a, n, first, last, ps, pe, rat, diff in rows]}
+
+
+def _holdings(s: Session, member_id: int) -> dict[int, dict[str, Any]]:
+    """What an investment account's newest statement (a CAS, a fund house's) listed: its date, source and count.
+    These statements carry holdings, not lines, so `last_statement` stays null for them. One query."""
+    newest = (select(Holding.account_id, func.max(Holding.as_of).label("as_of"))
+              .where(Holding.member_id == member_id, Holding.account_id.is_not(None))
+              .group_by(Holding.account_id).subquery())
+    rows = s.execute(select(Holding.account_id, Holding.as_of, func.min(Holding.source), func.count())
+                     .join(newest, (newest.c.account_id == Holding.account_id) & (newest.c.as_of == Holding.as_of))
+                     .where(Holding.member_id == member_id)
+                     .group_by(Holding.account_id, Holding.as_of)).all()
+    return {aid: {"as_of": as_of, "source": src, "count": n} for aid, as_of, src, n in rows}
 
 
 def _feed(a: Account, f: coverage.Feed, boxes: dict[int, dict[str, Any]]) -> dict[str, Any]:

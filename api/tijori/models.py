@@ -716,3 +716,15 @@ class OAuthToken(Base):
     created_at: Mapped[datetime] = _created()
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class NetWorthNote(Base):
+    """The member's own note on a month of net worth: why it moved, what they decided. Keyed by the month's 1st."""
+
+    __tablename__ = "networth_note"
+    id: Mapped[int] = _pk()
+    member_id: Mapped[int] = _member_fk()
+    month: Mapped[date] = mapped_column(Date)
+    note: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = _created()
+    __table_args__ = (UniqueConstraint("member_id", "month"),)

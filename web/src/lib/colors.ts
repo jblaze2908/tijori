@@ -75,3 +75,20 @@ export function inkOn(hex: string): string {
   const L = luminance(hex);
   return (1.05 / (L + 0.05)) >= ((L + 0.05) / (luminance("#111111") + 0.05)) ? "#fff" : "#111";
 }
+
+/** One colour per account, so two banks or two fund lines are told apart: its asset class's colour, the next account
+ *  of the same class a step lighter toward the surface (stable by account id, so a line keeps its colour). */
+export function accountColors(items: { account_id: number | null; key: string; asset_class: string }[]): Map<string, string> {
+  const byClass = new Map<string, { key: string; id: number }[]>();
+  for (const c of items) {
+    const list = byClass.get(c.asset_class) ?? [];
+    list.push({ key: c.key, id: c.account_id ?? Number.MAX_SAFE_INTEGER });
+    byClass.set(c.asset_class, list);
+  }
+  const out = new Map<string, string>();
+  for (const [cls, list] of byClass) {
+    const base = ASSET_CLASS_COLOR[cls] ?? OTHER;
+    list.sort((a, b) => a.id - b.id).forEach((c, i) => out.set(c.key, i ? `color-mix(in srgb, ${base} ${Math.max(100 - i * 22, 34)}%, var(--s1))` : base));
+  }
+  return out;
+}

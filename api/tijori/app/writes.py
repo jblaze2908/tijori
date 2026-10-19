@@ -28,6 +28,8 @@ from tijori.app.schemas import (
     LoanWriteOffIn,
     McpTokenIn,
     McpTokenOut,
+    NetWorthNoteIn,
+    NetWorthNoteOut,
     NotifyTestOut,
     OrdersAssignIn,
     OrdersAssignOut,
@@ -100,6 +102,13 @@ def put_valuation(db: MemberDep, account_id: Annotated[int, Path(ge=1)], body: V
     if as_of > today_ist():
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, [{"loc": ["body", "as_of"], "msg": "must not be in the future"}])
     return networth.set_valuation(db.session, db.ctx, db.actor, account_id, Decimal(raw), as_of)
+
+
+@router.put("/networth/notes/{month}", response_model=NetWorthNoteOut)
+def put_networth_note(db: MemberDep, month: Annotated[str, Path(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")],
+                      body: NetWorthNoteIn) -> dict:
+    """The member's note on a month of net worth (YYYY-MM); an empty note removes it."""
+    return networth.set_note(db.session, db.ctx, db.actor, date.fromisoformat(f"{month}-01"), body.note)
 
 
 @router.delete("/accounts/{account_id}/valuations/{as_of}", status_code=204)

@@ -5,6 +5,43 @@ import json
 import sys
 
 
+def cmd_backtest(args: argparse.Namespace) -> int:
+    """Replay the member's own filing (txns whose category they set) through today's classifier, month by month.
+    Runs as the app role under the member's RLS context, and reads only: nothing is written."""
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session
+
+    from tijori.classify.backtest import LabeledTxn, format_report, run_backtest
+    from tijori.classify.engine import TxnInput
+    from tijori.db import bind_member_by_email, make_engine, member_session
+    from tijori.models import Category, Txn
+    from tijori.services.ingest import load_classifier
+    from tijori.settings import get_settings
+
+    engine = make_engine(get_settings().database_url.get_secret_value())
+    with Session(engine) as s, s.begin():
+        ctx = bind_member_by_email(s, args.member)
+    if ctx is None:
+        print(f"no member with email {args.member}", file=sys.stderr)
+        return 2
+    with member_session(engine, ctx) as s:
+        clf = load_classifier(s, ctx)
+        rows = s.execute(select(Txn.occurred_at, Txn.amount, Txn.direction, Txn.narration, Txn.account_id, Txn.ref_no,
+                                Category.name)
+                         .join(Category, Category.id == Txn.category_id)
+                         .where(Txn.classified_by == "user", Txn.split_of.is_(None), Txn.narration.is_not(None))).all()
+        items = [LabeledTxn(TxnInput(occurred_at=r.occurred_at, amount=r.amount, direction=r.direction,
+                                     narration=r.narration, account_id=r.account_id, ref_no=r.ref_no), r.name)
+                 for r in rows]
+        if not items:
+            print("no transactions filed by this member yet", file=sys.stderr)
+            return 2
+        report = run_backtest(items, clf.profile, train_until=args.train_until, member_rules=clf.member_rules,
+                              household_rules=clf.household_rules, categories=clf.categories, aliases=clf.aliases)
+    print(format_report(report, show_misses=args.show_misses))
+    return 0
+
+
 def cmd_rotate_master_key(args: argparse.Namespace) -> int:
     """Re-wrap every data key under TIJORI_MASTER_KEY, reading old rows with TIJORI_MASTER_KEY_OLD.
     Runs on the owner (superuser) connection: secret is FORCE RLS for everyone else."""
@@ -64,6 +101,12 @@ def cmd_lock_to_owner(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="tijori")
     sub = p.add_subparsers(dest="command", required=True)
+
+    bt = sub.add_parser("backtest", help="replay a member's own filing through today's classifier, month by month")
+    bt.add_argument("--member", required=True, help="member email")
+    bt.add_argument("--train-until", help="YYYY-MM: fixed split instead of rolling months")
+    bt.add_argument("--show-misses", type=int, default=0, help="print the first N misfiled txns")
+    bt.set_defaults(func=cmd_backtest)
 
     rk = sub.add_parser("rotate-master-key", help="re-wrap all secrets under a new TIJORI_MASTER_KEY")
     rk.set_defaults(func=cmd_rotate_master_key)
