@@ -39,7 +39,7 @@ from tijori.models import Holding, MailSource, Price, RawAttachment, RawMessage,
 from tijori.parsers.cams_statement import CamsStatementParser
 from tijori.parsers.cdsl_cas import CdslCasParser
 from tijori.parsers import Message, ParseError, route
-from tijori.parsers.alerts import SENDER_INSTITUTION, AlertParser, parse_balance
+from tijori.parsers.alerts import SENDER_INSTITUTION, AlertParser, is_informational, parse_balance
 from tijori.pdf import PdfError, is_pdf, pdf_to_text
 from tijori.services import cards, loans, networth, notify, orders, prices, retention, txn_edit
 from tijori.services import secrets as vault
@@ -152,7 +152,7 @@ def process(s: Session, ctx: MemberContext, settings: Settings, source_id: int, 
 def _route(s: Session, ctx: MemberContext, settings: Settings, rm: RawMessage, msg: EmailMessage,
            atts: list[tuple[RawAttachment, bytes]]) -> str:
     status = "ignored"
-    m = Message(text=body_text(msg), sender=rm.sender, subject=rm.subject)
+    m = Message(text=body_text(msg), sender=rm.sender, subject=rm.subject, received_at=rm.received_at)
     if ALERTS.match(m):
         clf = load_classifier(s, ctx)
         for obs in ALERTS.parse(m):
@@ -166,7 +166,7 @@ def _route(s: Session, ctx: MemberContext, settings: Settings, rm: RawMessage, m
         status = "parsed"
     for att, data in atts:
         status = _statement(s, ctx, settings, rm.sender or "", rm, att, data) or status
-    if status == "ignored" and not atts and rm.sender in SENDER_INSTITUTION:
+    if status == "ignored" and not atts and rm.sender in SENDER_INSTITUTION and not is_informational(m):
         status = "parser_needed"  # a bank's alert sender in a shape no rule reads yet: queue it, don't drop it
     return status
 

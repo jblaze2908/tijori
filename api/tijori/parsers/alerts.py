@@ -7,7 +7,7 @@ payload (`institution`, `account_kind`, `mask`) so the resolver can find or crea
 
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Callable
 
@@ -25,8 +25,11 @@ class _Rule:
     institution: str
     kind: str  # bank | card
     direction: Direction
-    date_fmt: str
+    date_fmt: str  # "": the mail prints no date, so it is the day the message arrived
     narration: Callable[[re.Match[str]], str]
+
+
+_IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def _clean(s: str | None) -> str:
@@ -53,6 +56,10 @@ RULES: tuple[_Rule, ...] = (
     _Rule("hdfc_account_debit", _HDFC, re.compile(
         rf"{_AMT} is deducted from your account ending XX(?P<mask>\d{{4}}) and added to (?P<to>.+?) account on "
         r"(?P<date>\d\d-[A-Z]{3}-\d{4})"), "HDFC", "bank", "debit", "%d-%b-%Y", lambda m: _clean(m["to"])),
+    _Rule("hdfc_netbanking_transfer", _HDFC, re.compile(
+        rf"You have successfully initiated (?P<chan>RTGS|NEFT|IMPS) transaction of {_AMT} from your HDFC Bank A/c "
+        r"XX(?P<mask>\d{4}) for a transfer to payee (?P<payee>.+?) using HDFC Bank"), "HDFC", "bank", "debit", "",
+        lambda m: f"{m['chan']}-{_clean(m['payee'])}"),
     _Rule("hdfc_deposit", _HDFC, re.compile(
         rf"Amount received:\s*{_AMT}\s*Account:\s*XX(?P<mask>\d{{4}})\s*Date:\s*(?P<date>\d\d-[A-Z]{{3}}-\d{{4}})\s*"
         r"Reference Details:\s*(?P<ref>.+?)\s*Available Balance", re.S), "HDFC", "bank", "credit", "%d-%b-%Y",
@@ -95,6 +102,17 @@ class BalanceReading:
     as_of: date
 
 
+# Net-banking transfer completions name only the beneficiary's account, none of the member's; the "initiated" mail
+# (hdfc_netbanking_transfer) already carries the transfer. Recognised so the collector doesn't queue them as unread.
+INFORMATIONAL: tuple[re.Pattern[str], ...] = (
+    re.compile(r"Your (?:RTGS|NEFT|IMPS) transfer has been completed successfully"),
+)
+
+
+def is_informational(msg: Message) -> bool:
+    return _sender(msg) in _HDFC and any(p.search(_flat(msg)) for p in INFORMATIONAL)
+
+
 # HDFC's daily "Account update" mail: the balance at the end of `as_of`, arriving next morning. Kept out of RULES,
 # which read transactions (coverage counts those).
 BALANCE_PARSER = "hdfc_balance"
@@ -122,7 +140,7 @@ class AlertParser:
     """Routes by sender, then tries each of that sender's sentence rules on the body text."""
 
     name = "bank_alerts"
-    version = "1.0.0"
+    version = "1.1.0"
 
     def match(self, msg: Message) -> bool:
         text = _flat(msg)
@@ -138,7 +156,12 @@ class AlertParser:
                 continue
             direction: Direction = ("credit" if m.groupdict().get("dir") == "credit" else "debit") if r.name == "sbi_cbs" \
                 else r.direction
-            day: date = datetime.strptime(m["date"].title() if "%b" in r.date_fmt else m["date"], r.date_fmt).date()
+            if r.date_fmt:
+                day: date = datetime.strptime(m["date"].title() if "%b" in r.date_fmt else m["date"], r.date_fmt).date()
+            elif msg.received_at:
+                day = msg.received_at.astimezone(_IST).date()
+            else:
+                continue
             return [Observation(
                 occurred_at=day, amount=parse_amount(m["amt"]), direction=direction, narration=r.narration(m),
                 ref_no=m.groupdict().get("ref") if r.name.startswith("hdfc_upi") else None, confidence=0.9,

@@ -1,7 +1,7 @@
 """Parser plug-in contract."""
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal, Protocol, runtime_checkable
 
@@ -20,6 +20,7 @@ class Message:
     sender: str | None = None
     subject: str | None = None
     filename: str | None = None
+    received_at: datetime | None = None  # when the mail arrived (UTC); alerts that print no date take theirs from it
 
 
 @dataclass(frozen=True, slots=True)
