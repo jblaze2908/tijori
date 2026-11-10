@@ -274,7 +274,7 @@ def _holdings(s: Session, ctx: MemberContext, lines: list[Any], source: str = "c
                                             Holding.source == source))
         for h in lines:
             s.add(Holding(member_id=ctx.member_id, isin=h.isin, name=h.name, units=h.units, as_of=h.as_of, source=source,
-                          account_id=networth.holding_account(s, ctx.member_id, source, h.isin, h.name)))
+                          account_id=networth.holding_account(s, ctx.member_id, source, h.bucket)))
             if h.isin:
                 s.execute(pg_insert(Price).values(isin_or_symbol=h.isin, date=h.as_of, close=h.nav, source=source[:16])
                           .on_conflict_do_nothing())
@@ -282,7 +282,7 @@ def _holdings(s: Session, ctx: MemberContext, lines: list[Any], source: str = "c
     for h in lines:
         q = select(Holding).where(Holding.member_id == ctx.member_id, Holding.as_of == h.as_of, Holding.source == source)
         seen = s.scalars(q.where(Holding.isin == h.isin) if h.isin else q.where(Holding.name == h.name)).first()
-        account_id = networth.holding_account(s, ctx.member_id, source, h.isin, h.name)
+        account_id = networth.holding_account(s, ctx.member_id, source, h.bucket)
         if seen is None:
             s.add(Holding(member_id=ctx.member_id, isin=h.isin, name=h.name, units=h.units, as_of=h.as_of, source=source,
                           account_id=account_id))

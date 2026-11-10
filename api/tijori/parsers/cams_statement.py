@@ -23,6 +23,7 @@ class HoldingLine:
     units: Decimal
     nav: Decimal
     as_of: date
+    bucket: str | None = None  # a CAS line's net worth component ("stocks" or "mf"); a fund house's lines are funds
 
 
 class CamsStatementParser:
