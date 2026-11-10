@@ -28,7 +28,6 @@ CONSOLIDATED = frozenset({"cdsl_cas"})  # holding sources that list everything h
 CAS_CYCLE = timedelta(days=40)  # a CAS is monthly; a fund-house statement this much newer means it stopped coming
 PROJECTION_MONTHS = 12
 SMALL_SHARE = Decimal("0.05")  # newly fed accounts this small, together, don't hold net worth history back
-ETF = re.compile(r"\bETF\b|BEES", re.I)
 # Same day, the more direct evidence wins: a price over a statement's total, a statement over a value set by hand.
 RANK = {"estimate": 0, "imported": 1, "manual": 2, "statement": 3, "prices": 4}
 # Where an investment debit lands, by the payee label or narration: the subtype of the account it adds to.
@@ -58,10 +57,6 @@ def _accounts(s: Session, member_id: int) -> dict[int, Acct]:
     rows = s.scalars(select(Account).where(Account.member_id == member_id, Account.in_net_worth)).all()
     return {a.id: Acct(a.id, account_label(a.institution, a.name, a.mask) or a.institution, a.kind, a.subtype,
                        asset_class(a.kind, a.asset_class), liquid(a.kind, a.liquid), a.opened_at) for a in rows}
-
-
-def _equity(isin: str | None, name: str | None) -> bool:
-    return (isin or "").startswith("INE") or bool(ETF.search(name or ""))
 
 
 def _claim(source: str, as_of: date, account_id: int) -> tuple[date, int]:
@@ -529,11 +524,11 @@ def record_components(s: Session, member_id: int, institution: str, values: tupl
                                              where=AccountValuation.source == "statement"))
 
 
-def holding_account(s: Session, member_id: int, source: str, isin: str | None, name: str | None) -> int:
-    """The account a statement's holding sits in: for a CAS, its demat securities (an INE ISIN or an ETF) or its funds;
-    for a fund house's statement, its funds. Matched by the statement's source as the institution."""
+def holding_account(s: Session, member_id: int, source: str, bucket: str | None) -> int:
+    """The account a statement's holding sits in: for a CAS, the component its parser put the line in (demat shares
+    and ETFs, or funds); for a fund house's statement, its funds. Matched by the statement's source as the institution."""
     institution = "CDSL" if source == "cdsl_cas" else source.upper()
-    subtype = "stocks" if source == "cdsl_cas" and _equity(isin, name) else "mf"
+    subtype = "stocks" if source == "cdsl_cas" and bucket == "stocks" else "mf"
     found = s.scalars(select(Account.id).where(Account.member_id == member_id, Account.kind == "holding",
                                                Account.subtype == subtype,
                                                func.upper(Account.institution) == institution).order_by(Account.id)).first()

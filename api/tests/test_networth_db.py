@@ -201,9 +201,8 @@ class NetWorthDB(unittest.IsolatedAsyncioTestCase):
             for source, days_ago in (("cdsl_cas", 20), ("cams", 5)):
                 s.add(Holding(member_id=self.owner.member_id, isin=isin, name="Example Index Fund", units=D("100"),
                               as_of=self.today - timedelta(days=days_ago), source=source,
-                              account_id=networth.holding_account(s, self.owner.member_id, source, isin, "Example Index Fund")))
-            cas, cams = (networth.holding_account(s, self.owner.member_id, src, isin, "Example Index Fund")
-                         for src in ("cdsl_cas", "cams"))
+                              account_id=networth.holding_account(s, self.owner.member_id, source, "mf")))
+            cas, cams = (networth.holding_account(s, self.owner.member_id, src, "mf") for src in ("cdsl_cas", "cams"))
         live = self.live()
         self.assertEqual((self.amount(live, cas), self.amount(live, cams)), (D("5000.00"), None))
 

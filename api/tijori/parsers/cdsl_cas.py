@@ -3,8 +3,10 @@
 Two holding tables: demat balances (`ISIN [security] BAL -- -- -- FREE PRICE VALUE`) and mutual fund
 folios held outside demat (`… ISIN FOLIO UNITS NAV COST VALUE …`). Units and prices are as of the
 statement's "as on DD-MM-YYYY". Equity ISINs (INE…) and ETFs held in demat add up to the `stocks`
-component (as brokers show them), other fund ISINs (INF…) to `mf`. The holdings must add up to the
-statement's Total Portfolio Value, so a row the patterns miss fails the parse instead of vanishing.
+component (as brokers show them), other fund ISINs (INF…) to `mf`. Each line carries that bucket, so the
+account a holding is filed under and the component totals come from the same decision; an ETF's name
+row often reads as its fund house, with "ETF" only on the wrapped line below. The holdings must add up to
+the statement's Total Portfolio Value, so a row the patterns miss fails the parse instead of vanishing.
 """
 
 import re
@@ -64,7 +66,7 @@ class Cas:
 
 class CdslCasParser:
     name = "cdsl_cas"
-    version = "1.1.0"
+    version = "1.2.0"
 
     def match(self, msg: Message) -> bool:
         return "CDSL" in msg.text and "Total Portfolio Value" in msg.text and "ISIN" in msg.text
@@ -86,17 +88,18 @@ class CdslCasParser:
             company = _name_above(rows, i)
             name = company or re.sub(r"\s+", " ", r["name"]).strip(" #") or r["isin"]
             units = _d(r["bal"] if r["free"] == "--" else r["free"])
-            lines.append(HoldingLine(r["isin"], name[:160], units, _d(r["price"]), as_of))
             # A fund's scheme name wraps below its row ("INDIA ETF NIFTY 50 BEES").
             below = rows[i + 1] if i + 1 < len(rows) and not _NUMERIC.search(rows[i + 1]) else ""
-            if r["isin"].startswith("INE") or _ETF.search(f"{line} {below}"):
+            bucket = "stocks" if r["isin"].startswith("INE") or _ETF.search(f"{line} {below}") else "mf"
+            lines.append(HoldingLine(r["isin"], name[:160], units, _d(r["price"]), as_of, bucket))
+            if bucket == "stocks":
                 stocks += _d(r["value"])
             else:
                 mf += _d(r["value"])
         for r in _FOLIO.finditer(t.split("Scheme Name", 1)[-1]):
             name = re.sub(r"\s+", " ", r["name"]).strip() or r["isin"]
             folio = r["folio"].replace("\xad", "")
-            lines.append(HoldingLine(r["isin"], f"{name} · folio {folio}"[:160], _d(r["units"]), _d(r["nav"]), as_of))
+            lines.append(HoldingLine(r["isin"], f"{name} · folio {folio}"[:160], _d(r["units"]), _d(r["nav"]), as_of, "mf"))
             mf += _d(r["value"])
         if not lines:
             raise ParseError("CDSL CAS: no holdings found")
